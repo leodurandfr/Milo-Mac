@@ -220,16 +220,74 @@ class MiloAPIService {
         guard let url = buildURL(path: "/api/volume/adjust") else {
             throw APIError.invalidURL
         }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
+
         let body: [String: Any] = ["delta": delta, "show_bar": false]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
+
         let (_, response) = try await session.data(for: request)
-        
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw APIError.httpError
+        }
+    }
+
+    // MARK: - Radio API
+
+    func getRadioFavorites() async throws -> [[String: Any]] {
+        guard let url = buildURL(path: "/api/radio/stations?favorites_only=true") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await session.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw APIError.httpError
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stations = json["stations"] as? [[String: Any]] else {
+            throw APIError.invalidResponse
+        }
+
+        return stations
+    }
+
+    func playRadioStation(_ stationId: String) async throws {
+        guard let url = buildURL(path: "/api/radio/play") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["station_id": stationId]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw APIError.httpError
+        }
+    }
+
+    func stopRadioPlayback() async throws {
+        guard let url = buildURL(path: "/api/radio/stop") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        let (_, response) = try await session.data(for: request)
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw APIError.httpError

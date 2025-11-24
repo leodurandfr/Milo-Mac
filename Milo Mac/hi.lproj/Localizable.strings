@@ -12,6 +12,13 @@
 "source.spotify" = "Spotify";
 "source.bluetooth" = "Bluetooth";
 "source.macos" = "macOS";
+"source.radio" = "रेडियो";
+"source.podcast" = "पॉडकास्ट";
+
+// MARK: - Radio
+"radio.favorites" = "पसंदीदा रेडियो";
+"radio.noFavorites" = "कोई पसंदीदा स्टेशन नहीं";
+"radio.loadError" = "पसंदीदा लोड करने में त्रुटि";
 
 // MARK: - Features
 "feature.multiroom" = "मल्टीरूम";

@@ -109,19 +109,21 @@ class MenuItemFactory {
         let sourceConfigs = [
             (L("source.spotify"), "music.note", "librespot"),
             (L("source.bluetooth"), "bluetooth", "bluetooth"),
-            (L("source.macos"), "desktopcomputer", "roc")
+            (L("source.macos"), "desktopcomputer", "roc"),
+            (L("source.radio"), "radio", "radio"),
+            (L("source.podcast"), "podcasts-icon", "podcast")
         ]
         
         for (title, iconName, sourceId) in sourceConfigs {
             let isLoading = (targetSource == sourceId)
             let isActive: Bool
-            
+
             if let targetSource = targetSource {
                 isActive = (sourceId == targetSource)
             } else {
                 isActive = (activeSource == sourceId)
             }
-            
+
             let config = MenuItemConfig(
                 title: title,
                 iconName: iconName,
@@ -130,7 +132,7 @@ class MenuItemFactory {
                 action: action,
                 representedObject: sourceId
             )
-            
+
             items.append(CircularMenuItem.createWithLoadingSupport(
                 with: config,
                 isLoading: isLoading,

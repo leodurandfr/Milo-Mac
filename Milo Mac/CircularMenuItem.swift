@@ -46,13 +46,13 @@ class CircularMenuItem {
         item.target = config.target
         item.action = config.action
         item.representedObject = config.representedObject
-        
+
         let containerView = createContainerViewWithLoading(config: config, menuItem: item, isLoading: isLoading, loadingIsActive: loadingIsActive)
         item.view = containerView
-        
+
         return item
     }
-    
+
     // MARK: - Nettoyage global des spinners
     static func cleanupAllSpinners() {
         for spinner in activeSpinners {
@@ -60,12 +60,12 @@ class CircularMenuItem {
         }
         activeSpinners.removeAll()
     }
-    
+
     // MARK: - Private Methods
     private static func createContainerView(config: MenuItemConfig, menuItem: NSMenuItem) -> NSView {
         return createContainerViewWithLoading(config: config, menuItem: menuItem, isLoading: false, loadingIsActive: false)
     }
-    
+
     private static func createContainerViewWithLoading(config: MenuItemConfig, menuItem: NSMenuItem, isLoading: Bool, loadingIsActive: Bool = false) -> NSView {
         let containerView = HoverableView(frame: NSRect(
             x: 0,
@@ -73,24 +73,24 @@ class CircularMenuItem {
             width: containerWidth,
             height: containerHeight
         ))
-        
+
         let target = config.target
         let action = config.action
-        
+
         containerView.clickHandler = { [weak target] in
             _ = target?.perform(action, with: menuItem)
         }
-        
+
         containerView.configureHoverBackground(leftMargin: 5, rightMargin: 5)
-        
+
         // Créer le cercle avec loader ou icône
         let circleView = createCircleViewWithLoading(config: config, isLoading: isLoading, loadingIsActive: loadingIsActive)
         containerView.addSubview(circleView)
-        
+
         // Ajouter le texte
         let textField = createTextField(config: config)
         containerView.addSubview(textField)
-        
+
         return containerView
     }
     
@@ -278,6 +278,10 @@ class IconProvider {
             return "bluetooth-icon"
         case "desktopcomputer":
             return "macos-icon"
+        case "radio":
+            return "radio-icon"
+        case "podcasts-icon":
+            return "podcasts-icon"
         case "speaker.wave.3":
             return "multiroom-icon"
         case "slider.horizontal.3":

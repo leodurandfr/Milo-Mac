@@ -12,6 +12,13 @@
 "source.spotify" = "Spotify";
 "source.bluetooth" = "Bluetooth";
 "source.macos" = "macOS";
+"source.radio" = "Radio";
+"source.podcast" = "Podcasts";
+
+// MARK: - Radio
+"radio.favorites" = "Radios favoritas";
+"radio.noFavorites" = "No hay estaciones favoritas";
+"radio.loadError" = "Error al cargar favoritos";
 
 // MARK: - Features
 "feature.multiroom" = "Multihabitación";

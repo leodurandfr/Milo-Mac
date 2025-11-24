@@ -12,6 +12,13 @@
 "source.spotify" = "Spotify";
 "source.bluetooth" = "蓝牙";
 "source.macos" = "macOS";
+"source.radio" = "广播";
+"source.podcast" = "播客";
+
+// MARK: - Radio
+"radio.favorites" = "收藏的电台";
+"radio.noFavorites" = "没有收藏的电台";
+"radio.loadError" = "加载收藏夹时出错";
 
 // MARK: - Features
 "feature.multiroom" = "多房间";

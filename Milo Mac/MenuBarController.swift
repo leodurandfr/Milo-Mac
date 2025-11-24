@@ -14,7 +14,10 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private var currentState: MiloState?
     private var currentVolume: VolumeStatus?
     private var isMenuOpen = false
-    
+
+    // MARK: - Radio Cache
+    private var cachedRadioFavorites: [[String: Any]]?
+
     // MARK: - UI State
     private var activeMenu: NSMenu?
     private var isPreferencesMenuActive = false
@@ -250,7 +253,31 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             target: self,
             action: #selector(sourceClicked)
         )
-        sourceItems.forEach { menu.addItem($0) }
+
+        // Add items to menu and attach submenu to Radio if favorites available
+        for item in sourceItems {
+            menu.addItem(item)
+
+            // Attacher submenu directement au Radio item si favoris disponibles
+            if let sourceId = item.representedObject as? String,
+               sourceId == "radio",
+               currentState?.activeSource == "radio",
+               cachedRadioFavorites != nil {
+                item.submenu = buildRadioSubmenu()
+
+                // Ajouter chevron visuel à la vue personnalisée (SF Symbol)
+                if let containerView = item.view,
+                   let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
+                    let chevronView = NSImageView(image: chevronImage)
+                    chevronView.contentTintColor = NSColor.secondaryLabelColor
+                    chevronView.frame = NSRect(x: 275, y: 10, width: 12, height: 12)
+                    chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+                    containerView.addSubview(chevronView)
+                }
+
+                NSLog("📋 Radio submenu attached: \(item.submenu?.items.count ?? 0) items")
+            }
+        }
     }
     
     private func addSystemControlsSection(to menu: NSMenu) {
@@ -315,7 +342,119 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         )
         menu.addItem(quitItem)
     }
-    
+
+    // MARK: - Radio Submenu
+    private func buildRadioSubmenu() -> NSMenu {
+        let submenu = NSMenu()
+
+        // Utiliser le cache au lieu de fetch async
+        guard let favorites = cachedRadioFavorites, !favorites.isEmpty else {
+            NSLog("⚠️ buildRadioSubmenu: cache empty or nil (count: \(cachedRadioFavorites?.count ?? 0))")
+            let noFavoritesItem = NSMenuItem(title: L("radio.noFavorites"), action: nil, keyEquivalent: "")
+            noFavoritesItem.isEnabled = false
+            submenu.addItem(noFavoritesItem)
+            return submenu
+        }
+
+        NSLog("📋 buildRadioSubmenu: \(favorites.count) stations in cache")
+
+        // Log la structure de la première station pour debug
+        if let firstStation = favorites.first {
+            NSLog("🔍 Sample station keys: \(Array(firstStation.keys))")
+            NSLog("🔍 Sample station: \(firstStation)")
+        }
+
+        // Trier par ordre alphabétique
+        let sortedFavorites = favorites.sorted { station1, station2 in
+            let name1 = station1["name"] as? String ?? ""
+            let name2 = station2["name"] as? String ?? ""
+            return name1.localizedCaseInsensitiveCompare(name2) == .orderedAscending
+        }
+
+        // Get currently playing station info
+        let currentStationId = (currentState?.activeSource == "radio") ?
+            currentState?.metadata["station_id"] as? String : nil
+
+        var addedCount = 0
+        // Add each favorite station (synchrone, pas de Task)
+        for station in sortedFavorites {
+            guard let stationId = station["id"] as? String,
+                  let stationName = station["name"] as? String else {
+                NSLog("⚠️ Station skipped - missing keys. Available: \(Array(station.keys))")
+                continue
+            }
+
+            let isCurrentStation = (stationId == currentStationId)
+            let title = isCurrentStation ? "● \(stationName) ⏹" : stationName
+
+            let stationItem = NSMenuItem(
+                title: title,
+                action: #selector(radioStationClicked(_:)),
+                keyEquivalent: ""
+            )
+            stationItem.target = self
+            stationItem.representedObject = ["stationId": stationId, "isPlaying": isCurrentStation]
+
+            submenu.addItem(stationItem)
+            addedCount += 1
+        }
+
+        NSLog("✅ Submenu built: \(addedCount)/\(favorites.count) stations added")
+        return submenu
+    }
+
+    @objc private func radioStationClicked(_ sender: NSMenuItem) {
+        guard let apiService = connectionManager.getAPIService(),
+              let info = sender.representedObject as? [String: Any],
+              let stationId = info["stationId"] as? String,
+              let isPlaying = info["isPlaying"] as? Bool else {
+            return
+        }
+
+        Task {
+            do {
+                if isPlaying {
+                    // Stop playback
+                    try await apiService.stopRadioPlayback()
+                } else {
+                    // Play the selected station
+                    try await apiService.playRadioStation(stationId)
+                    // Switch to radio source if not already active
+                    if currentState?.activeSource != "radio" {
+                        try await apiService.changeSource("radio")
+                    }
+                }
+            } catch {
+                NSLog("❌ Error handling radio station click: \(error)")
+            }
+        }
+    }
+
+    private func loadRadioFavoritesInBackground() {
+        guard let apiService = connectionManager.getAPIService() else { return }
+
+        Task {
+            do {
+                let favorites = try await apiService.getRadioFavorites()
+                await MainActor.run {
+                    cachedRadioFavorites = favorites
+                    NSLog("✅ Radio favorites loaded: \(favorites.count) stations")
+
+                    // Rafraîchir le menu si ouvert pour afficher le chevron immédiatement
+                    if isMenuOpen, let menu = activeMenu {
+                        NSLog("🔄 Refreshing menu to show Radio chevron")
+                        updateMenuInRealTime(menu)
+                    }
+                }
+            } catch {
+                NSLog("❌ Failed to load radio favorites: \(error)")
+                await MainActor.run {
+                    cachedRadioFavorites = nil
+                }
+            }
+        }
+    }
+
     // MARK: - Actions
     @objc private func volumeChanged(_ sender: NSSlider) {
         let newVolume = Int(sender.doubleValue)
@@ -520,7 +659,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         guard let state = currentState else { return }
         
         // Synchronisation uniquement pour les sources audio
-        let audioSources = ["librespot", "bluetooth", "roc"]
+        let audioSources = ["librespot", "bluetooth", "roc", "radio", "podcast"]
         
         if let targetSource = state.targetSource, !targetSource.isEmpty {
             for identifier in audioSources {
@@ -771,7 +910,21 @@ extension MenuBarController {
     }
     
     func didReceiveStateUpdate(_ state: MiloState) {
+        let previousSource = currentState?.activeSource
         currentState = state
+
+        // Charger favoris si Radio est actif et que le cache est vide
+        // (que Radio ait été activé depuis Milo Mac ou depuis le backend)
+        if state.activeSource == "radio" && cachedRadioFavorites == nil {
+            loadRadioFavoritesInBackground()
+        }
+
+        // Effacer cache si on quitte Radio
+        if state.activeSource != "radio" && previousSource == "radio" {
+            cachedRadioFavorites = nil
+            NSLog("🗑️ Radio favorites cache cleared")
+        }
+
         checkFunctionalityStateChange(state)
         syncLoadingStatesWithBackend()
     }
