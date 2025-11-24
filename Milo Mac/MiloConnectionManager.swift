@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import AppKit
 
 protocol MiloConnectionManagerDelegate: AnyObject {
     func miloDidConnect()
@@ -29,6 +30,7 @@ class MiloConnectionManager: NSObject {
     // mDNS/Bonjour Discovery
     private var serviceBrowser: NetServiceBrowser?
     private var isDiscovering = false
+    private var resolvingServices: Set<NetService> = []
     
     // Retry ciblé (quand mDNS trouve le Pi)
     private var retryTimer: Timer?
@@ -40,6 +42,58 @@ class MiloConnectionManager: NSObject {
     override init() {
         super.init()
         setupURLSession()
+        setupSleepWakeNotifications()
+    }
+
+    private func setupSleepWakeNotifications() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemWillSleep),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+
+        NSLog("💤 Sleep/wake notifications registered")
+    }
+
+    @objc private func systemWillSleep() {
+        NSLog("💤 System going to sleep - preparing for sleep...")
+        // Don't disconnect here - let the system handle it naturally
+        // We'll reconnect on wake
+    }
+
+    @objc private func systemDidWake() {
+        NSLog("☀️ System woke up - forcing reconnection...")
+
+        // Use DispatchQueue to avoid priority inversion
+        DispatchQueue.global(qos: .default).async { [weak self] in
+            guard let self = self, self.shouldConnect else { return }
+
+            // Give the network stack a moment to stabilize after wake
+            Thread.sleep(forTimeInterval: 1.0)
+
+            DispatchQueue.main.async {
+                // Clean up existing connection
+                self.cleanupConnection()
+                self.isConnected = false
+
+                // Reset URLSession to clear any stale TCP connections
+                self.resetURLSession()
+
+                // Stop any ongoing retry attempts
+                self.stopRetry()
+
+                NSLog("🔄 Network stabilized - starting fresh mDNS discovery...")
+                self.startDiscovery()
+            }
+        }
     }
     
     private func setupURLSession() {
@@ -132,7 +186,14 @@ class MiloConnectionManager: NSObject {
     private func stopDiscovery() {
         NSLog("🛑 Stopping mDNS discovery")
         isDiscovering = false
-        
+
+        // Arrêter tous les services en cours de résolution
+        for service in resolvingServices {
+            service.stop()
+            service.delegate = nil
+        }
+        resolvingServices.removeAll()
+
         serviceBrowser?.stop()
         serviceBrowser?.delegate = nil
         serviceBrowser = nil
@@ -214,7 +275,8 @@ class MiloConnectionManager: NSObject {
         resetURLSession()
 
         // Résoudre l'IP IPv4 AVANT de connecter (synchrone pour garantir qu'on a l'IP)
-        await Task.detached(priority: .userInitiated) { [weak self] in
+        // Utiliser .medium QoS pour éviter priority inversion avec les appels DNS système
+        await Task.detached(priority: .medium) { [weak self] in
             self?.resolveIPv4Address()
         }.value
 
@@ -392,6 +454,7 @@ class MiloConnectionManager: NSObject {
     }
     
     deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         stop()
     }
 }
@@ -399,16 +462,15 @@ class MiloConnectionManager: NSObject {
 // MARK: - NetServiceBrowserDelegate
 extension MiloConnectionManager: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        NSLog("🔍 Found service: \(service.name)")
-        
-        // Vérifier si c'est notre service milo
-        let serviceName = service.name.lowercased()
-        let hostName = service.hostName?.lowercased() ?? ""
-        
-        if (serviceName.contains("milo") || hostName.contains("milo")) && !isRetrying && !isConnected {
-            NSLog("🎯 Found Milo service - starting rapid API tests...")
-            startAPIRetry()
-        }
+        NSLog("🔍 Found service: \(service.name) (type: \(service.type), domain: \(service.domain))")
+
+        // Ne pas traiter si déjà en train de retry ou connecté
+        guard !isRetrying && !isConnected else { return }
+
+        // Résoudre le service pour obtenir son vrai hostname
+        service.delegate = self
+        resolvingServices.insert(service)
+        service.resolve(withTimeout: 5.0)
     }
     
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
@@ -449,20 +511,45 @@ extension MiloConnectionManager: NetServiceBrowserDelegate {
     }
 }
 
+// MARK: - NetServiceDelegate
+extension MiloConnectionManager: NetServiceDelegate {
+    func netServiceDidResolveAddress(_ sender: NetService) {
+        let hostName = sender.hostName ?? ""
+        NSLog("✅ Service resolved: \(sender.name) -> hostname: \(hostName)")
+
+        // Nettoyer le service du set de résolution
+        resolvingServices.remove(sender)
+
+        // Vérifier que c'est EXACTEMENT milo.local (ou milo.local.)
+        let cleanedHostname = hostName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if cleanedHostname == "milo.local" && !isRetrying && !isConnected {
+            NSLog("🎯 Confirmed Milo service (hostname: \(hostName)) - starting rapid API tests...")
+            startAPIRetry()
+        } else {
+            NSLog("⏭️  Skipping service \(sender.name) (hostname: \(hostName)) - not milo.local")
+        }
+    }
+
+    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        NSLog("⚠️ Failed to resolve service \(sender.name): \(errorDict)")
+        resolvingServices.remove(sender)
+    }
+}
+
 // MARK: - URLSessionWebSocketDelegate
 extension MiloConnectionManager: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         NSLog("✅ WebSocket connected")
-        
+
         DispatchQueue.main.async { [weak self] in
             self?.handleConnectionSuccess()
         }
     }
-    
+
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "Unknown"
         NSLog("🔌 WebSocket closed: \(closeCode.rawValue) - \(reasonString)")
-        
+
         DispatchQueue.main.async { [weak self] in
             self?.handleDisconnection()
         }
