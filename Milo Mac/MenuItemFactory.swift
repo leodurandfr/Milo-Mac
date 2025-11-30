@@ -107,9 +107,9 @@ class MenuItemFactory {
         let targetSource = state?.targetSource
         
         let sourceConfigs = [
-            (L("source.spotify"), "music.note", "librespot"),
+            (L("source.spotify"), "music.note", "spotify"),
             (L("source.bluetooth"), "bluetooth", "bluetooth"),
-            (L("source.macos"), "desktopcomputer", "roc"),
+            (L("source.macos"), "desktopcomputer", "mac"),
             (L("source.radio"), "radio", "radio"),
             (L("source.podcast"), "podcasts-icon", "podcast")
         ]

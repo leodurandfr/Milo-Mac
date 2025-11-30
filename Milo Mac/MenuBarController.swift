@@ -659,7 +659,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         guard let state = currentState else { return }
         
         // Synchronisation uniquement pour les sources audio
-        let audioSources = ["librespot", "bluetooth", "roc", "radio", "podcast"]
+        let audioSources = ["spotify", "bluetooth", "mac", "radio", "podcast"]
         
         if let targetSource = state.targetSource, !targetSource.isEmpty {
             for identifier in audioSources {
