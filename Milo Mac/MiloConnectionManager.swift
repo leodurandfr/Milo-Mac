@@ -11,7 +11,10 @@ protocol MiloConnectionManagerDelegate: AnyObject {
 
 class MiloConnectionManager: NSObject {
     weak var delegate: MiloConnectionManagerDelegate?
-    
+
+    // Référence vers RocVADManager pour mettre à jour l'endpoint avec l'IP résolue
+    var rocVADManager: RocVADManager?
+
     // Configuration
     private let host = "milo.local"
     private let httpPort = 80
@@ -111,13 +114,15 @@ class MiloConnectionManager: NSObject {
         NSLog("🔄 URLSession reset to clear stale connections")
     }
 
-    /// Résout le hostname en IPv4 et le cache
+    /// Résout le hostname en IPv4, teste la latence de toutes les IPs et sélectionne la meilleure
     private func resolveIPv4Address() {
-        let host = CFHostCreateWithName(nil, self.host as CFString).takeRetainedValue()
-        CFHostStartInfoResolution(host, .addresses, nil)
+        let cfHost = CFHostCreateWithName(nil, self.host as CFString).takeRetainedValue()
+        CFHostStartInfoResolution(cfHost, .addresses, nil)
+
+        var allIPv4: [String] = []
 
         var success: DarwinBoolean = false
-        if let addresses = CFHostGetAddressing(host, &success)?.takeUnretainedValue() as NSArray? {
+        if let addresses = CFHostGetAddressing(cfHost, &success)?.takeUnretainedValue() as NSArray? {
             for case let address as NSData in addresses {
                 var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 if getnameinfo(address.bytes.assumingMemoryBound(to: sockaddr.self),
@@ -126,14 +131,120 @@ class MiloConnectionManager: NSObject {
                              socklen_t(hostname.count),
                              nil, 0, NI_NUMERICHOST) == 0 {
                     let ipAddress = String(cString: hostname)
-                    // Ne garder que l'IPv4 (pas d'IPv6 avec ":")
+                    // Ne garder que les IPv4 (pas d'IPv6 avec ":")
                     if !ipAddress.contains(":") {
-                        resolvedIPv4 = ipAddress
-                        NSLog("✅ Resolved \(self.host) to IPv4: \(ipAddress)")
-                        return
+                        allIPv4.append(ipAddress)
+                        NSLog("📍 Found IPv4: \(ipAddress)")
                     }
                 }
             }
+        }
+
+        // Si plusieurs IPs trouvées, sélectionner la meilleure par latence
+        if allIPv4.count > 1 {
+            selectBestIP(from: allIPv4)
+        } else if let firstIP = allIPv4.first {
+            resolvedIPv4 = firstIP
+            NSLog("✅ Resolved \(self.host) to IPv4: \(firstIP)")
+            // Mettre à jour roc-vad avec l'IP résolue
+            rocVADManager?.updateMiloHost(firstIP)
+        }
+    }
+
+    /// Sélectionne la meilleure IP parmi plusieurs candidats en testant la latence
+    private func selectBestIP(from candidates: [String]) {
+        NSLog("🔄 Testing latency for \(candidates.count) IP candidates...")
+
+        let group = DispatchGroup()
+        var results: [(ip: String, latency: TimeInterval)] = []
+        let resultsLock = NSLock()
+
+        for ip in candidates {
+            group.enter()
+            measureLatency(to: ip) { latency in
+                if let latency = latency {
+                    resultsLock.lock()
+                    results.append((ip, latency))
+                    resultsLock.unlock()
+                    NSLog("📊 Latency to \(ip): \(String(format: "%.1f", latency * 1000))ms")
+                } else {
+                    NSLog("⚠️ Failed to measure latency to \(ip)")
+                }
+                group.leave()
+            }
+        }
+
+        // Attendre tous les résultats (max 2 secondes)
+        let waitResult = group.wait(timeout: .now() + 2.0)
+
+        if waitResult == .timedOut {
+            NSLog("⚠️ Latency test timed out, using first available IP")
+        }
+
+        // Sélectionner l'IP avec la meilleure latence
+        if let best = results.min(by: { $0.latency < $1.latency }) {
+            resolvedIPv4 = best.ip
+            NSLog("✅ Selected best IP: \(best.ip) (\(String(format: "%.1f", best.latency * 1000))ms)")
+            // Mettre à jour roc-vad avec l'IP la plus rapide
+            rocVADManager?.updateMiloHost(best.ip)
+        } else if let firstIP = candidates.first {
+            resolvedIPv4 = firstIP
+            NSLog("✅ Fallback to first IP: \(firstIP)")
+            rocVADManager?.updateMiloHost(firstIP)
+        }
+    }
+
+    /// Mesure la latence vers une IP via une connexion TCP rapide
+    private func measureLatency(to ip: String, completion: @escaping (TimeInterval?) -> Void) {
+        let start = Date()
+
+        let connection = NWConnection(
+            host: NWEndpoint.Host(ip),
+            port: NWEndpoint.Port(integerLiteral: UInt16(httpPort)),
+            using: .tcp
+        )
+
+        var hasCompleted = false
+        let completionLock = NSLock()
+
+        connection.stateUpdateHandler = { state in
+            completionLock.lock()
+            guard !hasCompleted else {
+                completionLock.unlock()
+                return
+            }
+
+            switch state {
+            case .ready:
+                hasCompleted = true
+                completionLock.unlock()
+                let latency = Date().timeIntervalSince(start)
+                connection.cancel()
+                completion(latency)
+
+            case .failed, .cancelled:
+                hasCompleted = true
+                completionLock.unlock()
+                completion(nil)
+
+            default:
+                completionLock.unlock()
+            }
+        }
+
+        connection.start(queue: .global(qos: .userInitiated))
+
+        // Timeout de 500ms
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+            completionLock.lock()
+            guard !hasCompleted else {
+                completionLock.unlock()
+                return
+            }
+            hasCompleted = true
+            completionLock.unlock()
+            connection.cancel()
+            completion(nil)
         }
     }
     

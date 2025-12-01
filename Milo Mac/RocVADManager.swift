@@ -5,7 +5,7 @@ import AppKit
 class RocVADManager {
     
     private let deviceName = "Milō"
-    private let miloHost = "milo.local"
+    private var miloHost = "milo.local"  // Mutable pour permettre la mise à jour avec l'IP résolue
     private let sourcePort = 10001
     private let repairPort = 10002
     private let controlPort = 10003
@@ -143,21 +143,71 @@ class RocVADManager {
     
     func waitForDriverInitialization(completion: @escaping (Bool) -> Void) {
         NSLog("⏳ Starting driver initialization wait...")
-        
+
         // Créer panel d'attente
         showProgressPanel(message: L("progress.driver_waiting"))
-        
+
         // Démarrer les tentatives en background
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let success = self?.performDriverWaitRetries() ?? false
-            
+
             DispatchQueue.main.async {
                 self?.hideProgressPanel()
                 completion(success)
             }
         }
     }
-    
+
+    /// Met à jour l'adresse de Milo avec l'IP résolue et reconfigure le device roc-vad
+    /// - Parameter newHost: L'adresse IP résolue (ex: "192.168.1.73")
+    func updateMiloHost(_ newHost: String) {
+        guard newHost != miloHost else {
+            NSLog("🔄 roc-vad: Host unchanged (\(newHost))")
+            return
+        }
+
+        NSLog("🔄 Updating roc-vad endpoint from \(miloHost) to \(newHost)")
+        miloHost = newHost
+
+        // Supprimer et recréer le device avec la nouvelle adresse en background
+        // (roc-vad ne permet pas de modifier les endpoints d'un device existant)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            let deviceInfo = self.getRocVADDeviceInfo()
+            if let existingDevice = deviceInfo.first(where: { $0.name == self.deviceName }) {
+                NSLog("🗑️ Deleting existing device #\(existingDevice.index) to reconfigure with IP")
+                self.deleteDevice(deviceIndex: existingDevice.index)
+            }
+
+            // Créer un nouveau device
+            let newDeviceIndex = self.createMiloDevice()
+            guard newDeviceIndex > 0 else {
+                NSLog("❌ Failed to create new Milō device")
+                return
+            }
+
+            NSLog("🔧 Configuring new device #\(newDeviceIndex) with IP: \(newHost)")
+            let success = self.configureDevice(deviceIndex: newDeviceIndex)
+            NSLog(success ? "✅ Device reconfigured with IP: \(newHost)" : "❌ Failed to configure device with IP: \(newHost)")
+        }
+    }
+
+    /// Supprime un device roc-vad par son index
+    private func deleteDevice(deviceIndex: Int) {
+        let task = Process()
+        task.launchPath = "/usr/local/bin/roc-vad"
+        task.arguments = ["device", "del", "\(deviceIndex)"]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+
+        task.launch()
+        task.waitUntilExit()
+
+        let success = (task.terminationStatus == 0)
+        NSLog(success ? "✅ Device #\(deviceIndex) deleted" : "⚠️ Failed to delete device #\(deviceIndex)")
+    }
+
     // MARK: - Progress Window Management (Style NSAlert natif avec Hidden Title Bar)
     
     private func showProgressPanel(message: String) {
@@ -409,23 +459,28 @@ class RocVADManager {
         let task = Process()
         task.launchPath = "/usr/local/bin/roc-vad"
         task.arguments = ["device", "show", "\(deviceIndex)"]
-        
+
         let pipe = Pipe()
         task.standardOutput = pipe
-        
+
         let semaphore = DispatchSemaphore(value: 0)
         var isConfigured = false
-        
-        task.terminationHandler = { _ in
+
+        task.terminationHandler = { [self] _ in
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
-            isConfigured = output.contains(self.miloHost)
+            // Vérifier si le device a des endpoints configurés (soit avec miloHost actuel, soit avec une IP)
+            // On vérifie la présence des ports ROC caractéristiques
+            let hasSourcePort = output.contains(":\(sourcePort)")
+            let hasRepairPort = output.contains(":\(repairPort)")
+            let hasControlPort = output.contains(":\(controlPort)")
+            isConfigured = hasSourcePort && hasRepairPort && hasControlPort
             semaphore.signal()
         }
-        
+
         task.launch()
         semaphore.wait()
-        
+
         return isConfigured
     }
     

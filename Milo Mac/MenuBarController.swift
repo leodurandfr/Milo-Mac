@@ -5,7 +5,7 @@ import ServiceManagement
 class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - Properties
     private var statusItem: NSStatusItem
-    private var connectionManager: MiloConnectionManager!
+    private(set) var connectionManager: MiloConnectionManager!
     private var hotkeyManager: GlobalHotkeyManager?
     private let volumeController = VolumeController()
     

@@ -227,10 +227,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func initializeMiloApp() {
         NSLog("🎯 Initializing Milo app interface...")
-        
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menuBarController = MenuBarController(statusItem: statusItem!)
-        
+
+        // Connecter RocVADManager au MiloConnectionManager pour que l'IP résolue
+        // soit utilisée pour configurer le device roc-vad
+        menuBarController?.connectionManager.rocVADManager = rocVADManager
+
         NSLog("✅ Milo Mac ready")
     }
     
