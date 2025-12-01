@@ -227,6 +227,8 @@
 				"pt-PT",
 				hi,
 				"zh-Hans",
+				it,
+				de,
 			);
 			mainGroup = B3A7E04C2E216D2400785117;
 			minimizedProjectReferenceProxies = 1;

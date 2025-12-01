@@ -11,14 +11,14 @@
 // MARK: - Audio Sources
 "source.spotify" = "Spotify";
 "source.bluetooth" = "蓝牙";
-"source.macos" = "macOS";
+"source.mac" = "Mac";
 "source.radio" = "广播";
 "source.podcast" = "播客";
 
 // MARK: - Radio
 "radio.favorites" = "收藏的电台";
 "radio.noFavorites" = "没有收藏的电台";
-"radio.loadError" = "加载收藏夹时出错";
+"radio.loadError" = "加载错误";
 
 // MARK: - Features
 "feature.multiroom" = "多房间";
@@ -42,21 +42,21 @@
 "setup.initialization.title" = "正在初始化";
 
 // MARK: - Setup/Installation - Messages
-"setup.main.message" = "Milō 可以使用您 Mac 的音频作为音频源。\n您想要安装此功能吗？";
-"setup.main.install_button" = "控制器 + Mac 音频";
+"setup.main.message" = "Milō 可以接收您 Mac 的音频作为音频源。\n您将能够在 Mac 的声音输出中选择 Milō。";
+"setup.main.install_button" = "继续安装";
 "setup.main.cancel_button" = "取消安装";
 
-"setup.installation.completed.message" = "roc-vad 安装已成功完成！\n\n要使 \"Milō\" 音频输出可用，您的 Mac 必须重新启动。\n\n您希望 Milo Mac 在启动时自动运行以配置音频设备吗？";
-"setup.installation.completed.restart_auto" = "重启 + 自动启动";
+"setup.installation.completed.message" = "Milō Mac 安装已成功完成！\n\n要使 \"Milō\" 音频输出可用，您的 Mac 必须重新启动。\n\n您希望 Milō Mac 在启动时自动运行以配置音频设备吗？";
+"setup.installation.completed.restart_auto" = "立即重启";
 "setup.installation.completed.restart_later" = "稍后重启";
 
-"setup.installation.error.message" = "roc-vad 安装失败。您要重试吗？";
+"setup.installation.error.message" = "Milō Mac 安装失败。您想重试吗？";
 "setup.installation.error.retry" = "重试";
 "setup.installation.error.cancel" = "取消";
 
-"setup.restart.message" = "Milō 已安装在 Mac 上，但音频驱动程序尚未加载。\n\n请重新启动您的计算机以使 \"Milō\" 音频输出可用。";
+"setup.restart.message" = "Milō 已安装在 Mac 上，但音频驱动程序尚未加载。\n\n请重新启动您的电脑以使 \"Milō\" 音频输出可用。";
 "setup.restart.now" = "立即重启";
-"setup.restart.continue_without" = "不使用 Mac 音频继续";
+"setup.restart.continue_without" = "不使用 Mac 音频发射器继续";
 
 "setup.driver.timeout.message" = "Milō 音频驱动程序初始化时间超出预期。\n\n您可以在不使用 Mac 音频功能的情况下继续，或重新启动以重试。";
 "setup.driver.timeout.continue" = "不使用 Mac 音频继续";
@@ -74,7 +74,7 @@
 "progress.driver_initialized" = "驱动程序初始化成功！";
 
 // MARK: - Volume HUD
-"volume.percentage" = "%d%%";
+"volume.percentage" = "%d %%";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "音量滑块";
@@ -85,6 +85,6 @@
 "button.increase" = "+";
 
 // MARK: - Logging/Debug (optional, can remain in English)
-"log.milo_starting" = "Milo Mac starting...";
+"log.milo_starting" = "Milō Mac starting...";
 "log.installation_success" = "roc-vad installation completed successfully";
 "log.installation_failed" = "roc-vad installation failed";

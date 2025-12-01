@@ -1,5 +1,5 @@
 /*
-   Localizable.strings (Base - English)
+   Localizable.strings (English)
    Milo Mac
 */
 
@@ -11,14 +11,14 @@
 // MARK: - Audio Sources
 "source.spotify" = "Spotify";
 "source.bluetooth" = "Bluetooth";
-"source.macos" = "macOS";
+"source.mac" = "Mac";
 "source.radio" = "Radio";
 "source.podcast" = "Podcasts";
 
 // MARK: - Radio
-"radio.favorites" = "Radio favorites";
-"radio.noFavorites" = "No favorite stations";
-"radio.loadError" = "Error loading favorites";
+"radio.favorites" = "Favorite radios";
+"radio.noFavorites" = "No favorite station";
+"radio.loadError" = "Loading error";
 
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
@@ -36,31 +36,31 @@
 // MARK: - Setup/Installation - Main Titles
 "setup.main.title" = "Milō Mac Configuration";
 "setup.installation.title" = "Milō Mac Installation";
-"setup.installation.completed" = "Installation Complete";
-"setup.installation.error" = "Installation Error";
-"setup.restart.required" = "Restart Required";
-"setup.initialization.title" = "Initialization in Progress";
+"setup.installation.completed" = "Installation complete";
+"setup.installation.error" = "Installation error";
+"setup.restart.required" = "Restart required";
+"setup.initialization.title" = "Initialization in progress";
 
 // MARK: - Setup/Installation - Messages
-"setup.main.message" = "Milō can use your Mac's audio as an audio source.\nWould you like to install this feature?";
-"setup.main.install_button" = "Controller + Mac Audio";
-"setup.main.cancel_button" = "Cancel Installation";
+"setup.main.message" = "Milō can receive audio from your Mac as an audio source.\nYou will be able to select Milō in your Mac's sound outputs.";
+"setup.main.install_button" = "Continue installation";
+"setup.main.cancel_button" = "Cancel installation";
 
-"setup.installation.completed.message" = "The roc-vad installation is complete!\n\nFor the \"Milō\" audio output to be available, your Mac must restart.\n\nWould you like Milo Mac to launch automatically at startup to configure the audio device?";
-"setup.installation.completed.restart_auto" = "Restart + Auto Launch";
-"setup.installation.completed.restart_later" = "Restart Later";
+"setup.installation.completed.message" = "Milō Mac installation completed successfully!\n\nFor the \"Milō\" audio output to be available, your Mac must restart.\n\nWould you like Milō Mac to launch automatically at startup to configure the audio device?";
+"setup.installation.completed.restart_auto" = "Restart now";
+"setup.installation.completed.restart_later" = "Restart later";
 
-"setup.installation.error.message" = "The roc-vad installation failed. Would you like to try again?";
-"setup.installation.error.retry" = "Try Again";
+"setup.installation.error.message" = "Milō Mac installation failed. Would you like to try again?";
+"setup.installation.error.retry" = "Retry";
 "setup.installation.error.cancel" = "Cancel";
 
-"setup.restart.message" = "Milō is installed on Mac but the audio driver is not yet loaded.\n\nPlease restart your computer for the \"Milō\" audio output to be available.";
-"setup.restart.now" = "Restart Now";
-"setup.restart.continue_without" = "Continue without Mac Audio";
+"setup.restart.message" = "Milō is installed on the Mac but the audio driver is not yet loaded.\n\nPlease restart your computer for the \"Milō\" audio output to be available.";
+"setup.restart.now" = "Restart now";
+"setup.restart.continue_without" = "Continue without Mac audio transmitter";
 
 "setup.driver.timeout.message" = "The Milō audio driver is taking longer than expected to initialize.\n\nYou can continue without the Mac audio feature or restart to try again.";
-"setup.driver.timeout.continue" = "Continue without Mac Audio";
-"setup.driver.timeout.restart" = "Restart Now";
+"setup.driver.timeout.continue" = "Continue without Mac audio";
+"setup.driver.timeout.restart" = "Restart now";
 
 // MARK: - Installation Progress Messages
 "progress.preparing" = "Preparing installation...";
@@ -85,9 +85,6 @@
 "button.increase" = "+";
 
 // MARK: - Logging/Debug (optional, can remain in English)
-"log.milo_starting" = "Milo Mac starting...";
+"log.milo_starting" = "Milō Mac starting...";
 "log.installation_success" = "roc-vad installation completed successfully";
 "log.installation_failed" = "roc-vad installation failed";
-
-
-

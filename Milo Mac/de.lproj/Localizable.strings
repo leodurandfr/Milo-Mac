@@ -1,0 +1,90 @@
+/*
+   Localizable.strings (German)
+   Milo Mac
+*/
+
+// MARK: - Menu Sections
+"menu.volume.title" = "Milō Lautstärke";
+"menu.audio_sources.title" = "Ausgabe";
+"menu.features.title" = "Funktionen";
+
+// MARK: - Audio Sources
+"source.spotify" = "Spotify";
+"source.bluetooth" = "Bluetooth";
+"source.mac" = "Mac";
+"source.radio" = "Radio";
+"source.podcast" = "Podcasts";
+
+// MARK: - Radio
+"radio.favorites" = "Lieblingsradios";
+"radio.noFavorites" = "Kein Lieblingssender";
+"radio.loadError" = "Ladefehler";
+
+// MARK: - Features
+"feature.multiroom" = "Multiroom";
+"feature.equalizer" = "Equalizer";
+
+// MARK: - Configuration Menu
+"config.hotkeys.title" = "Lautstärke-Kurzbefehle (⌥↑/↓)";
+"config.volume_delta.title" = "Lautstärke-Schrittweite";
+"config.launch_at_login" = "Beim Mac-Start öffnen";
+"config.quit" = "Beenden";
+
+// MARK: - Connection Status
+"status.disconnected" = "Milō ist nicht eingeschaltet";
+
+// MARK: - Setup/Installation - Main Titles
+"setup.main.title" = "Milō Mac Konfiguration";
+"setup.installation.title" = "Milō Mac Installation";
+"setup.installation.completed" = "Installation abgeschlossen";
+"setup.installation.error" = "Installationsfehler";
+"setup.restart.required" = "Neustart erforderlich";
+"setup.initialization.title" = "Initialisierung läuft";
+
+// MARK: - Setup/Installation - Messages
+"setup.main.message" = "Milō kann Audio von Ihrem Mac als Audioquelle empfangen.\nSie können Milō in den Tonausgaben Ihres Macs auswählen.";
+"setup.main.install_button" = "Installation fortsetzen";
+"setup.main.cancel_button" = "Installation abbrechen";
+
+"setup.installation.completed.message" = "Die Installation von Milō Mac wurde erfolgreich abgeschlossen!\n\nDamit der Audioausgang \"Milō\" verfügbar ist, muss Ihr Mac neu gestartet werden.\n\nMöchten Sie, dass Milō Mac beim Start automatisch geöffnet wird, um das Audiogerät zu konfigurieren?";
+"setup.installation.completed.restart_auto" = "Jetzt neu starten";
+"setup.installation.completed.restart_later" = "Später neu starten";
+
+"setup.installation.error.message" = "Die Installation von Milō Mac ist fehlgeschlagen. Möchten Sie es erneut versuchen?";
+"setup.installation.error.retry" = "Erneut versuchen";
+"setup.installation.error.cancel" = "Abbrechen";
+
+"setup.restart.message" = "Milō ist auf dem Mac installiert, aber der Audiotreiber ist noch nicht geladen.\n\nBitte starten Sie Ihren Computer neu, damit der Audioausgang \"Milō\" verfügbar ist.";
+"setup.restart.now" = "Jetzt neu starten";
+"setup.restart.continue_without" = "Ohne Mac-Audiosender fortfahren";
+
+"setup.driver.timeout.message" = "Der Milō-Audiotreiber benötigt länger als erwartet für die Initialisierung.\n\nSie können ohne die Mac-Audiofunktion fortfahren oder neu starten, um es erneut zu versuchen.";
+"setup.driver.timeout.continue" = "Ohne Mac-Audio fortfahren";
+"setup.driver.timeout.restart" = "Jetzt neu starten";
+
+// MARK: - Installation Progress Messages
+"progress.preparing" = "Installation wird vorbereitet...";
+"progress.downloading" = "Abhängigkeiten werden heruntergeladen und installiert (roc-vad)...";
+"progress.verifying" = "Installation wird überprüft...";
+"progress.installation_complete" = "Installation erfolgreich abgeschlossen";
+"progress.reconfiguring_device" = "Milō-Audiogerät wird neu konfiguriert...";
+"progress.creating_device" = "Milō-Audiogerät wird erstellt...";
+"progress.driver_waiting" = "Warten auf Audiotreiber-Initialisierung...";
+"progress.driver_waiting_attempt" = "Warten auf Treiber-Initialisierung... (Versuch %d/%d)";
+"progress.driver_initialized" = "Treiber erfolgreich initialisiert!";
+
+// MARK: - Volume HUD
+"volume.percentage" = "%d %%";
+
+// MARK: - Accessibility
+"accessibility.volume_slider" = "Lautstärkeregler";
+"accessibility.milo_icon" = "Milo";
+
+// MARK: - Buttons
+"button.decrease" = "−";
+"button.increase" = "+";
+
+// MARK: - Logging/Debug (optional, can remain in English)
+"log.milo_starting" = "Milō Mac starting...";
+"log.installation_success" = "roc-vad installation completed successfully";
+"log.installation_failed" = "roc-vad installation failed";

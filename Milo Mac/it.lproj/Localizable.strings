@@ -1,0 +1,90 @@
+/*
+   Localizable.strings (Italian)
+   Milo Mac
+*/
+
+// MARK: - Menu Sections
+"menu.volume.title" = "Volume di Milō";
+"menu.audio_sources.title" = "Uscita";
+"menu.features.title" = "Funzionalità";
+
+// MARK: - Audio Sources
+"source.spotify" = "Spotify";
+"source.bluetooth" = "Bluetooth";
+"source.mac" = "Mac";
+"source.radio" = "Radio";
+"source.podcast" = "Podcast";
+
+// MARK: - Radio
+"radio.favorites" = "Radio preferite";
+"radio.noFavorites" = "Nessuna stazione preferita";
+"radio.loadError" = "Errore di caricamento";
+
+// MARK: - Features
+"feature.multiroom" = "Multiroom";
+"feature.equalizer" = "Equalizzatore";
+
+// MARK: - Configuration Menu
+"config.hotkeys.title" = "Scorciatoie volume (⌥↑/↓)";
+"config.volume_delta.title" = "Incremento volume";
+"config.launch_at_login" = "Avvia all'avvio del Mac";
+"config.quit" = "Esci";
+
+// MARK: - Connection Status
+"status.disconnected" = "Milō non è acceso";
+
+// MARK: - Setup/Installation - Main Titles
+"setup.main.title" = "Configurazione Milō Mac";
+"setup.installation.title" = "Installazione Milō Mac";
+"setup.installation.completed" = "Installazione completata";
+"setup.installation.error" = "Errore di installazione";
+"setup.restart.required" = "Riavvio necessario";
+"setup.initialization.title" = "Inizializzazione in corso";
+
+// MARK: - Setup/Installation - Messages
+"setup.main.message" = "Milō può ricevere l'audio del tuo Mac come sorgente audio.\nPotrai selezionare Milō nelle uscite audio del tuo Mac.";
+"setup.main.install_button" = "Continua installazione";
+"setup.main.cancel_button" = "Annulla installazione";
+
+"setup.installation.completed.message" = "L'installazione di Milō Mac è stata completata con successo!\n\nAffinché l'uscita audio \"Milō\" sia disponibile, il tuo Mac deve essere riavviato.\n\nVuoi che Milō Mac si avvii automaticamente all'avvio per configurare il dispositivo audio?";
+"setup.installation.completed.restart_auto" = "Riavvia ora";
+"setup.installation.completed.restart_later" = "Riavvia più tardi";
+
+"setup.installation.error.message" = "L'installazione di Milō Mac è fallita. Vuoi riprovare?";
+"setup.installation.error.retry" = "Riprova";
+"setup.installation.error.cancel" = "Annulla";
+
+"setup.restart.message" = "Milō è installato sul Mac ma il driver audio non è ancora caricato.\n\nPer favore, riavvia il computer affinché l'uscita audio \"Milō\" sia disponibile.";
+"setup.restart.now" = "Riavvia ora";
+"setup.restart.continue_without" = "Continua senza il trasmettitore audio Mac";
+
+"setup.driver.timeout.message" = "Il driver audio Milō sta impiegando più tempo del previsto per l'inizializzazione.\n\nPuoi continuare senza la funzionalità audio Mac o riavviare per riprovare.";
+"setup.driver.timeout.continue" = "Continua senza audio Mac";
+"setup.driver.timeout.restart" = "Riavvia ora";
+
+// MARK: - Installation Progress Messages
+"progress.preparing" = "Preparazione dell'installazione...";
+"progress.downloading" = "Download e installazione delle dipendenze (roc-vad)...";
+"progress.verifying" = "Verifica dell'installazione...";
+"progress.installation_complete" = "Installazione completata con successo";
+"progress.reconfiguring_device" = "Riconfigurazione del dispositivo audio Milō...";
+"progress.creating_device" = "Creazione del dispositivo audio Milō...";
+"progress.driver_waiting" = "In attesa dell'inizializzazione del driver audio...";
+"progress.driver_waiting_attempt" = "In attesa dell'inizializzazione del driver... (tentativo %d/%d)";
+"progress.driver_initialized" = "Driver inizializzato con successo!";
+
+// MARK: - Volume HUD
+"volume.percentage" = "%d %%";
+
+// MARK: - Accessibility
+"accessibility.volume_slider" = "Cursore del volume";
+"accessibility.milo_icon" = "Milo";
+
+// MARK: - Buttons
+"button.decrease" = "−";
+"button.increase" = "+";
+
+// MARK: - Logging/Debug (optional, can remain in English)
+"log.milo_starting" = "Milō Mac starting...";
+"log.installation_success" = "roc-vad installation completed successfully";
+"log.installation_failed" = "roc-vad installation failed";
