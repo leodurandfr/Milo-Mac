@@ -11,9 +11,17 @@ struct MiloState {
 }
 
 struct VolumeStatus {
-    let volume: Int
-    let mode: String
+    let volumeDb: Double          // Volume en dB (-80 à 0)
     let multiroomEnabled: Bool
+    let dspAvailable: Bool
+    let limitMinDb: Double        // Limite min configurée (défaut -80)
+    let limitMaxDb: Double        // Limite max configurée (défaut -21)
+    let stepMobileDb: Double      // Step pour les ajustements (défaut 3)
+
+    /// Volume arrondi pour affichage (ex: "-30 dB")
+    var displayText: String {
+        return "\(Int(round(volumeDb))) dB"
+    }
 }
 
 class MiloAPIService {
@@ -176,47 +184,58 @@ class MiloAPIService {
         guard let url = buildURL(path: "/api/volume/status") else {
             throw APIError.invalidURL
         }
-        
+
         let (data, response) = try await session.data(from: url)
-        
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw APIError.httpError
         }
-        
+
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let dataDict = json["data"] as? [String: Any] else {
             throw APIError.invalidResponse
         }
-        
+
+        // Parser la config (les limites sont directement dans config)
+        let config = dataDict["config"] as? [String: Any] ?? [:]
+
+        // Les valeurs peuvent être Int ou Double, gérer les différents cas
+        let limitMin = (config["limit_min_db"] as? Double) ?? Double(config["limit_min_db"] as? Int ?? -80)
+        let limitMax = (config["limit_max_db"] as? Double) ?? Double(config["limit_max_db"] as? Int ?? -21)
+        let stepMobile = (config["step_mobile_db"] as? Double) ?? Double(config["step_mobile_db"] as? Int ?? 3)
+
         return VolumeStatus(
-            volume: dataDict["volume"] as? Int ?? 0,
-            mode: dataDict["mode"] as? String ?? "unknown",
-            multiroomEnabled: dataDict["multiroom_enabled"] as? Bool ?? false
+            volumeDb: dataDict["volume_db"] as? Double ?? Double(dataDict["volume_db"] as? Int ?? -30),
+            multiroomEnabled: dataDict["multiroom_enabled"] as? Bool ?? false,
+            dspAvailable: dataDict["dsp_available"] as? Bool ?? true,
+            limitMinDb: limitMin,
+            limitMaxDb: limitMax,
+            stepMobileDb: stepMobile
         )
     }
     
-    func setVolume(_ volume: Int) async throws {
+    func setVolumeDb(_ volumeDb: Double) async throws {
         guard let url = buildURL(path: "/api/volume/set") else {
             throw APIError.invalidURL
         }
-        
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        let body: [String: Any] = ["volume": volume, "show_bar": false]
+
+        let body: [String: Any] = ["volume_db": volumeDb, "show_bar": true]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        
+
         let (_, response) = try await session.data(for: request)
-        
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw APIError.httpError
         }
     }
-    
-    func adjustVolume(_ delta: Int) async throws {
+
+    func adjustVolumeDb(_ deltaDb: Double) async throws {
         guard let url = buildURL(path: "/api/volume/adjust") else {
             throw APIError.invalidURL
         }
@@ -225,7 +244,7 @@ class MiloAPIService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: Any] = ["delta": delta, "show_bar": false]
+        let body: [String: Any] = ["delta_db": deltaDb, "show_bar": true]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (_, response) = try await session.data(for: request)

@@ -213,16 +213,21 @@ class WebSocketService: NSObject {
     }
     
     private func handleVolumeChange(_ data: [String: Any]) {
-        let volume = data["volume"] as? Int ?? 0
-        let mode = data["mode"] as? String ?? "unknown"
+        let volumeDb = data["volume_db"] as? Double ?? -30.0
         let multiroomEnabled = data["multiroom_enabled"] as? Bool ?? false
-        
+        let stepMobileDb = data["step_mobile_db"] as? Double ?? 3.0
+
+        // Les limites ne sont pas transmises via WebSocket, elles sont récupérées via l'API
+        // et gérées séparément par VolumeController.updateVolumeLimits()
         let volumeStatus = VolumeStatus(
-            volume: volume,
-            mode: mode,
-            multiroomEnabled: multiroomEnabled
+            volumeDb: volumeDb,
+            multiroomEnabled: multiroomEnabled,
+            dspAvailable: true,
+            limitMinDb: -80.0,  // Valeur par défaut, non utilisée (limites gérées via API)
+            limitMaxDb: -21.0,  // Valeur par défaut, non utilisée (limites gérées via API)
+            stepMobileDb: stepMobileDb
         )
-        
+
         delegate?.didReceiveVolumeUpdate(volumeStatus)
     }
     

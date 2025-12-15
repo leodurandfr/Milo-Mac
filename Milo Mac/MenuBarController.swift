@@ -101,11 +101,12 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             }
 
             Task {
+                // Le volume est mis à jour via WebSocket en temps réel,
+                // pas besoin de le poll ici
                 let stateSuccess = await self.refreshState()
-                let volumeSuccess = await self.refreshVolumeStatus()
 
                 await MainActor.run {
-                    if stateSuccess || volumeSuccess {
+                    if stateSuccess {
                         self.consecutiveRefreshFailures = 0
                         self.lastSuccessfulRefresh = Date()
                     } else {
@@ -233,12 +234,14 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     private func addVolumeSection(to menu: NSMenu) {
         let volumeItems = MenuItemFactory.createVolumeSection(
-            volume: currentVolume?.volume ?? 50,
+            volumeDb: currentVolume?.volumeDb ?? -30.0,
+            limitMinDb: currentVolume?.limitMinDb ?? -80.0,
+            limitMaxDb: currentVolume?.limitMaxDb ?? -21.0,
             target: self,
             action: #selector(volumeChanged)
         )
         volumeItems.forEach { menu.addItem($0) }
-        
+
         if let sliderItem = volumeItems.first(where: { $0.view is MenuInteractionView }),
            let sliderView = sliderItem.view as? MenuInteractionView,
            let slider = sliderView.subviews.first(where: { $0 is NSSlider }) as? NSSlider {
@@ -315,7 +318,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func addVolumeDeltaConfig(to menu: NSMenu) {
         if let hotkeyManager = hotkeyManager {
             let deltaConfigItem = MenuItemFactory.createVolumeDeltaConfigItem(
-                currentDelta: hotkeyManager.getVolumeDelta(),
+                currentDeltaDb: hotkeyManager.getVolumeDeltaDb(),
                 target: self,
                 decreaseAction: #selector(decreaseVolumeDelta),
                 increaseAction: #selector(increaseVolumeDelta)
@@ -457,8 +460,8 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
 
     // MARK: - Actions
     @objc private func volumeChanged(_ sender: NSSlider) {
-        let newVolume = Int(sender.doubleValue)
-        volumeController.handleVolumeChange(newVolume)
+        let newVolumeDb = sender.doubleValue
+        volumeController.handleVolumeChange(newVolumeDb)
     }
     
     @objc private func sourceClicked(_ sender: NSMenuItem) {
@@ -538,15 +541,15 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     @objc private func decreaseVolumeDelta() {
         guard let hotkeyManager = hotkeyManager else { return }
-        let newDelta = max(1, hotkeyManager.getVolumeDelta() - 1)
-        hotkeyManager.setVolumeDelta(newDelta)
+        let newDeltaDb = max(1.0, hotkeyManager.getVolumeDeltaDb() - 1.0)
+        hotkeyManager.setVolumeDeltaDb(newDeltaDb)
         updateVolumeDeltaInterface()
     }
-    
+
     @objc private func increaseVolumeDelta() {
         guard let hotkeyManager = hotkeyManager else { return }
-        let newDelta = min(10, hotkeyManager.getVolumeDelta() + 1)
-        hotkeyManager.setVolumeDelta(newDelta)
+        let newDeltaDb = min(6.0, hotkeyManager.getVolumeDeltaDb() + 1.0)
+        hotkeyManager.setVolumeDeltaDb(newDeltaDb)
         updateVolumeDeltaInterface()
     }
     
@@ -719,18 +722,18 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     private func updateVolumeDeltaInterface() {
         guard let menu = activeMenu, isPreferencesMenuActive else { return }
-        
+
         for item in menu.items {
             if let components = item.representedObject as? [String: NSView],
                let decreaseButton = components["decrease"] as? NSButton,
                let increaseButton = components["increase"] as? NSButton,
                let valueLabel = components["value"] as? NSTextField,
                let hotkeyManager = hotkeyManager {
-                
-                let currentDelta = hotkeyManager.getVolumeDelta()
-                valueLabel.stringValue = "\(currentDelta)"
-                decreaseButton.isEnabled = currentDelta > 1
-                increaseButton.isEnabled = currentDelta < 10
+
+                let currentDeltaDb = hotkeyManager.getVolumeDeltaDb()
+                valueLabel.stringValue = "\(Int(currentDeltaDb)) dB"
+                decreaseButton.isEnabled = currentDeltaDb > 1
+                increaseButton.isEnabled = currentDeltaDb < 6
                 break
             }
         }
@@ -849,27 +852,30 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         do {
             let volumeStatus = try await apiService.getVolumeStatus()
             await MainActor.run {
-                let oldVolume = self.currentVolume?.volume ?? -1
+                let oldVolumeDb = self.currentVolume?.volumeDb ?? -999.0
                 self.currentVolume = volumeStatus
                 self.volumeController.setCurrentVolume(volumeStatus)
+                self.volumeController.updateVolumeLimits(
+                    minDb: volumeStatus.limitMinDb,
+                    maxDb: volumeStatus.limitMaxDb
+                )
 
-                if oldVolume != volumeStatus.volume {
-                    self.volumeController.updateSliderFromWebSocket(volumeStatus.volume)
+                if abs(oldVolumeDb - volumeStatus.volumeDb) > 0.1 {
+                    self.volumeController.updateSliderFromWebSocket(volumeStatus.volumeDb)
                 }
             }
             return true
         } catch {
-            // Échec silencieux
             return false
         }
     }
     
     @objc private func handleVolumeChangedViaHotkey(_ notification: Notification) {
         guard let volumeStatus = notification.object as? VolumeStatus else { return }
-        
+
         currentVolume = volumeStatus
         volumeController.setCurrentVolume(volumeStatus)
-        volumeController.updateSliderFromWebSocket(volumeStatus.volume)
+        volumeController.updateSliderFromWebSocket(volumeStatus.volumeDb)
     }
 }
 
@@ -932,7 +938,7 @@ extension MenuBarController {
     func didReceiveVolumeUpdate(_ volume: VolumeStatus) {
         currentVolume = volume
         volumeController.setCurrentVolume(volume)
-        volumeController.updateSliderFromWebSocket(volume.volume)
+        volumeController.updateSliderFromWebSocket(volume.volumeDb)
     }
     
     private func clearState() {

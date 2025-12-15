@@ -101,65 +101,76 @@ class VolumeHUD {
         sliderContainer.addSubview(fillView)
         
         // Volume label avec Space Mono
-        volumeLabel = NSTextField(labelWithString: "50 %")
+        volumeLabel = NSTextField(labelWithString: "-30 dB")
         guard let volumeLabel = volumeLabel else { return }
-        
+
         let spaceMonoFont = getSpaceMonoFont(size: 16)
         volumeLabel.font = spaceMonoFont
-        
-        let attributedString = NSMutableAttributedString(string: "50 %")
+
+        let attributedString = NSMutableAttributedString(string: "-30 dB")
         attributedString.addAttribute(.font, value: spaceMonoFont, range: NSRange(location: 0, length: attributedString.length))
         attributedString.addAttribute(.kern, value: -0.32, range: NSRange(location: 0, length: attributedString.length))
         volumeLabel.attributedStringValue = attributedString
-        
+
         volumeLabel.textColor = NSColor.secondaryLabelColor
         volumeLabel.frame = NSRect(x: 14, y: (sliderHeight - 16) / 2, width: 80, height: 20.5)
         volumeLabel.alignment = .left
         volumeLabel.backgroundColor = NSColor.clear
         volumeLabel.isBordered = false
-        
+
         sliderContainer.addSubview(volumeLabel)
-        
+
         window.alphaValue = 0
     }
-    
-    func show(volume: Int) {
+
+    // Limites de volume en dB (peuvent être mises à jour)
+    private var limitMinDb: Double = -80.0
+    private var limitMaxDb: Double = -21.0
+
+    func updateLimits(minDb: Double, maxDb: Double) {
+        self.limitMinDb = minDb
+        self.limitMaxDb = maxDb
+    }
+
+    func show(volumeDb: Double) {
         guard let window = window else { return }
-        
-        updateVolume(volume)
+
+        updateVolume(volumeDb)
         hideTimer?.invalidate()
         window.orderFrontRegardless()
-        
+
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.3
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             window.animator().alphaValue = 1.0
         }
-        
+
         scheduleHide()
     }
-    
-    private func updateVolume(_ volume: Int) {
+
+    private func updateVolume(_ volumeDb: Double) {
         guard let fillView = fillView,
               let volumeLabel = volumeLabel else { return }
-        
-        // --- Mise à jour du texte avec Space Mono ---
-        let volumeText = L("volume.percentage", volume)
+
+        // --- Mise à jour du texte avec Space Mono (affichage en dB) ---
+        let volumeText = "\(Int(round(volumeDb))) dB"
         let spaceMonoFont = getSpaceMonoFont(size: 16)
-        
+
         let attributedString = NSMutableAttributedString(string: volumeText)
         attributedString.addAttribute(.font, value: spaceMonoFont, range: NSRange(location: 0, length: attributedString.length))
         attributedString.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 0, length: attributedString.length))
         attributedString.addAttribute(.kern, value: -0.32, range: NSRange(location: 0, length: attributedString.length))
         volumeLabel.attributedStringValue = attributedString
-        
-        // --- Calcul largeur/position ---
+
+        // --- Calcul largeur/position basé sur les limites dB ---
         let sliderWidth = windowWidth - 32
-        let targetWidth = (CGFloat(volume) / 100.0) * sliderWidth
-        
+        let range = limitMaxDb - limitMinDb
+        let percentage = range > 0 ? (volumeDb - limitMinDb) / range : 0
+        let targetWidth = CGFloat(percentage) * sliderWidth
+
         let fillWidth: CGFloat
         let fillX: CGFloat
-        
+
         if targetWidth >= sliderHeight {
             // Cas normal
             fillWidth = targetWidth
@@ -167,19 +178,18 @@ class VolumeHUD {
         } else {
             // Cas spécial : largeur fixée au diamètre (cercle)
             fillWidth = sliderHeight
-            
+
             // Décalage progressif vers la gauche
-            // 0% volume = entièrement caché, 100% du seuil (sliderHeight) = visible
             let ratio = targetWidth / sliderHeight // entre 0 et 1
             let maxOffset = sliderHeight // déplacement max vers la gauche
             fillX = -(1 - ratio) * maxOffset
         }
-        
+
         // --- Animation fluide ---
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            
+
             fillView.animator().frame = NSRect(
                 x: fillX,
                 y: 0,

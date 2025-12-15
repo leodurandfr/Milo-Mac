@@ -12,76 +12,78 @@ class MenuItemFactory {
     private static let rightMargin: CGFloat = 14
     
     // MARK: - Volume Section
-    static func createVolumeSection(volume: Int, target: AnyObject, action: Selector) -> [NSMenuItem] {
+    static func createVolumeSection(volumeDb: Double, limitMinDb: Double, limitMaxDb: Double, target: AnyObject, action: Selector) -> [NSMenuItem] {
         return [
             createVolumeHeader(),
-            createVolumeSlider(volume: volume, target: target, action: action),
+            createVolumeSlider(volumeDb: volumeDb, limitMinDb: limitMinDb, limitMaxDb: limitMaxDb, target: target, action: action),
             NSMenuItem.separator()
         ]
     }
-    
+
     private static func createVolumeHeader() -> NSMenuItem {
         let item = NSMenuItem()
         let headerView = NSView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 28))
-        
+
         let titleLabel = createLabel(text: L("menu.volume.title"), font: .systemFont(ofSize: 13, weight: .semibold))
         titleLabel.frame = NSRect(x: sideMargin, y: 4, width: 160, height: 16)
-        
+
         headerView.addSubview(titleLabel)
         item.view = headerView
-        
+
         return item
     }
-    
-    private static func createVolumeSlider(volume: Int, target: AnyObject, action: Selector) -> NSMenuItem {
+
+    private static func createVolumeSlider(volumeDb: Double, limitMinDb: Double, limitMaxDb: Double, target: AnyObject, action: Selector) -> NSMenuItem {
         let item = NSMenuItem()
         let containerView = MenuInteractionView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: 31))
-        
+
         let slider = NativeVolumeSlider(frame: NSRect(x: rightMargin, y: 5, width: containerWidth - (rightMargin * 2), height: 22))
-        slider.doubleValue = Double(volume)
+        slider.minValue = limitMinDb
+        slider.maxValue = limitMaxDb
+        slider.doubleValue = volumeDb
         slider.target = target
         slider.action = action
-        
+
         containerView.addSubview(slider)
         item.view = containerView
-        
+
         return item
     }
     
     // MARK: - Configuration Items
-    static func createVolumeDeltaConfigItem(currentDelta: Int, target: AnyObject, decreaseAction: Selector, increaseAction: Selector) -> NSMenuItem {
+    static func createVolumeDeltaConfigItem(currentDeltaDb: Double, target: AnyObject, decreaseAction: Selector, increaseAction: Selector) -> NSMenuItem {
         let item = NSMenuItem()
         let containerView = MenuInteractionView(frame: NSRect(x: 0, y: 0, width: containerWidth, height: containerHeight))
-        
+
         let titleLabel = createLabel(text: L("config.volume_delta.title"), font: .menuFont(ofSize: 13))
         titleLabel.frame = NSRect(x: sideMargin, y: 8, width: 120, height: 16)
-        
-        let controls = createDeltaControls(currentDelta: currentDelta, target: target, decreaseAction: decreaseAction, increaseAction: increaseAction)
-        
+
+        let controls = createDeltaControls(currentDeltaDb: currentDeltaDb, target: target, decreaseAction: decreaseAction, increaseAction: increaseAction)
+
         containerView.addSubview(titleLabel)
         controls.forEach { containerView.addSubview($0) }
-        
+
         item.view = containerView
         item.representedObject = [
             "decrease": controls[1], // decreaseButton
             "increase": controls[2], // increaseButton
             "value": controls[0]     // valueLabel
         ]
-        
+
         return item
     }
-    
-    private static func createDeltaControls(currentDelta: Int, target: AnyObject, decreaseAction: Selector, increaseAction: Selector) -> [NSView] {
-        let valueLabel = createLabel(text: "\(currentDelta)", font: .monospacedDigitSystemFont(ofSize: 13, weight: .medium))
+
+    private static func createDeltaControls(currentDeltaDb: Double, target: AnyObject, decreaseAction: Selector, increaseAction: Selector) -> [NSView] {
+        let valueLabel = createLabel(text: "\(Int(currentDeltaDb)) dB", font: .monospacedDigitSystemFont(ofSize: 13, weight: .medium))
         valueLabel.alignment = .center
-        valueLabel.frame = NSRect(x: containerWidth - 66, y: 8, width: 24, height: 16)
-        
-        let decreaseButton = createDeltaButton(title: L("button.decrease"), target: target, action: decreaseAction, enabled: currentDelta > 1)
-        decreaseButton.frame = NSRect(x: containerWidth - 94, y: 6, width: 24, height: 20)
-        
-        let increaseButton = createDeltaButton(title: L("button.increase"), target: target, action: increaseAction, enabled: currentDelta < 10)
+        valueLabel.frame = NSRect(x: containerWidth - 76, y: 8, width: 34, height: 16)
+
+        let decreaseButton = createDeltaButton(title: L("button.decrease"), target: target, action: decreaseAction, enabled: currentDeltaDb > 1)
+        decreaseButton.frame = NSRect(x: containerWidth - 104, y: 6, width: 24, height: 20)
+
+        let increaseButton = createDeltaButton(title: L("button.increase"), target: target, action: increaseAction, enabled: currentDeltaDb < 6)
         increaseButton.frame = NSRect(x: containerWidth - 38, y: 6, width: 24, height: 20)
-        
+
         return [valueLabel, decreaseButton, increaseButton]
     }
     
