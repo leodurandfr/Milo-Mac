@@ -2,9 +2,7 @@ import Foundation
 
 struct MiloState {
     let activeSource: String
-    let pluginState: String
-    let isTransitioning: Bool     // GARDÉ pour compatibilité backend, mais NON UTILISÉ côté Mac
-    let targetSource: String?     // SEUL INDICATEUR utilisé pour les spinners
+    let pluginState: String       // "starting", "ready", "connected", "error" - INDICATEUR utilisé pour les spinners
     let multiroomEnabled: Bool
     let equalizerEnabled: Bool
     let metadata: [String: Any]
@@ -118,14 +116,9 @@ class MiloAPIService {
             throw APIError.invalidResponse
         }
         
-        // NETTOYÉ : targetSource est maintenant LE seul indicateur de transition
-        let targetSource = json["target_source"] as? String
-        
         return MiloState(
             activeSource: json["active_source"] as? String ?? "none",
-            pluginState: json["plugin_state"] as? String ?? "inactive",
-            isTransitioning: json["transitioning"] as? Bool ?? false, // IGNORÉ côté Mac
-            targetSource: targetSource, // SEUL INDICATEUR utilisé
+            pluginState: json["plugin_state"] as? String ?? "ready",  // "starting" déclenche le spinner
             multiroomEnabled: json["multiroom_enabled"] as? Bool ?? false,
             equalizerEnabled: json["equalizer_enabled"] as? Bool ?? false,
             metadata: json["metadata"] as? [String: Any] ?? [:]

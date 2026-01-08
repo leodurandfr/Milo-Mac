@@ -102,12 +102,12 @@ class MenuItemFactory {
     // MARK: - Audio Sources Section
     static func createAudioSourcesSection(state: MiloState?, loadingStates: [String: Bool] = [:], target: AnyObject, action: Selector) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        
+
         items.append(createSecondaryHeader(title: L("menu.audio_sources.title")))
-        
+
         let activeSource = state?.activeSource ?? "none"
-        let targetSource = state?.targetSource
-        
+        let isPluginStarting = state?.pluginState.lowercased() == "starting"
+
         let sourceConfigs = [
             (L("source.spotify"), "music.note", "spotify"),
             (L("source.bluetooth"), "bluetooth", "bluetooth"),
@@ -115,16 +115,10 @@ class MenuItemFactory {
             (L("source.radio"), "radio", "radio"),
             (L("source.podcast"), "podcasts-icon", "podcast")
         ]
-        
-        for (title, iconName, sourceId) in sourceConfigs {
-            let isLoading = (targetSource == sourceId)
-            let isActive: Bool
 
-            if let targetSource = targetSource {
-                isActive = (sourceId == targetSource)
-            } else {
-                isActive = (activeSource == sourceId)
-            }
+        for (title, iconName, sourceId) in sourceConfigs {
+            let isLoading = isPluginStarting && (activeSource == sourceId)
+            let isActive = (activeSource == sourceId)
 
             let config = MenuItemConfig(
                 title: title,
@@ -141,7 +135,7 @@ class MenuItemFactory {
                 loadingIsActive: isLoading
             ))
         }
-        
+
         items.append(NSMenuItem.separator())
         return items
     }

@@ -660,26 +660,18 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - State Synchronization
     private func syncLoadingStatesWithBackend() {
         guard let state = currentState else { return }
-        
-        // Synchronisation uniquement pour les sources audio
+
         let audioSources = ["spotify", "bluetooth", "mac", "radio", "podcast"]
-        
-        if let targetSource = state.targetSource, !targetSource.isEmpty {
-            for identifier in audioSources {
-                if identifier == targetSource {
-                    if loadingStates[identifier] != true {
-                        setLoadingState(for: identifier, isLoading: true)
-                    }
-                } else {
-                    if loadingStates[identifier] == true {
-                        stopLoading(for: identifier)
-                    }
+        let isPluginStarting = state.pluginState.lowercased() == "starting"
+
+        for identifier in audioSources {
+            if isPluginStarting && identifier == state.activeSource {
+                if loadingStates[identifier] != true {
+                    setLoadingState(for: identifier, isLoading: true)
                 }
-            }
-        } else {
-            // target_source est null, arrêter le loading des sources audio
-            for identifier in audioSources {
+            } else {
                 if loadingStates[identifier] == true {
+                    // Respecter la protection manuelle (2s minimum)
                     if let protectionTime = manualLoadingProtection[identifier] {
                         let elapsed = Date().timeIntervalSince(protectionTime)
                         if elapsed < 2.0 {
