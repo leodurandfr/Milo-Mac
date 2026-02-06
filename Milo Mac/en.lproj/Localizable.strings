@@ -25,10 +25,33 @@
 "feature.equalizer" = "Equalizer";
 
 // MARK: - Configuration Menu
-"config.hotkeys.title" = "Volume shortcuts (⌥↑/↓)";
-"config.volume_delta.title" = "Volume increment";
-"config.launch_at_login" = "Launch at Mac startup";
+"config.settings" = "Settings...";
 "config.quit" = "Quit";
+
+// MARK: - Settings Window
+"settings.title" = "Milo Mac Settings";
+"settings.general" = "General";
+"settings.mac_audio" = "Mac Audio (ROC-VAD)";
+
+// General section
+"settings.hotkeys" = "Volume Shortcuts (⌥↑/↓)";
+"settings.volume_increment" = "Volume Increment";
+"settings.launch_at_login" = "Launch at Mac Startup";
+
+// Mac Audio section
+"settings.preset" = "Preset";
+"settings.buffer" = "Buffer";
+"settings.buffer.low" = "Low latency";
+"settings.buffer.high" = "Stable";
+"settings.fec" = "Error Correction";
+"settings.quality" = "Quality";
+"settings.advanced" = "Advanced Options";
+"settings.packet_length" = "Packet Length";
+"settings.fec_source" = "FEC Source Packets";
+"settings.fec_repair" = "FEC Repair Packets";
+"settings.interleaving" = "Packet Interleaving";
+"settings.reset" = "Reset Defaults";
+"settings.apply" = "Apply";
 
 // MARK: - Connection Status
 "status.disconnected" = "Milō is not powered on";
@@ -83,6 +106,20 @@
 // MARK: - Buttons
 "button.decrease" = "−";
 "button.increase" = "+";
+
+// MARK: - ROC VAD Settings (enum localization)
+"config.rocvad.fec.rs8m" = "Standard (RS8M)";
+"config.rocvad.fec.ldpc" = "High (LDPC)";
+"config.rocvad.fec.disable" = "Disabled";
+"config.rocvad.resampler.low" = "Low";
+"config.rocvad.resampler.medium" = "Medium";
+"config.rocvad.resampler.high" = "High";
+"config.rocvad.preset.ultra_low" = "Ultra Low Latency";
+"config.rocvad.preset.low" = "Low Latency";
+"config.rocvad.preset.balanced" = "Balanced";
+"config.rocvad.preset.high_quality" = "High Quality";
+"config.rocvad.preset.custom" = "Custom";
+"progress.applying_settings" = "Applying audio settings...";
 
 // MARK: - Logging/Debug (optional, can remain in English)
 "log.milo_starting" = "Milō Mac starting...";

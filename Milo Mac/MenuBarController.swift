@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import ServiceManagement
 
 class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - Properties
@@ -295,48 +294,28 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     private func addPreferencesSection(to menu: NSMenu, connected: Bool = true) {
         menu.addItem(NSMenuItem.separator())
-        
-        if connected {
-            addHotkeysToggle(to: menu)
-            addVolumeDeltaConfig(to: menu)
-        }
-        
-        addLaunchAtLoginToggle(to: menu)
+
+        // Settings window item
+        let settingsItem = NSMenuItem(
+            title: L("config.settings"),
+            action: #selector(openSettingsWindow),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
         addQuitItem(to: menu)
     }
-    
-    private func addHotkeysToggle(to menu: NSMenu) {
-        let hotkeysItem = MenuItemHelper.createSimpleToggleItem(
-            title: L("config.hotkeys.title"),
-            isEnabled: hotkeyManager?.isCurrentlyMonitoring() ?? false,
-            target: self,
-            action: #selector(toggleGlobalHotkeys)
+
+    @objc private func openSettingsWindow() {
+        SettingsWindowController.shared.configure(
+            hotkeyManager: hotkeyManager,
+            rocVADManager: connectionManager.rocVADManager
         )
-        menu.addItem(hotkeysItem)
+        SettingsWindowController.shared.showWindow()
     }
-    
-    private func addVolumeDeltaConfig(to menu: NSMenu) {
-        if let hotkeyManager = hotkeyManager {
-            let deltaConfigItem = MenuItemFactory.createVolumeDeltaConfigItem(
-                currentDeltaDb: hotkeyManager.getVolumeDeltaDb(),
-                target: self,
-                decreaseAction: #selector(decreaseVolumeDelta),
-                increaseAction: #selector(increaseVolumeDelta)
-            )
-            menu.addItem(deltaConfigItem)
-        }
-    }
-    
-    private func addLaunchAtLoginToggle(to menu: NSMenu) {
-        let launchAtLoginItem = MenuItemHelper.createSimpleToggleItem(
-            title: L("config.launch_at_login"),
-            isEnabled: isLaunchAtLoginEnabled(),
-            target: self,
-            action: #selector(toggleLaunchAtLogin)
-        )
-        menu.addItem(launchAtLoginItem)
-    }
-    
+
     private func addQuitItem(to menu: NSMenu) {
         let quitItem = MenuItemHelper.createSimpleMenuItem(
             title: L("config.quit"),
@@ -527,40 +506,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         }
     }
     
-    @objc private func toggleGlobalHotkeys() {
-        guard let hotkeyManager = hotkeyManager else { return }
-        
-        if hotkeyManager.isCurrentlyMonitoring() {
-            hotkeyManager.stopMonitoring()
-        } else {
-            hotkeyManager.startMonitoring()
-            schedulePermissionRechecks()
-            scheduleUIUpdate()
-        }
-    }
-    
-    @objc private func decreaseVolumeDelta() {
-        guard let hotkeyManager = hotkeyManager else { return }
-        let newDeltaDb = max(1.0, hotkeyManager.getVolumeDeltaDb() - 1.0)
-        hotkeyManager.setVolumeDeltaDb(newDeltaDb)
-        updateVolumeDeltaInterface()
-    }
-
-    @objc private func increaseVolumeDelta() {
-        guard let hotkeyManager = hotkeyManager else { return }
-        let newDeltaDb = min(6.0, hotkeyManager.getVolumeDeltaDb() + 1.0)
-        hotkeyManager.setVolumeDeltaDb(newDeltaDb)
-        updateVolumeDeltaInterface()
-    }
-    
-    @objc private func toggleLaunchAtLogin() {
-        if #available(macOS 13.0, *) {
-            toggleModernLaunchAtLogin()
-        } else {
-            toggleLegacyLaunchAtLogin()
-        }
-    }
-    
     @objc private func quitApplication() {
         NSApplication.shared.terminate(nil)
     }
@@ -693,44 +638,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         }
     }
     
-    private func schedulePermissionRechecks() {
-        guard let hotkeyManager = hotkeyManager else { return }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            hotkeyManager.recheckPermissions()
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            hotkeyManager.recheckPermissions()
-        }
-    }
-    
-    private func scheduleUIUpdate() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            if let menu = self?.activeMenu {
-                self?.updateMenuInRealTime(menu)
-            }
-        }
-    }
-    
-    private func updateVolumeDeltaInterface() {
-        guard let menu = activeMenu, isPreferencesMenuActive else { return }
-
-        for item in menu.items {
-            if let components = item.representedObject as? [String: NSView],
-               let decreaseButton = components["decrease"] as? NSButton,
-               let increaseButton = components["increase"] as? NSButton,
-               let valueLabel = components["value"] as? NSTextField,
-               let hotkeyManager = hotkeyManager {
-
-                let currentDeltaDb = hotkeyManager.getVolumeDeltaDb()
-                valueLabel.stringValue = "\(Int(currentDeltaDb)) dB"
-                decreaseButton.isEnabled = currentDeltaDb > 1
-                increaseButton.isEnabled = currentDeltaDb < 6
-                break
-            }
-        }
-    }
-    
     private func updateMenuInRealTime(_ menu: NSMenu) {
         // Éviter les refreshs pendant les problèmes réseau
         guard isMiloConnected else { return }
@@ -745,34 +652,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.statusItem.button?.alphaValue = self?.isMiloConnected == true ? 1.0 : 0.5
         }
-    }
-    
-    private func isLaunchAtLoginEnabled() -> Bool {
-        if #available(macOS 13.0, *) {
-            return SMAppService.mainApp.status == .enabled
-        } else {
-            return false
-        }
-    }
-    
-    @available(macOS 13.0, *)
-    private func toggleModernLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            if service.status == .enabled {
-                try service.unregister()
-            } else {
-                try service.register()
-            }
-        } catch {
-            print("Error toggling launch at login: \(error)")
-        }
-    }
-    
-    private func toggleLegacyLaunchAtLogin() {
-        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
-        let currentStatus = isLaunchAtLoginEnabled()
-        SMLoginItemSetEnabled(bundleIdentifier as CFString, !currentStatus)
     }
     
     // MARK: - Data Refresh

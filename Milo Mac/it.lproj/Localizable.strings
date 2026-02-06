@@ -25,10 +25,33 @@
 "feature.equalizer" = "Equalizzatore";
 
 // MARK: - Configuration Menu
-"config.hotkeys.title" = "Scorciatoie volume (⌥↑/↓)";
-"config.volume_delta.title" = "Incremento volume";
-"config.launch_at_login" = "Avvia all'avvio del Mac";
+"config.settings" = "Impostazioni...";
 "config.quit" = "Esci";
+
+// MARK: - Settings Window
+"settings.title" = "Impostazioni Milo Mac";
+"settings.general" = "Generale";
+"settings.mac_audio" = "Audio Mac (ROC-VAD)";
+
+// General section
+"settings.hotkeys" = "Scorciatoie volume (⌥↑/↓)";
+"settings.volume_increment" = "Incremento volume";
+"settings.launch_at_login" = "Avvia all'avvio del Mac";
+
+// Mac Audio section
+"settings.preset" = "Preset";
+"settings.buffer" = "Buffer";
+"settings.buffer.low" = "Bassa latenza";
+"settings.buffer.high" = "Stabile";
+"settings.fec" = "Correzione errori";
+"settings.quality" = "Qualità";
+"settings.advanced" = "Opzioni avanzate";
+"settings.packet_length" = "Lunghezza pacchetto";
+"settings.fec_source" = "Pacchetti sorgente FEC";
+"settings.fec_repair" = "Pacchetti riparazione FEC";
+"settings.interleaving" = "Interleaving pacchetti";
+"settings.reset" = "Ripristina predefiniti";
+"settings.apply" = "Applica";
 
 // MARK: - Connection Status
 "status.disconnected" = "Milō non è acceso";
@@ -83,6 +106,20 @@
 // MARK: - Buttons
 "button.decrease" = "−";
 "button.increase" = "+";
+
+// MARK: - ROC VAD Settings (enum localization)
+"config.rocvad.fec.rs8m" = "Standard (RS8M)";
+"config.rocvad.fec.ldpc" = "Alta (LDPC)";
+"config.rocvad.fec.disable" = "Disattivata";
+"config.rocvad.resampler.low" = "Bassa";
+"config.rocvad.resampler.medium" = "Media";
+"config.rocvad.resampler.high" = "Alta";
+"config.rocvad.preset.ultra_low" = "Latenza ultra bassa";
+"config.rocvad.preset.low" = "Bassa latenza";
+"config.rocvad.preset.balanced" = "Bilanciato";
+"config.rocvad.preset.high_quality" = "Alta qualità";
+"config.rocvad.preset.custom" = "Personalizzato";
+"progress.applying_settings" = "Applicazione delle impostazioni audio...";
 
 // MARK: - Logging/Debug (optional, can remain in English)
 "log.milo_starting" = "Milō Mac starting...";

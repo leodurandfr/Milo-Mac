@@ -25,10 +25,33 @@
 "feature.equalizer" = "इक्वलाइज़र";
 
 // MARK: - Configuration Menu
-"config.hotkeys.title" = "वॉल्यूम शॉर्टकट (⌥↑/↓)";
-"config.volume_delta.title" = "वॉल्यूम वृद्धि";
-"config.launch_at_login" = "Mac स्टार्टअप पर लॉन्च करें";
+"config.settings" = "सेटिंग्स...";
 "config.quit" = "बाहर निकलें";
+
+// MARK: - Settings Window
+"settings.title" = "Milo Mac सेटिंग्स";
+"settings.general" = "सामान्य";
+"settings.mac_audio" = "Mac ऑडियो (ROC-VAD)";
+
+// General section
+"settings.hotkeys" = "वॉल्यूम शॉर्टकट (⌥↑/↓)";
+"settings.volume_increment" = "वॉल्यूम वृद्धि";
+"settings.launch_at_login" = "Mac स्टार्टअप पर लॉन्च करें";
+
+// Mac Audio section
+"settings.preset" = "प्रीसेट";
+"settings.buffer" = "बफर";
+"settings.buffer.low" = "कम विलंबता";
+"settings.buffer.high" = "स्थिर";
+"settings.fec" = "त्रुटि सुधार";
+"settings.quality" = "गुणवत्ता";
+"settings.advanced" = "उन्नत विकल्प";
+"settings.packet_length" = "पैकेट लंबाई";
+"settings.fec_source" = "FEC स्रोत पैकेट";
+"settings.fec_repair" = "FEC मरम्मत पैकेट";
+"settings.interleaving" = "पैकेट इंटरलीविंग";
+"settings.reset" = "डिफ़ॉल्ट पर रीसेट";
+"settings.apply" = "लागू करें";
 
 // MARK: - Connection Status
 "status.disconnected" = "Milō चालू नहीं है";
@@ -83,6 +106,20 @@
 // MARK: - Buttons
 "button.decrease" = "−";
 "button.increase" = "+";
+
+// MARK: - ROC VAD Settings (enum localization)
+"config.rocvad.fec.rs8m" = "मानक (RS8M)";
+"config.rocvad.fec.ldpc" = "उच्च (LDPC)";
+"config.rocvad.fec.disable" = "अक्षम";
+"config.rocvad.resampler.low" = "कम";
+"config.rocvad.resampler.medium" = "मध्यम";
+"config.rocvad.resampler.high" = "उच्च";
+"config.rocvad.preset.ultra_low" = "अत्यंत कम विलंबता";
+"config.rocvad.preset.low" = "कम विलंबता";
+"config.rocvad.preset.balanced" = "संतुलित";
+"config.rocvad.preset.high_quality" = "उच्च गुणवत्ता";
+"config.rocvad.preset.custom" = "कस्टम";
+"progress.applying_settings" = "ऑडियो सेटिंग्स लागू हो रही हैं...";
 
 // MARK: - Logging/Debug (optional, can remain in English)
 "log.milo_starting" = "Milō Mac starting...";

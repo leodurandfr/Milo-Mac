@@ -25,10 +25,33 @@
 "feature.equalizer" = "均衡器";
 
 // MARK: - Configuration Menu
-"config.hotkeys.title" = "音量快捷键 (⌥↑/↓)";
-"config.volume_delta.title" = "音量增量";
-"config.launch_at_login" = "Mac 启动时运行";
+"config.settings" = "设置...";
 "config.quit" = "退出";
+
+// MARK: - Settings Window
+"settings.title" = "Milo Mac 设置";
+"settings.general" = "通用";
+"settings.mac_audio" = "Mac 音频 (ROC-VAD)";
+
+// General section
+"settings.hotkeys" = "音量快捷键 (⌥↑/↓)";
+"settings.volume_increment" = "音量增量";
+"settings.launch_at_login" = "Mac 启动时运行";
+
+// Mac Audio section
+"settings.preset" = "预设";
+"settings.buffer" = "缓冲区";
+"settings.buffer.low" = "低延迟";
+"settings.buffer.high" = "稳定";
+"settings.fec" = "纠错";
+"settings.quality" = "质量";
+"settings.advanced" = "高级选项";
+"settings.packet_length" = "数据包长度";
+"settings.fec_source" = "FEC 源数据包";
+"settings.fec_repair" = "FEC 修复数据包";
+"settings.interleaving" = "数据包交织";
+"settings.reset" = "重置为默认";
+"settings.apply" = "应用";
 
 // MARK: - Connection Status
 "status.disconnected" = "Milō 未开机";
@@ -83,6 +106,20 @@
 // MARK: - Buttons
 "button.decrease" = "−";
 "button.increase" = "+";
+
+// MARK: - ROC VAD Settings (enum localization)
+"config.rocvad.fec.rs8m" = "标准 (RS8M)";
+"config.rocvad.fec.ldpc" = "高级 (LDPC)";
+"config.rocvad.fec.disable" = "禁用";
+"config.rocvad.resampler.low" = "低";
+"config.rocvad.resampler.medium" = "中";
+"config.rocvad.resampler.high" = "高";
+"config.rocvad.preset.ultra_low" = "超低延迟";
+"config.rocvad.preset.low" = "低延迟";
+"config.rocvad.preset.balanced" = "均衡";
+"config.rocvad.preset.high_quality" = "高品质";
+"config.rocvad.preset.custom" = "自定义";
+"progress.applying_settings" = "正在应用音频设置...";
 
 // MARK: - Logging/Debug (optional, can remain in English)
 "log.milo_starting" = "Milō Mac starting...";

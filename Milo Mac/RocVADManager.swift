@@ -3,17 +3,27 @@ import SwiftUI
 import AppKit
 
 class RocVADManager {
-    
+
     private let deviceName = "Milō"
     private var miloHost = "milo.local"  // Mutable pour permettre la mise à jour avec l'IP résolue
     private let sourcePort = 10001
     private let repairPort = 10002
     private let controlPort = 10003
-    
+
+    // ROC VAD settings for sender configuration
+    private(set) var settings: RocVADSettings
+
     // Window de progression (style NSAlert natif)
     private var progressPanel: NSWindow?
     private var progressLabel: NSTextField?
     private var progressIndicator: NSProgressIndicator?
+
+    // MARK: - Initialization
+
+    init() {
+        self.settings = RocVADSettings.loadFromUserDefaults()
+        NSLog("📦 RocVADManager initialized with settings: buffer=\(settings.deviceBuffer)ms, fec=\(settings.fecEncoding.rawValue), resampler=\(settings.resamplerProfile.rawValue)")
+    }
     
     // MARK: - Public Interface
     
@@ -190,6 +200,72 @@ class RocVADManager {
             NSLog("🔧 Configuring new device #\(newDeviceIndex) with IP: \(newHost)")
             let success = self.configureDevice(deviceIndex: newDeviceIndex)
             NSLog(success ? "✅ Device reconfigured with IP: \(newHost)" : "❌ Failed to configure device with IP: \(newHost)")
+        }
+    }
+
+    // MARK: - Settings Management
+
+    /// Update ROC VAD settings and recreate the device with new configuration
+    /// - Parameters:
+    ///   - newSettings: The new settings to apply
+    ///   - completion: Callback with success status
+    func updateSettings(_ newSettings: RocVADSettings, completion: @escaping (Bool) -> Void) {
+        NSLog("🔧 Updating ROC VAD settings...")
+
+        // Show progress panel
+        DispatchQueue.main.async {
+            self.showProgressPanel(message: L("progress.applying_settings"))
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+
+            // Save new settings
+            self.settings = newSettings
+            newSettings.saveToUserDefaults()
+            NSLog("💾 Settings saved: buffer=\(newSettings.deviceBuffer)ms, fec=\(newSettings.fecEncoding.rawValue), resampler=\(newSettings.resamplerProfile.rawValue)")
+
+            // Find and delete existing device
+            let deviceInfo = self.getRocVADDeviceInfo()
+            if let existingDevice = deviceInfo.first(where: { $0.name == self.deviceName }) {
+                NSLog("🗑️ Deleting existing device #\(existingDevice.index) for reconfiguration")
+                self.deleteDevice(deviceIndex: existingDevice.index)
+                // Small delay to ensure device is fully removed
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+
+            // Create new device with updated settings
+            DispatchQueue.main.async {
+                self.updateProgressMessage(L("progress.creating_device"))
+            }
+
+            let newDeviceIndex = self.createMiloDevice()
+            guard newDeviceIndex > 0 else {
+                NSLog("❌ Failed to create new device with updated settings")
+                DispatchQueue.main.async {
+                    self.hideProgressPanel()
+                    completion(false)
+                }
+                return
+            }
+
+            NSLog("✅ Created new device #\(newDeviceIndex) with updated settings")
+
+            // Configure endpoints
+            DispatchQueue.main.async {
+                self.updateProgressMessage(L("progress.reconfiguring_device"))
+            }
+
+            let success = self.configureDevice(deviceIndex: newDeviceIndex)
+
+            DispatchQueue.main.async {
+                self.hideProgressPanel()
+                NSLog(success ? "✅ Device reconfigured with new settings" : "❌ Failed to configure device endpoints")
+                completion(success)
+            }
         }
     }
 
@@ -409,24 +485,32 @@ class RocVADManager {
     private func createMiloDevice() -> Int {
         let task = Process()
         task.launchPath = "/usr/local/bin/roc-vad"
-        task.arguments = ["device", "add", "sender", "--name", deviceName]
-        
+
+        // Base arguments
+        var arguments = ["device", "add", "sender", "--name", deviceName]
+
+        // Add settings arguments
+        arguments.append(contentsOf: settings.toDeviceArguments())
+
+        task.arguments = arguments
+        NSLog("🔧 Creating device with arguments: \(arguments.joined(separator: " "))")
+
         let pipe = Pipe()
         task.standardOutput = pipe
-        
+
         let semaphore = DispatchSemaphore(value: 0)
         var deviceIndex = 0
-        
+
         task.terminationHandler = { _ in
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
             deviceIndex = parseDeviceIndex(from: output)
             semaphore.signal()
         }
-        
+
         task.launch()
         semaphore.wait()
-        
+
         return deviceIndex
     }
     
