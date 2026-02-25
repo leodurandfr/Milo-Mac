@@ -8,6 +8,7 @@ class VolumeHUD {
     private var fillView: NSView?
     private var volumeLabel: NSTextField?
     private var hideTimer: Timer?
+    private var clickMonitor: Any?
     
     private let windowWidth: CGFloat = 472
     private let windowHeight: CGFloat = 64
@@ -45,7 +46,7 @@ class VolumeHUD {
         window.backgroundColor = NSColor.clear
         window.isOpaque = false
         window.hasShadow = false
-        window.ignoresMouseEvents = true
+        window.ignoresMouseEvents = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
         
         if let screen = NSScreen.main {
@@ -60,8 +61,14 @@ class VolumeHUD {
         }
         
         window.alphaValue = 0
+
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self = self, event.window == self.window else { return event }
+            self.hide()
+            return nil
+        }
     }
-    
+
     private func setupViews() {
         guard let window = window else { return }
         
@@ -221,6 +228,9 @@ class VolumeHUD {
     }
     
     deinit {
+        if let clickMonitor = clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+        }
         hideTimer?.invalidate()
         window?.orderOut(nil)
     }
