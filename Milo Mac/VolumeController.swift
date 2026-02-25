@@ -80,11 +80,11 @@ class VolumeController {
         slider.target = nil
         slider.action = nil
 
-        slider.doubleValue = volumeDb
-
-        // Forcer la mise à jour visuelle du slider custom
+        // Utiliser setVolumeValue pour mettre à jour les CALayers correctement
         if let nativeSlider = slider as? NativeVolumeSlider {
-            nativeSlider.needsDisplay = true
+            nativeSlider.setVolumeValue(volumeDb, animated: true)
+        } else {
+            slider.doubleValue = volumeDb
         }
 
         slider.target = originalTarget

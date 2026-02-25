@@ -391,66 +391,41 @@ class NativeVolumeSlider: NSSlider {
     
     private func updateLayerPositions(animated: Bool = false) {
         guard layer != nil else { return }
-        
+
+        // animated: false → tout instant (disable actions)
+        // animated: true → animations implicites des CALayers (actions dict: 0.25s ease-out)
+        if !animated {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+        }
+
         let trackY = bounds.midY - trackHeight / 2
         let percentage = CGFloat((doubleValue - minValue) / (maxValue - minValue))
-        
+
         trackLayer.frame = NSRect(x: 0, y: trackY, width: bounds.width, height: trackHeight)
-        
-        // Garder la position originale du cercle d'icône (ne pas la changer)
+
         let iconZoneRect = NSRect(x: 1, y: trackY + 1, width: fillHeight, height: fillHeight)
         iconLayer.frame = iconZoneRect
-        
+
         let thumbRange = bounds.width - 2 - thumbSize
         let thumbX = 1 + (thumbRange * percentage)
         let thumbY = bounds.midY - thumbSize / 2
-        let newThumbFrame = NSRect(x: thumbX, y: thumbY, width: thumbSize, height: thumbSize)
-        
-        // Animation conditionnelle du thumb
-        if animated {
-            CATransaction.begin()
-            CATransaction.setAnimationDuration(0.3)
-            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0))
-            thumbLayer.frame = newThumbFrame
-            CATransaction.commit()
-        } else {
-            thumbLayer.frame = newThumbFrame
-        }
-        
+        thumbLayer.frame = NSRect(x: thumbX, y: thumbY, width: thumbSize, height: thumbSize)
+
         if percentage > 0 {
             let thumbCenterX = thumbX + thumbSize / 2
             let fillWidth = max(0, thumbCenterX - fixedFillStartX)
-            let newFillFrame = NSRect(x: fixedFillStartX, y: trackY + 1, width: fillWidth, height: fillHeight)
-            
-            // Animation conditionnelle du fill
-            if animated {
-                CATransaction.begin()
-                CATransaction.setAnimationDuration(0.3)
-                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0))
-                fillLayer.frame = newFillFrame
-                CATransaction.commit()
-            } else {
-                fillLayer.frame = newFillFrame
-            }
+            fillLayer.frame = NSRect(x: fixedFillStartX, y: trackY + 1, width: fillWidth, height: fillHeight)
         } else {
-            let newFillFrame = NSRect(x: fixedFillStartX, y: trackY + 1, width: 0, height: fillHeight)
-            
-            if animated {
-                CATransaction.begin()
-                CATransaction.setAnimationDuration(0.3)
-                CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0))
-                fillLayer.frame = newFillFrame
-                CATransaction.commit()
-            } else {
-                fillLayer.frame = newFillFrame
-            }
+            fillLayer.frame = NSRect(x: fixedFillStartX, y: trackY + 1, width: 0, height: fillHeight)
         }
-        
-        // Gestion de l'opacité du stroke du thumb
+
         updateThumbStrokeOpacity(thumbX: thumbX, iconZoneRect: iconZoneRect)
-        
-        // Mettre à jour les ondes à chaque changement de position
         updateWaveOpacities()
+
+        if !animated {
+            CATransaction.commit()
+        }
     }
     
     private func updateThumbStrokeOpacity(thumbX: CGFloat, iconZoneRect: NSRect) {
@@ -590,11 +565,12 @@ class NativeVolumeSlider: NSSlider {
     // MARK: - Override value setter to detect changes
     override var doubleValue: Double {
         didSet {
-            // Mettre à jour les layers même si c'est un changement programmatique
-            if isUpdatingProgrammatically {
+            // isUpdatingProgrammatically: géré par setVolumeValue() (qui choisit animated ou non)
+            // isThumbPressed: géré par sliderValueChanged (avec animation pour les clics)
+            // Sinon (factory, code externe): mise à jour instantanée
+            if !isThumbPressed && !isUpdatingProgrammatically {
                 updateLayerPositions(animated: false)
             }
-            // Les changements d'interaction utilisateur sont gérés par sliderValueChanged
         }
     }
     
@@ -602,10 +578,8 @@ class NativeVolumeSlider: NSSlider {
     func setVolumeValue(_ value: Double, animated: Bool = false) {
         isUpdatingProgrammatically = true
         doubleValue = max(minValue, min(maxValue, value))
-        lastValue = doubleValue  // Mettre à jour lastValue aussi
-        if animated {
-            updateLayerPositions(animated: true)
-        }
+        lastValue = doubleValue
+        updateLayerPositions(animated: animated)
         isUpdatingProgrammatically = false
     }
     

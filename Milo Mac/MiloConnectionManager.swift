@@ -506,7 +506,21 @@ class MiloConnectionManager: NSObject {
     }
     
     private func handleVolumeChange(_ data: [String: Any]) {
-        let volumeDb = data["volume_db"] as? Double ?? -30.0
+        let volumeDb: Double
+        if let db = data["volume_db"] as? Double {
+            volumeDb = db
+        } else if let db = data["volume_db"] as? Int {
+            volumeDb = Double(db)
+        } else if let state = data["state"] as? [String: Any],
+                  let globalStr = state["global_volume_db"] as? String,
+                  let db = Double(globalStr) {
+            volumeDb = db
+        } else if let state = data["state"] as? [String: Any],
+                  let db = state["global_volume_db"] as? Double {
+            volumeDb = db
+        } else {
+            return
+        }
         let multiroomEnabled = data["multiroom_enabled"] as? Bool ?? false
         let stepMobileDb = data["step_mobile_db"] as? Double ?? 3.0
 

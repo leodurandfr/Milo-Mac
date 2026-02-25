@@ -233,7 +233,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     private func addVolumeSection(to menu: NSMenu) {
         let volumeItems = MenuItemFactory.createVolumeSection(
-            volumeDb: currentVolume?.volumeDb ?? -30.0,
+            volumeDb: currentVolume?.volumeDb ?? -80.0,
             limitMinDb: currentVolume?.limitMinDb ?? -80.0,
             limitMaxDb: currentVolume?.limitMaxDb ?? -21.0,
             target: self,
@@ -631,10 +631,10 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func updateMenuInRealTime(_ menu: NSMenu) {
         // Éviter les refreshs pendant les problèmes réseau
         guard isMiloConnected else { return }
-        
+
         CircularMenuItem.cleanupAllSpinners()
         menu.removeAllItems()
-        
+
         buildConnectedMenu(menu, isPreferences: isPreferencesMenuActive)
     }
     

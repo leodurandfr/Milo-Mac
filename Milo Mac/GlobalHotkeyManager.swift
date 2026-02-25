@@ -123,7 +123,7 @@ class GlobalHotkeyManager {
             return
         }
         
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
         
         guard let eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -167,21 +167,33 @@ class GlobalHotkeyManager {
         guard isMonitoring else {
             return Unmanaged.passUnretained(event)
         }
-        
+
+        // Handle flags changed via CGEvent tap (works even during NSMenu tracking)
+        if type == .flagsChanged {
+            let rawFlags = UInt(event.flags.rawValue)
+            let wasRightOptionPressed = isRightOptionPressed
+            isRightOptionPressed = (rawFlags & rightOptionMask) != 0
+
+            if wasRightOptionPressed && !isRightOptionPressed {
+                stopCurrentRepeat()
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
-        
+
         if keyCode == upArrowKeyCode || keyCode == downArrowKeyCode {
             if type == .keyDown {
                 handleArrowKeyDown(keyCode: keyCode)
             } else if type == .keyUp {
                 handleArrowKeyUp(keyCode: keyCode)
             }
-            
+
             if isRightOptionPressed {
                 return nil // Intercept event
             }
         }
-        
+
         return Unmanaged.passUnretained(event)
     }
     
@@ -235,11 +247,6 @@ class GlobalHotkeyManager {
     private func checkForVolumeAction(direction: String, deltaDb: Double) {
         guard isRightOptionPressed else { return }
 
-        if menuController?.isMenuCurrentlyOpen() == true {
-            NSSound.beep()
-            return
-        }
-
         guard let connectionManager = connectionManager,
               connectionManager.isCurrentlyConnected(),
               connectionManager.getAPIService() != nil else {
@@ -261,15 +268,17 @@ class GlobalHotkeyManager {
         currentRepeatDirection = direction
         currentRepeatDeltaDb = deltaDb
 
-        repeatTimer = Timer.scheduledTimer(withTimeInterval: initialRepeatDelay, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: initialRepeatDelay, repeats: false) { [weak self] _ in
             self?.startContinuousRepeat()
         }
+        RunLoop.current.add(timer, forMode: .common)
+        repeatTimer = timer
     }
 
     private func startContinuousRepeat() {
         guard let direction = currentRepeatDirection else { return }
 
-        repeatTimer = Timer.scheduledTimer(withTimeInterval: repeatInterval, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: repeatInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
 
             let shouldContinue = self.isRightOptionPressed &&
@@ -282,6 +291,8 @@ class GlobalHotkeyManager {
                 self.stopCurrentRepeat()
             }
         }
+        RunLoop.current.add(timer, forMode: .common)
+        repeatTimer = timer
     }
 
     private func stopCurrentRepeat() {

@@ -181,7 +181,7 @@ class MiloAPIService {
         let stepMobile = (config["step_mobile_db"] as? Double) ?? Double(config["step_mobile_db"] as? Int ?? 3)
 
         return VolumeStatus(
-            volumeDb: dataDict["volume_db"] as? Double ?? Double(dataDict["volume_db"] as? Int ?? -30),
+            volumeDb: (dataDict["volume_db"] as? Double) ?? Double(dataDict["volume_db"] as? Int ?? 0),
             multiroomEnabled: dataDict["multiroom_enabled"] as? Bool ?? false,
             dspAvailable: dataDict["dsp_available"] as? Bool ?? true,
             limitMinDb: limitMin,

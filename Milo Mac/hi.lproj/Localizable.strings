@@ -11,7 +11,7 @@
 // MARK: - Audio Sources
 "source.spotify" = "Spotify";
 "source.bluetooth" = "Bluetooth";
-"source.mac" = "Mac";
+"source.mac" = "macOS";
 "source.radio" = "रेडियो";
 "source.podcast" = "पॉडकास्ट";
 "source.airplay" = "AirPlay";
@@ -31,7 +31,7 @@
 // MARK: - Settings Window
 "settings.title" = "Milo Mac सेटिंग्स";
 "settings.general" = "सामान्य";
-"settings.mac_audio" = "Mac ऑडियो (ROC-VAD)";
+"settings.mac_audio" = "macOS ऑडियो (ROC-VAD)";
 
 // General section
 "settings.hotkeys" = "वॉल्यूम शॉर्टकट (⌥↑/↓)";
