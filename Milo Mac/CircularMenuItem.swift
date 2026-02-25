@@ -147,13 +147,20 @@ class CircularMenuItem {
             width: iconSize, // 26px
             height: iconSize // 26px
         ))
-        
+
         // Récupérer l'icône depuis les Assets
         iconView.image = IconProvider.getIcon(config.iconName)
-        
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.imageAlignment = .alignCenter
+
+        // Appliquer une taille adaptée pour les SF Symbols
+        if IconProvider.isSFSymbol(config.iconName) {
+            iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        }
+
         // Configurer l'icône pour qu'elle s'adapte aux couleurs
         iconView.contentTintColor = config.isActive ? NSColor.white : NSColor.secondaryLabelColor
-        
+
         return iconView
     }
     
@@ -255,7 +262,7 @@ class IconProvider {
         
         // Mapper les noms d'icônes vers les noms des assets
         let assetName = mapIconNameToAsset(iconName)
-        
+
         // Charger l'icône depuis les Assets
         if let icon = NSImage(named: assetName) {
             // Configurer comme template pour adaptation automatique des couleurs
@@ -263,13 +270,25 @@ class IconProvider {
             iconCache[iconName] = icon
             return icon
         }
-        
+
+        // Essayer comme SF Symbol natif
+        if let sfIcon = NSImage(systemSymbolName: assetName, accessibilityDescription: nil) {
+            sfIcon.isTemplate = true
+            iconCache[iconName] = sfIcon
+            return sfIcon
+        }
+
         // Fallback vers l'ancien système si l'asset n'existe pas
         let fallbackIcon = createFallbackIcon(iconName)
         iconCache[iconName] = fallbackIcon
         return fallbackIcon
     }
     
+    static func isSFSymbol(_ iconName: String) -> Bool {
+        let assetName = mapIconNameToAsset(iconName)
+        return NSImage(named: assetName) == nil && NSImage(systemSymbolName: assetName, accessibilityDescription: nil) != nil
+    }
+
     private static func mapIconNameToAsset(_ iconName: String) -> String {
         switch iconName {
         case "music.note":
@@ -282,10 +301,10 @@ class IconProvider {
             return "radio-icon"
         case "podcasts-icon":
             return "podcasts-icon"
+        case "airplayaudio":
+            return "airplay.audio"
         case "speaker.wave.3":
             return "multiroom-icon"
-        case "slider.horizontal.3":
-            return "equalizer-icon"
         default:
             return iconName
         }
@@ -336,12 +355,6 @@ class IconProvider {
                           controlPoint2: NSPoint(x: 12 + i * 3, y: 16))
                 wave.lineWidth = 1.5
                 wave.stroke()
-            }
-            
-        case "slider.horizontal.3":
-            for i in 0..<3 {
-                let bar = NSBezierPath(rect: NSRect(x: 6 + i * 5, y: 6 + i * 2, width: 3, height: 14 - i * 4))
-                bar.fill()
             }
             
         default:

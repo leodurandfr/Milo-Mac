@@ -112,6 +112,7 @@ class MenuItemFactory {
             (L("source.spotify"), "music.note", "spotify"),
             (L("source.bluetooth"), "bluetooth", "bluetooth"),
             (L("source.mac"), "desktopcomputer", "mac"),
+            (L("source.airplay"), "airplayaudio", "airplay"),
             (L("source.radio"), "radio", "radio"),
             (L("source.podcast"), "podcasts-icon", "podcast")
         ]
@@ -147,8 +148,7 @@ class MenuItemFactory {
         items.append(createSecondaryHeader(title: L("menu.features.title")))
         
         let systemConfigs = [
-            (L("feature.multiroom"), "speaker.wave.3", "multiroom", state?.multiroomEnabled ?? false),
-            (L("feature.equalizer"), "slider.horizontal.3", "equalizer", state?.equalizerEnabled ?? false)
+            (L("feature.multiroom"), "speaker.wave.3", "multiroom", state?.multiroomEnabled ?? false)
         ]
         
         for (title, iconName, toggleId, currentlyEnabled) in systemConfigs {

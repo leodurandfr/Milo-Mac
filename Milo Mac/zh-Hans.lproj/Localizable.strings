@@ -14,6 +14,7 @@
 "source.mac" = "Mac";
 "source.radio" = "广播";
 "source.podcast" = "播客";
+"source.airplay" = "AirPlay";
 
 // MARK: - Radio
 "radio.favorites" = "收藏的电台";
@@ -22,7 +23,6 @@
 
 // MARK: - Features
 "feature.multiroom" = "多房间";
-"feature.equalizer" = "均衡器";
 
 // MARK: - Configuration Menu
 "config.settings" = "设置...";

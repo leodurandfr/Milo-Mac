@@ -489,8 +489,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
                 switch toggleType {
                 case "multiroom":
                     try await apiService.setMultiroom(newState)
-                case "equalizer":
-                    try await apiService.setEqualizer(newState)
                 default:
                     await MainActor.run {
                         self.stopFunctionalityLoading(for: toggleType)
@@ -557,13 +555,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
            loadingStates["multiroom"] == true {
             stopFunctionalityLoading(for: "multiroom")
         }
-        
-        // Vérifier equalizer
-        if let expectedEqualizer = expectedFunctionalityStates["equalizer"],
-           newState.equalizerEnabled == expectedEqualizer,
-           loadingStates["equalizer"] == true {
-            stopFunctionalityLoading(for: "equalizer")
-        }
     }
     
     // MARK: - Audio Source Loading Management
@@ -606,7 +597,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func syncLoadingStatesWithBackend() {
         guard let state = currentState else { return }
 
-        let audioSources = ["spotify", "bluetooth", "mac", "radio", "podcast"]
+        let audioSources = ["spotify", "bluetooth", "mac", "airplay", "radio", "podcast"]
         let isPluginStarting = state.pluginState.lowercased() == "starting"
 
         for identifier in audioSources {
@@ -633,7 +624,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func getCurrentToggleState(_ toggleType: String) -> Bool {
         switch toggleType {
         case "multiroom": return currentState?.multiroomEnabled ?? false
-        case "equalizer": return currentState?.equalizerEnabled ?? false
         default: return false
         }
     }

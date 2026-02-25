@@ -499,7 +499,6 @@ class MiloConnectionManager: NSObject {
             activeSource: fullState["active_source"] as? String ?? "none",
             pluginState: fullState["plugin_state"] as? String ?? "ready",  // "starting" déclenche le spinner
             multiroomEnabled: fullState["multiroom_enabled"] as? Bool ?? false,
-            equalizerEnabled: fullState["equalizer_enabled"] as? Bool ?? false,
             metadata: fullState["metadata"] as? [String: Any] ?? [:]
         )
 

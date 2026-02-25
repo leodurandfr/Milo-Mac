@@ -4,7 +4,6 @@ struct MiloState {
     let activeSource: String
     let pluginState: String       // "starting", "ready", "connected", "error" - INDICATEUR utilisé pour les spinners
     let multiroomEnabled: Bool
-    let equalizerEnabled: Bool
     let metadata: [String: Any]
 }
 
@@ -120,7 +119,6 @@ class MiloAPIService {
             activeSource: json["active_source"] as? String ?? "none",
             pluginState: json["plugin_state"] as? String ?? "ready",  // "starting" déclenche le spinner
             multiroomEnabled: json["multiroom_enabled"] as? Bool ?? false,
-            equalizerEnabled: json["equalizer_enabled"] as? Bool ?? false,
             metadata: json["metadata"] as? [String: Any] ?? [:]
         )
     }
@@ -143,22 +141,6 @@ class MiloAPIService {
     
     func setMultiroom(_ enabled: Bool) async throws {
         guard let url = buildURL(path: "/api/routing/multiroom/\(enabled)") else {
-            throw APIError.invalidURL
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        let (_, response) = try await session.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw APIError.httpError
-        }
-    }
-    
-    func setEqualizer(_ enabled: Bool) async throws {
-        guard let url = buildURL(path: "/api/routing/equalizer/\(enabled)") else {
             throw APIError.invalidURL
         }
         

@@ -14,6 +14,7 @@
 "source.mac" = "Mac";
 "source.radio" = "Radio";
 "source.podcast" = "Podcasts";
+"source.airplay" = "AirPlay";
 
 // MARK: - Radio
 "radio.favorites" = "Radios favoritas";
@@ -22,7 +23,6 @@
 
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
-"feature.equalizer" = "Ecualizador";
 
 // MARK: - Configuration Menu
 "config.settings" = "Ajustes...";
