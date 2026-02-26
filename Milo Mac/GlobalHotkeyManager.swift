@@ -8,7 +8,7 @@ class GlobalHotkeyManager {
 
     // MARK: - State
     private var isMonitoring = false
-    private var volumeHUD: VolumeHUD?
+    private(set) var volumeHUD: VolumeHUD?
 
     // MARK: - Repeat Logic
     private var repeatTimer: Timer?
@@ -273,9 +273,13 @@ class GlobalHotkeyManager {
 
         guard currentRepeatDirection == nil else { return }
 
-        // Initialize local volume from last known state
+        // Only sync volume from server on fresh start (HUD not showing).
+        // While HUD is visible, localVolumeDb is more accurate than the
+        // potentially lagging server state from async API + WebSocket.
         if let volume = menuController?.currentVolume {
-            localVolumeDb = volume.volumeDb
+            if !(volumeHUD?.isVisible ?? false) {
+                localVolumeDb = volume.volumeDb
+            }
             limitMinDb = volume.limitMinDb
             limitMaxDb = volume.limitMaxDb
         }

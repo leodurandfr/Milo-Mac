@@ -798,8 +798,27 @@ extension MenuBarController {
     }
     
     func didReceiveVolumeUpdate(_ volume: VolumeStatus) {
-        currentVolume = volume
-        volumeController.setCurrentVolume(volume)
+        // WebSocket volume events don't include real limits (hardcoded -80/-21).
+        // Preserve the API-sourced limits from the previous currentVolume.
+        if let existing = currentVolume {
+            currentVolume = VolumeStatus(
+                volumeDb: volume.volumeDb,
+                multiroomEnabled: volume.multiroomEnabled,
+                dspAvailable: volume.dspAvailable,
+                limitMinDb: existing.limitMinDb,
+                limitMaxDb: existing.limitMaxDb,
+                stepMobileDb: volume.stepMobileDb
+            )
+        } else {
+            currentVolume = volume
+        }
+        volumeController.setCurrentVolume(currentVolume!)
+
+        // Skip slider update during active hotkey use to avoid tug-of-war
+        // between local prediction (accurate) and lagging server state
+        if hotkeyManager?.volumeHUD?.isVisible == true {
+            return
+        }
         volumeController.updateSliderFromWebSocket(volume.volumeDb)
     }
     

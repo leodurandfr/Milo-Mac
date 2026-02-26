@@ -15,7 +15,7 @@ struct VolumeStatus {
     let limitMaxDb: Double        // Limite max configurée (défaut -21)
     let stepMobileDb: Double      // Step pour les ajustements (défaut 3)
 
-    /// Volume arrondi pour affichage (ex: "-30 dB")
+    /// Volume arrondi pour affichage
     var displayText: String {
         return "\(Int(round(volumeDb))) dB"
     }
