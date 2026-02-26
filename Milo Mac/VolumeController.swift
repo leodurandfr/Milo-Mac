@@ -66,7 +66,7 @@ class VolumeController {
         }
     }
 
-    func updateSliderFromWebSocket(_ volumeDb: Double) {
+    func updateSliderFromWebSocket(_ volumeDb: Double, animated: Bool = true, duration: TimeInterval? = nil) {
         guard let slider = volumeSlider, !isUserInteracting else { return }
 
         // Éviter les mises à jour inutiles (tolérance de 0.1 dB)
@@ -82,7 +82,7 @@ class VolumeController {
 
         // Utiliser setVolumeValue pour mettre à jour les CALayers correctement
         if let nativeSlider = slider as? NativeVolumeSlider {
-            nativeSlider.setVolumeValue(volumeDb, animated: true)
+            nativeSlider.setVolumeValue(volumeDb, animated: animated, duration: duration)
         } else {
             slider.doubleValue = volumeDb
         }

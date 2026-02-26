@@ -11,7 +11,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - State
     private var isMiloConnected = false
     private var currentState: MiloState?
-    private var currentVolume: VolumeStatus?
+    private(set) var currentVolume: VolumeStatus?
     private var isMenuOpen = false
 
     // MARK: - Radio Cache
@@ -733,10 +733,11 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     @objc private func handleVolumeChangedViaHotkey(_ notification: Notification) {
         guard let volumeStatus = notification.object as? VolumeStatus else { return }
+        let duration = notification.userInfo?["animationDuration"] as? TimeInterval
 
         currentVolume = volumeStatus
         volumeController.setCurrentVolume(volumeStatus)
-        volumeController.updateSliderFromWebSocket(volumeStatus.volumeDb)
+        volumeController.updateSliderFromWebSocket(volumeStatus.volumeDb, animated: false, duration: duration)
     }
 }
 

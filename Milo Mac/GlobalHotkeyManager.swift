@@ -5,33 +5,37 @@ class GlobalHotkeyManager {
     // MARK: - Dependencies
     private weak var connectionManager: MiloConnectionManager?
     private weak var menuController: MenuBarController?
-    
+
     // MARK: - State
     private var isMonitoring = false
     private var volumeHUD: VolumeHUD?
-    
+
     // MARK: - Repeat Logic
     private var repeatTimer: Timer?
     private var currentRepeatDirection: String?
-    private var currentRepeatDeltaDb: Double = 0
-    
+    private var repeatStartTime: Date?
+    private var localVolumeDb: Double = 0
+    private var limitMinDb: Double = -80
+    private var limitMaxDb: Double = -21
+    private var isSendingVolume = false
+    private var hasPendingSend = false
+
     // MARK: - Event Monitoring
     private var flagsChangedMonitor: Any?
     private var eventTap: CFMachPort?
-    
+
     // MARK: - Key State
     private var isRightOptionPressed = false
     private var isUpArrowPressed = false
     private var isDownArrowPressed = false
-    
+
     // MARK: - Constants
-    private let initialRepeatDelay: TimeInterval = 0.5
-    private let repeatInterval: TimeInterval = 0.08
+    private let repeatInterval: TimeInterval = 0.03  // 30ms tick for smooth acceleration
     private let upArrowKeyCode: UInt16 = 126
     private let downArrowKeyCode: UInt16 = 125
     private let rightOptionMask: UInt = 0x40
     private let volumeDeltaDbKey = "HotkeyVolumeDeltaDb"
-    private let defaultVolumeDeltaDb: Double = 3.0  // 3 dB par défaut
+    private let defaultVolumeDeltaDb: Double = 3.0  // 3 dB par appui simple
 
     // MARK: - Volume Delta (en dB)
     private var volumeDeltaDb: Double {
@@ -43,45 +47,54 @@ class GlobalHotkeyManager {
             UserDefaults.standard.set(newValue, forKey: volumeDeltaDbKey)
         }
     }
-    
+
+    /// Calcul du delta progressif basé sur la durée de maintien
+    private func currentDelta(direction: Double) -> Double {
+        guard let start = repeatStartTime else { return volumeDeltaDb * direction }
+        let elapsed = Date().timeIntervalSince(start)
+        // Accélération : 1x → 4x sur 2 secondes
+        let multiplier = 1.0 + min(elapsed / 2.0, 1.0) * 3.0
+        return volumeDeltaDb * multiplier * direction * repeatInterval / 0.08
+    }
+
     // MARK: - Initialization
     init(connectionManager: MiloConnectionManager, menuController: MenuBarController) {
         self.connectionManager = connectionManager
         self.menuController = menuController
         self.volumeHUD = VolumeHUD()
     }
-    
+
     deinit {
         stopCurrentRepeat()
         removeEventMonitors()
     }
-    
+
     // MARK: - Public Interface
     func startMonitoring() {
         guard AXIsProcessTrusted() else {
             requestAccessibilityPermissions()
             return
         }
-        
+
         isMonitoring = true
         setupEventMonitoring()
         setupEventTap()
     }
-    
+
     func stopMonitoring() {
         stopCurrentRepeat()
         isMonitoring = false
         removeEventMonitors()
     }
-    
+
     func isCurrentlyMonitoring() -> Bool {
         return isMonitoring
     }
-    
+
     func hasAccessibilityPermissions() -> Bool {
         return AXIsProcessTrusted()
     }
-    
+
     func recheckPermissions() {
         if AXIsProcessTrusted() {
             if !isMonitoring {
@@ -91,7 +104,7 @@ class GlobalHotkeyManager {
             setupEventTap()
         }
     }
-    
+
     func getVolumeDeltaDb() -> Double {
         return volumeDeltaDb
     }
@@ -99,22 +112,22 @@ class GlobalHotkeyManager {
     func setVolumeDeltaDb(_ deltaDb: Double) {
         volumeDeltaDb = max(1.0, min(6.0, deltaDb))  // 1 à 6 dB
     }
-    
+
     // MARK: - Event Monitor Setup
     private func setupEventMonitoring() {
         if let monitor = flagsChangedMonitor {
             NSEvent.removeMonitor(monitor)
             flagsChangedMonitor = nil
         }
-        
+
         flagsChangedMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             self?.handleFlagsChanged(event)
         }
     }
-    
+
     private func setupEventTap() {
         cleanupEventTap()
-        
+
         guard AXIsProcessTrusted() else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
                 guard let self = self, self.isMonitoring else { return }
@@ -122,9 +135,9 @@ class GlobalHotkeyManager {
             }
             return
         }
-        
+
         let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
-        
+
         guard let eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -138,14 +151,14 @@ class GlobalHotkeyManager {
         ) else {
             return
         }
-        
+
         self.eventTap = eventTap
-        
+
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
     }
-    
+
     private func cleanupEventTap() {
         if let eventTap = eventTap {
             CGEvent.tapEnable(tap: eventTap, enable: false)
@@ -153,7 +166,7 @@ class GlobalHotkeyManager {
             self.eventTap = nil
         }
     }
-    
+
     private func removeEventMonitors() {
         if let monitor = flagsChangedMonitor {
             NSEvent.removeMonitor(monitor)
@@ -161,7 +174,7 @@ class GlobalHotkeyManager {
         }
         cleanupEventTap()
     }
-    
+
     // MARK: - Event Handling
     private func handleCGEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         guard isMonitoring else {
@@ -196,22 +209,22 @@ class GlobalHotkeyManager {
 
         return Unmanaged.passUnretained(event)
     }
-    
+
     private func handleArrowKeyDown(keyCode: UInt16) {
         switch keyCode {
         case upArrowKeyCode:
             isUpArrowPressed = true
-            checkForVolumeAction(direction: "up", deltaDb: volumeDeltaDb)
+            checkForVolumeAction(direction: "up")
 
         case downArrowKeyCode:
             isDownArrowPressed = true
-            checkForVolumeAction(direction: "down", deltaDb: -volumeDeltaDb)
+            checkForVolumeAction(direction: "down")
 
         default:
             break
         }
     }
-    
+
     private func handleArrowKeyUp(keyCode: UInt16) {
         switch keyCode {
         case upArrowKeyCode:
@@ -219,32 +232,32 @@ class GlobalHotkeyManager {
             if currentRepeatDirection == "up" {
                 stopCurrentRepeat()
             }
-            
+
         case downArrowKeyCode:
             isDownArrowPressed = false
             if currentRepeatDirection == "down" {
                 stopCurrentRepeat()
             }
-            
+
         default:
             break
         }
     }
-    
+
     private func handleFlagsChanged(_ event: NSEvent) {
         guard isMonitoring else { return }
-        
+
         let eventFlags = UInt(event.modifierFlags.rawValue)
         let wasRightOptionPressed = isRightOptionPressed
         isRightOptionPressed = (eventFlags & rightOptionMask) != 0
-        
+
         if wasRightOptionPressed && !isRightOptionPressed {
             stopCurrentRepeat()
         }
     }
-    
+
     // MARK: - Volume Actions
-    private func checkForVolumeAction(direction: String, deltaDb: Double) {
+    private func checkForVolumeAction(direction: String) {
         guard isRightOptionPressed else { return }
 
         guard let connectionManager = connectionManager,
@@ -254,117 +267,123 @@ class GlobalHotkeyManager {
             return
         }
 
-        if let currentDirection = currentRepeatDirection, currentDirection != direction {
+        if let currentDir = currentRepeatDirection, currentDir != direction {
             stopCurrentRepeat()
         }
 
-        if currentRepeatDirection != direction {
-            executeVolumeChange(deltaDb: deltaDb, direction: direction)
-            startRepeatSequence(direction: direction, deltaDb: deltaDb)
+        guard currentRepeatDirection == nil else { return }
+
+        // Initialize local volume from last known state
+        if let volume = menuController?.currentVolume {
+            localVolumeDb = volume.volumeDb
+            limitMinDb = volume.limitMinDb
+            limitMaxDb = volume.limitMaxDb
         }
-    }
 
-    private func startRepeatSequence(direction: String, deltaDb: Double) {
+        // First press: single step (animated)
+        volumeHUD?.updateLimits(minDb: limitMinDb, maxDb: limitMaxDb)
+        let sign: Double = direction == "up" ? 1.0 : -1.0
+        applyLocalDelta(volumeDeltaDb * sign, animationDuration: 0.25)
+        sendVolumeToDevice()
+
+        // Start repeat after initial delay
         currentRepeatDirection = direction
-        currentRepeatDeltaDb = deltaDb
-
-        let timer = Timer(timeInterval: initialRepeatDelay, repeats: false) { [weak self] _ in
+        let delayTimer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
             self?.startContinuousRepeat()
         }
-        RunLoop.current.add(timer, forMode: .common)
-        repeatTimer = timer
+        RunLoop.current.add(delayTimer, forMode: .common)
+        repeatTimer = delayTimer
     }
 
     private func startContinuousRepeat() {
-        guard let direction = currentRepeatDirection else { return }
-
+        guard currentRepeatDirection != nil else { return }
+        repeatStartTime = Date()
         let timer = Timer(timeInterval: repeatInterval, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
-
-            let shouldContinue = self.isRightOptionPressed &&
-                               ((direction == "up" && self.isUpArrowPressed) ||
-                                (direction == "down" && self.isDownArrowPressed))
-
-            if shouldContinue {
-                self.executeVolumeChange(deltaDb: self.currentRepeatDeltaDb, direction: direction)
-            } else {
-                self.stopCurrentRepeat()
-            }
+            self?.repeatTick()
         }
         RunLoop.current.add(timer, forMode: .common)
         repeatTimer = timer
+    }
+
+    private func repeatTick() {
+        guard let direction = currentRepeatDirection else { return }
+
+        let shouldContinue = isRightOptionPressed &&
+                           ((direction == "up" && isUpArrowPressed) ||
+                            (direction == "down" && isDownArrowPressed))
+
+        guard shouldContinue else {
+            stopCurrentRepeat()
+            return
+        }
+
+        let sign: Double = direction == "up" ? 1.0 : -1.0
+        let delta = currentDelta(direction: sign)
+        applyLocalDelta(delta)
+        sendVolumeToDevice()
+    }
+
+    private func applyLocalDelta(_ delta: Double, animationDuration: TimeInterval = 0.05) {
+        localVolumeDb = min(limitMaxDb, max(limitMinDb, localVolumeDb + delta))
+        volumeHUD?.show(volumeDb: localVolumeDb)
+        NotificationCenter.default.post(
+            name: NSNotification.Name("VolumeChangedViaHotkey"),
+            object: VolumeStatus(
+                volumeDb: localVolumeDb, multiroomEnabled: false,
+                dspAvailable: false, limitMinDb: limitMinDb,
+                limitMaxDb: limitMaxDb, stepMobileDb: volumeDeltaDb
+            ),
+            userInfo: ["animationDuration": animationDuration]
+        )
+    }
+
+    private func sendVolumeToDevice() {
+        guard !isSendingVolume,
+              let apiService = connectionManager?.getAPIService() else {
+            hasPendingSend = true
+            return
+        }
+
+        let targetDb = localVolumeDb
+        isSendingVolume = true
+
+        Task {
+            do {
+                try await apiService.setVolumeDb(targetDb)
+            } catch {
+                // Ignore errors during rapid changes
+            }
+            DispatchQueue.main.async {
+                self.isSendingVolume = false
+                if self.hasPendingSend {
+                    self.hasPendingSend = false
+                    self.sendVolumeToDevice()
+                }
+            }
+        }
     }
 
     private func stopCurrentRepeat() {
         repeatTimer?.invalidate()
         repeatTimer = nil
         currentRepeatDirection = nil
-        currentRepeatDeltaDb = 0
-    }
-
-    private func executeVolumeChange(deltaDb: Double, direction: String) {
-        guard let connectionManager = connectionManager,
-              connectionManager.isCurrentlyConnected() else {
-            stopCurrentRepeat()
-            return
-        }
-
-        Task {
-            do {
-                guard let apiService = connectionManager.getAPIService() else {
-                    await MainActor.run { self.stopCurrentRepeat() }
-                    return
-                }
-                try await apiService.adjustVolumeDb(deltaDb)
-                await updateVolumeHUDAfterChange()
-                await updateSliderAfterVolumeChange()
-            } catch {
-                await MainActor.run {
-                    NSSound.beep()
-                    self.stopCurrentRepeat()
-                }
-            }
-        }
-    }
-    
-    // MARK: - UI Updates
-    @MainActor
-    private func updateVolumeHUDAfterChange() async {
-        guard let apiService = connectionManager?.getAPIService(),
-              let volumeHUD = volumeHUD else { return }
-
-        do {
-            let volumeStatus = try await apiService.getVolumeStatus()
-            volumeHUD.updateLimits(minDb: volumeStatus.limitMinDb, maxDb: volumeStatus.limitMaxDb)
-            volumeHUD.show(volumeDb: volumeStatus.volumeDb)
-        } catch {
-            NSLog("Error updating volume HUD: \(error)")
+        repeatStartTime = nil
+        // Ensure final volume value reaches the device
+        if isSendingVolume {
+            hasPendingSend = true
+        } else {
+            sendVolumeToDevice()
         }
     }
 
-    @MainActor
-    private func updateSliderAfterVolumeChange() async {
-        guard let apiService = connectionManager?.getAPIService() else { return }
-
-        do {
-            let volumeStatus = try await apiService.getVolumeStatus()
-            NotificationCenter.default.post(
-                name: NSNotification.Name("VolumeChangedViaHotkey"),
-                object: volumeStatus
-            )
-        } catch {
-            // Ignore errors silently
-        }
-    }
-    
     // MARK: - Permissions
     private func requestAccessibilityPermissions() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        
+
         let options: CFDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
         let result = AXIsProcessTrustedWithOptions(options)
-        
+
         if result {
             isMonitoring = true
             setupEventMonitoring()
@@ -373,7 +392,7 @@ class GlobalHotkeyManager {
             startPermissionMonitoring()
         }
     }
-    
+
     private func startPermissionMonitoring() {
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             if AXIsProcessTrusted() {

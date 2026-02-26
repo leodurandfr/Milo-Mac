@@ -389,16 +389,30 @@ class NativeVolumeSlider: NSSlider {
         // Les CALayers gèrent tout l'affichage
     }
     
+    private func updateLayerPositions(duration: TimeInterval) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(duration)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        updateLayerFrames()
+        CATransaction.commit()
+    }
+
     private func updateLayerPositions(animated: Bool = false) {
         guard layer != nil else { return }
 
-        // animated: false → tout instant (disable actions)
-        // animated: true → animations implicites des CALayers (actions dict: 0.25s ease-out)
         if !animated {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
         }
 
+        updateLayerFrames()
+
+        if !animated {
+            CATransaction.commit()
+        }
+    }
+
+    private func updateLayerFrames() {
         let trackY = bounds.midY - trackHeight / 2
         let percentage = CGFloat((doubleValue - minValue) / (maxValue - minValue))
 
@@ -422,10 +436,6 @@ class NativeVolumeSlider: NSSlider {
 
         updateThumbStrokeOpacity(thumbX: thumbX, iconZoneRect: iconZoneRect)
         updateWaveOpacities()
-
-        if !animated {
-            CATransaction.commit()
-        }
     }
     
     private func updateThumbStrokeOpacity(thumbX: CGFloat, iconZoneRect: NSRect) {
@@ -575,11 +585,15 @@ class NativeVolumeSlider: NSSlider {
     }
     
     // MARK: - Public method for programmatic updates
-    func setVolumeValue(_ value: Double, animated: Bool = false) {
+    func setVolumeValue(_ value: Double, animated: Bool = false, duration: TimeInterval? = nil) {
         isUpdatingProgrammatically = true
         doubleValue = max(minValue, min(maxValue, value))
         lastValue = doubleValue
-        updateLayerPositions(animated: animated)
+        if let duration = duration {
+            updateLayerPositions(duration: duration)
+        } else {
+            updateLayerPositions(animated: animated)
+        }
         isUpdatingProgrammatically = false
     }
     

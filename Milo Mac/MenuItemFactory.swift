@@ -111,10 +111,10 @@ class MenuItemFactory {
         let sourceConfigs = [
             (L("source.spotify"), "music.note", "spotify"),
             (L("source.bluetooth"), "bluetooth", "bluetooth"),
-            (L("source.mac"), "desktopcomputer", "mac"),
-            (L("source.airplay"), "airplayaudio", "airplay"),
             (L("source.radio"), "radio", "radio"),
-            (L("source.podcast"), "podcasts-icon", "podcast")
+            (L("source.podcast"), "podcasts-icon", "podcast"),
+            (L("source.airplay"), "airplayaudio", "airplay"),
+            (L("source.mac"), "desktopcomputer", "mac")
         ]
 
         for (title, iconName, sourceId) in sourceConfigs {
