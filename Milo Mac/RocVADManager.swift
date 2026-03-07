@@ -10,8 +10,11 @@ class RocVADManager {
     private let repairPort = 10002
     private let controlPort = 10003
 
-    // ROC VAD settings for sender configuration
+    // Paramètres ROC VAD pour la configuration du sender
     private(set) var settings: RocVADSettings
+
+    // Queue série pour éviter les opérations concurrentes sur les devices (race condition entre configureDeviceOnly et updateMiloHost)
+    private let deviceQueue = DispatchQueue(label: "com.milo.rocvad.device")
 
     // Window de progression (style NSAlert natif)
     private var progressPanel: NSWindow?
@@ -89,64 +92,69 @@ class RocVADManager {
     
     func configureDeviceOnly(completion: @escaping (Bool) -> Void) {
         NSLog("🔧 Checking Milō audio device configuration...")
-        
-        // Première vérification silencieuse en background
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+
+        // Queue série pour éviter les race conditions avec updateMiloHost
+        deviceQueue.async { [weak self] in
             guard let self = self else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
-            
-            // Vérification rapide et silencieuse
+
+            // Supprimer les éventuels doublons, ne garder qu'un seul device
             let deviceInfo = self.getRocVADDeviceInfo()
-            
-            if let existingDevice = deviceInfo.first(where: { $0.name == self.deviceName }) {
+            let existingDevices = deviceInfo.filter { $0.name == self.deviceName }
+
+            // S'il y a des doublons, tout supprimer et recréer proprement
+            if existingDevices.count > 1 {
+                NSLog("⚠️ Found \(existingDevices.count) Milō devices - cleaning up duplicates")
+                self.deleteAllMiloDevices()
+            } else if let existingDevice = existingDevices.first {
                 NSLog("✅ Found existing Milō device (index: \(existingDevice.index))")
-                
+
                 let isConfigured = self.checkDeviceConfiguration(deviceIndex: existingDevice.index)
-                
+
                 if isConfigured {
                     NSLog("✅ Device already properly configured - no UI needed")
                     DispatchQueue.main.async { completion(true) }
                     return
                 } else {
                     NSLog("🔧 Device needs reconfiguration - showing progress")
-                    // Montrer la fenêtre et reconfigurer
                     DispatchQueue.main.async {
                         self.showProgressPanel(message: L("progress.reconfiguring_device"))
                     }
-                    
+
                     let success = self.configureDevice(deviceIndex: existingDevice.index)
                     DispatchQueue.main.async {
                         self.hideProgressPanel()
                         completion(success)
                     }
-                }
-            } else {
-                NSLog("❌ No Milō device found - showing progress and creating new one")
-                // Montrer la fenêtre et créer + configurer
-                DispatchQueue.main.async {
-                    self.showProgressPanel(message: L("progress.creating_device"))
-                }
-                
-                let deviceIndex = self.createMiloDevice()
-                
-                guard deviceIndex > 0 else {
-                    NSLog("❌ Failed to create Milō device")
-                    DispatchQueue.main.async {
-                        self.hideProgressPanel()
-                        completion(false)
-                    }
                     return
                 }
-                
-                NSLog("✅ Created new Milō device with index: \(deviceIndex)")
-                let success = self.configureDevice(deviceIndex: deviceIndex)
-                
+            }
+
+            // Aucun device ou doublons nettoyés → créer un nouveau
+            NSLog("❌ No Milō device found - showing progress and creating new one")
+            DispatchQueue.main.async {
+                self.showProgressPanel(message: L("progress.creating_device"))
+            }
+
+            let deviceIndex = self.createMiloDevice()
+
+            guard deviceIndex > 0 else {
+                NSLog("❌ Failed to create Milō device")
                 DispatchQueue.main.async {
                     self.hideProgressPanel()
-                    completion(success)
+                    completion(false)
                 }
+                return
+            }
+
+            NSLog("✅ Created new Milō device with index: \(deviceIndex)")
+            let success = self.configureDevice(deviceIndex: deviceIndex)
+
+            DispatchQueue.main.async {
+                self.hideProgressPanel()
+                completion(success)
             }
         }
     }
@@ -177,18 +185,16 @@ class RocVADManager {
         }
 
         NSLog("🔄 Updating roc-vad endpoint from \(miloHost) to \(newHost)")
-        miloHost = newHost
 
-        // Supprimer et recréer le device avec la nouvelle adresse en background
+        // Supprimer et recréer le device avec la nouvelle adresse
         // (roc-vad ne permet pas de modifier les endpoints d'un device existant)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        deviceQueue.async { [weak self] in
             guard let self = self else { return }
 
-            let deviceInfo = self.getRocVADDeviceInfo()
-            if let existingDevice = deviceInfo.first(where: { $0.name == self.deviceName }) {
-                NSLog("🗑️ Deleting existing device #\(existingDevice.index) to reconfigure with IP")
-                self.deleteDevice(deviceIndex: existingDevice.index)
-            }
+            // Mutation sérialisée sur la queue pour éviter les data races
+            self.miloHost = newHost
+
+            self.deleteAllMiloDevices()
 
             // Créer un nouveau device
             let newDeviceIndex = self.createMiloDevice()
@@ -205,39 +211,35 @@ class RocVADManager {
 
     // MARK: - Settings Management
 
-    /// Update ROC VAD settings and recreate the device with new configuration
+    /// Met à jour les paramètres ROC VAD et recrée le device avec la nouvelle configuration
     /// - Parameters:
-    ///   - newSettings: The new settings to apply
-    ///   - completion: Callback with success status
+    ///   - newSettings: Les nouveaux paramètres à appliquer
+    ///   - completion: Callback avec le statut de succès
     func updateSettings(_ newSettings: RocVADSettings, completion: @escaping (Bool) -> Void) {
         NSLog("🔧 Updating ROC VAD settings...")
 
-        // Show progress panel
-        DispatchQueue.main.async {
-            self.showProgressPanel(message: L("progress.applying_settings"))
-        }
+        // Afficher le panel de progression
+        showProgressPanel(message: L("progress.applying_settings"))
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        deviceQueue.async { [weak self] in
             guard let self = self else {
                 DispatchQueue.main.async { completion(false) }
                 return
             }
 
-            // Save new settings
+            // Sauvegarder les nouveaux paramètres
             self.settings = newSettings
             newSettings.saveToUserDefaults()
             NSLog("💾 Settings saved: buffer=\(newSettings.deviceBuffer)ms, fec=\(newSettings.fecEncoding.rawValue), resampler=\(newSettings.resamplerProfile.rawValue)")
 
-            // Find and delete existing device
-            let deviceInfo = self.getRocVADDeviceInfo()
-            if let existingDevice = deviceInfo.first(where: { $0.name == self.deviceName }) {
-                NSLog("🗑️ Deleting existing device #\(existingDevice.index) for reconfiguration")
-                self.deleteDevice(deviceIndex: existingDevice.index)
-                // Small delay to ensure device is fully removed
+            // Supprimer tous les devices Milō existants
+            let deleted = self.deleteAllMiloDevices()
+            if deleted > 0 {
+                // Court délai pour s'assurer que les devices sont bien supprimés
                 Thread.sleep(forTimeInterval: 0.5)
             }
 
-            // Create new device with updated settings
+            // Créer un nouveau device avec les paramètres mis à jour
             DispatchQueue.main.async {
                 self.updateProgressMessage(L("progress.creating_device"))
             }
@@ -254,7 +256,7 @@ class RocVADManager {
 
             NSLog("✅ Created new device #\(newDeviceIndex) with updated settings")
 
-            // Configure endpoints
+            // Configurer les endpoints
             DispatchQueue.main.async {
                 self.updateProgressMessage(L("progress.reconfiguring_device"))
             }
@@ -452,36 +454,17 @@ class RocVADManager {
         return false
     }
     
-    private func ensureDeviceConfigured() -> Bool {
-        let deviceInfo = getRocVADDeviceInfo()
-        
-        if let existingDevice = deviceInfo.first(where: { $0.name == deviceName }) {
-            NSLog("✅ Found existing Milō device (index: \(existingDevice.index))")
-            
-            let isConfigured = checkDeviceConfiguration(deviceIndex: existingDevice.index)
-            
-            if isConfigured {
-                NSLog("✅ Device already properly configured")
-                return true
-            } else {
-                NSLog("🔧 Reconfiguring existing device...")
-                return configureDevice(deviceIndex: existingDevice.index)
-            }
-        } else {
-            NSLog("❌ No Milō device found, creating new one...")
-            
-            let deviceIndex = createMiloDevice()
-            
-            guard deviceIndex > 0 else {
-                NSLog("❌ Failed to create Milō device")
-                return false
-            }
-            
-            NSLog("✅ Created new Milō device with index: \(deviceIndex)")
-            return configureDevice(deviceIndex: deviceIndex)
+    /// Supprime tous les devices roc-vad nommés "Milō" et retourne le nombre supprimé
+    @discardableResult
+    private func deleteAllMiloDevices() -> Int {
+        let existing = getRocVADDeviceInfo().filter { $0.name == deviceName }
+        for device in existing {
+            NSLog("🗑️ Deleting device #\(device.index)")
+            deleteDevice(deviceIndex: device.index)
         }
+        return existing.count
     }
-    
+
     private func createMiloDevice() -> Int {
         let task = Process()
         task.launchPath = "/usr/local/bin/roc-vad"
