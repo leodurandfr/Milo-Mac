@@ -4,6 +4,7 @@ struct MiloState {
     let activeSource: String
     let pluginState: String       // "starting", "ready", "connected", "error" - INDICATEUR utilisé pour les spinners
     let multiroomEnabled: Bool
+    let equalizerEnabled: Bool
     let metadata: [String: Any]
 }
 
@@ -119,6 +120,7 @@ class MiloAPIService {
             activeSource: json["active_source"] as? String ?? "none",
             pluginState: json["plugin_state"] as? String ?? "ready",  // "starting" déclenche le spinner
             multiroomEnabled: json["multiroom_enabled"] as? Bool ?? false,
+            equalizerEnabled: json["equalizer_effects_enabled"] as? Bool ?? true,
             metadata: json["metadata"] as? [String: Any] ?? [:]
         )
     }
@@ -228,6 +230,51 @@ class MiloAPIService {
               httpResponse.statusCode == 200 else {
             throw APIError.httpError
         }
+    }
+
+    // MARK: - DSP API
+
+    func setEqualizer(_ enabled: Bool) async throws {
+        guard let url = buildURL(path: "/api/equalizer/enabled") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["enabled": enabled]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw APIError.httpError
+        }
+    }
+
+    // MARK: - Settings API
+
+    func fetchDockApps() async throws -> [String] {
+        guard let url = buildURL(path: "/api/settings/dock-apps") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await session.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw APIError.httpError
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let config = json["config"] as? [String: Any],
+              let enabledApps = config["enabled_apps"] as? [String] else {
+            throw APIError.invalidResponse
+        }
+
+        return enabledApps
     }
 
     // MARK: - Radio API

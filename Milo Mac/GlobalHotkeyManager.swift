@@ -9,6 +9,7 @@ class GlobalHotkeyManager {
     // MARK: - State
     private var isMonitoring = false
     private(set) var volumeHUD: VolumeHUD?
+    private(set) var isActivelyAdjusting = false
 
     // MARK: - Repeat Logic
     private var repeatTimer: Timer?
@@ -177,6 +178,15 @@ class GlobalHotkeyManager {
 
     // MARK: - Event Handling
     private func handleCGEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Re-enable tap if OS disabled it (timeout or slow processing)
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let eventTap = eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            stopCurrentRepeat()
+            return Unmanaged.passUnretained(event)
+        }
+
         guard isMonitoring else {
             return Unmanaged.passUnretained(event)
         }
@@ -273,18 +283,25 @@ class GlobalHotkeyManager {
 
         guard currentRepeatDirection == nil else { return }
 
-        // Only sync volume from server on fresh start (HUD not showing).
-        // While HUD is visible, localVolumeDb is more accurate than the
-        // potentially lagging server state from async API + WebSocket.
+        // Sync volume from server when starting a new hotkey sequence.
+        // Only skip sync during an active hotkey hold (localVolumeDb is more
+        // accurate than the lagging server echo). If HUD is visible from an
+        // external change, we still resync to pick up the current value.
+        let isNewSequence = !isActivelyAdjusting
         if let volume = menuController?.currentVolume {
-            if !(volumeHUD?.isVisible ?? false) {
+            if isNewSequence {
                 localVolumeDb = volume.volumeDb
             }
             limitMinDb = volume.limitMinDb
             limitMaxDb = volume.limitMaxDb
         }
 
+        if isNewSequence {
+            refreshVolumeLimitsInBackground()
+        }
+
         // First press: single step (animated)
+        isActivelyAdjusting = true
         volumeHUD?.updateLimits(minDb: limitMinDb, maxDb: limitMaxDb)
         let sign: Double = direction == "up" ? 1.0 : -1.0
         applyLocalDelta(volumeDeltaDb * sign, animationDuration: 0.25)
@@ -367,12 +384,33 @@ class GlobalHotkeyManager {
         }
     }
 
+    private func refreshVolumeLimitsInBackground() {
+        guard let apiService = connectionManager?.getAPIService() else { return }
+
+        Task {
+            do {
+                let volumeStatus = try await apiService.getVolumeStatus()
+                await MainActor.run {
+                    self.limitMinDb = volumeStatus.limitMinDb
+                    self.limitMaxDb = volumeStatus.limitMaxDb
+                    self.volumeHUD?.updateLimits(minDb: volumeStatus.limitMinDb, maxDb: volumeStatus.limitMaxDb)
+                    self.menuController?.updateVolumeStatus(volumeStatus)
+                }
+            } catch {
+                // Silencieux - on garde les valeurs en cache
+            }
+        }
+    }
+
     private func stopCurrentRepeat() {
         repeatTimer?.invalidate()
         repeatTimer = nil
+        let wasRepeating = currentRepeatDirection != nil
         currentRepeatDirection = nil
         repeatStartTime = nil
-        // Ensure final volume value reaches the device
+        isActivelyAdjusting = false
+        // Only flush final volume if a volume action was actually in progress
+        guard wasRepeating else { return }
         if isSendingVolume {
             hasPendingSend = true
         } else {

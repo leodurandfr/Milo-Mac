@@ -14,12 +14,16 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private(set) var currentVolume: VolumeStatus?
     private var isMenuOpen = false
 
+    // MARK: - Dock Apps Cache
+    private var enabledDockApps: [String]?
+
     // MARK: - Radio Cache
     private var cachedRadioFavorites: [[String: Any]]?
 
     // MARK: - UI State
     private var activeMenu: NSMenu?
     private var isPreferencesMenuActive = false
+    private var isRebuildingMenu = false
     
     // MARK: - Loading State Management
     private var loadingStates: [String: Bool] = [:]
@@ -102,7 +106,11 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             Task {
                 // Le volume est mis à jour via WebSocket en temps réel,
                 // pas besoin de le poll ici
-                let stateSuccess = await self.refreshState()
+                async let stateResult = self.refreshState()
+                async let dockAppsResult = self.refreshDockApps()
+
+                let stateSuccess = await stateResult
+                let _ = await dockAppsResult
 
                 await MainActor.run {
                     if stateSuccess {
@@ -124,6 +132,15 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - Public Interface
     func isMenuCurrentlyOpen() -> Bool {
         return isMenuOpen
+    }
+
+    func updateVolumeStatus(_ volumeStatus: VolumeStatus) {
+        currentVolume = volumeStatus
+        volumeController.setCurrentVolume(volumeStatus)
+        volumeController.updateVolumeLimits(
+            minDb: volumeStatus.limitMinDb,
+            maxDb: volumeStatus.limitMaxDb
+        )
     }
     
     // MARK: - Menu Display
@@ -174,34 +191,39 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func displayMenu(_ menu: NSMenu) {
         NSApp.activate(ignoringOtherApps: true)
         statusItem.menu = menu
-        
+
         statusItem.button?.performClick(nil)
-        
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             self?.statusItem.menu = nil
-            self?.monitorMenuClosure()
         }
-        
+
+        // Use notification for reliable menu closure detection
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(menuDidEndTracking),
+            name: NSMenu.didEndTrackingNotification,
+            object: menu
+        )
+
         if isMiloConnected {
-            refreshMenuData()
+            refreshMenuData(includeDockApps: true)
         }
     }
-    
-    private func monitorMenuClosure() {
-        if let menu = activeMenu, menu.highlightedItem == nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                if self?.activeMenu?.highlightedItem == nil {
-                    self?.handleMenuClosed()
-                }
-            }
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.monitorMenuClosure()
-            }
-        }
+
+    @objc private func menuDidEndTracking(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu, menu === activeMenu else { return }
+        // Ignore if menu is being rebuilt (removeAllItems can trigger end-tracking)
+        if isRebuildingMenu { return }
+        NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: menu)
+        handleMenuClosed()
     }
     
     private func handleMenuClosed() {
+        NSLog("🚪 handleMenuClosed called (was menuOpen=\(isMenuOpen))")
+        if let menu = activeMenu {
+            NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: menu)
+        }
         isMenuOpen = false
         volumeController.cleanup()
         activeMenu = nil
@@ -252,6 +274,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         let sourceItems = MenuItemFactory.createAudioSourcesSection(
             state: currentState,
             loadingStates: loadingStates,
+            enabledApps: enabledDockApps,
             target: self,
             action: #selector(sourceClicked)
         )
@@ -286,6 +309,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         let systemItems = MenuItemFactory.createSystemControlsSection(
             state: currentState,
             loadingStates: loadingStates,
+            enabledApps: enabledDockApps,
             target: self,
             action: #selector(toggleClicked)
         )
@@ -489,6 +513,8 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
                 switch toggleType {
                 case "multiroom":
                     try await apiService.setMultiroom(newState)
+                case "equalizer":
+                    try await apiService.setEqualizer(newState)
                 default:
                     await MainActor.run {
                         self.stopFunctionalityLoading(for: toggleType)
@@ -555,6 +581,13 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
            loadingStates["multiroom"] == true {
             stopFunctionalityLoading(for: "multiroom")
         }
+
+        // Vérifier equalizer (DSP)
+        if let expectedEqualizer = expectedFunctionalityStates["equalizer"],
+           newState.equalizerEnabled == expectedEqualizer,
+           loadingStates["equalizer"] == true {
+            stopFunctionalityLoading(for: "equalizer")
+        }
     }
     
     // MARK: - Audio Source Loading Management
@@ -597,7 +630,8 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func syncLoadingStatesWithBackend() {
         guard let state = currentState else { return }
 
-        let audioSources = ["spotify", "bluetooth", "mac", "airplay", "radio", "podcast"]
+        let allKnownSources = ["spotify", "bluetooth", "mac", "airplay", "radio", "podcast"]
+        let audioSources = enabledDockApps?.filter { allKnownSources.contains($0) } ?? allKnownSources
         let isPluginStarting = state.pluginState.lowercased() == "starting"
 
         for identifier in audioSources {
@@ -624,18 +658,22 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     private func getCurrentToggleState(_ toggleType: String) -> Bool {
         switch toggleType {
         case "multiroom": return currentState?.multiroomEnabled ?? false
+        case "equalizer": return currentState?.equalizerEnabled ?? true
         default: return false
         }
     }
     
     private func updateMenuInRealTime(_ menu: NSMenu) {
-        // Éviter les refreshs pendant les problèmes réseau
-        guard isMiloConnected else { return }
-
+        isRebuildingMenu = true
         CircularMenuItem.cleanupAllSpinners()
         menu.removeAllItems()
 
-        buildConnectedMenu(menu, isPreferences: isPreferencesMenuActive)
+        if isMiloConnected {
+            buildConnectedMenu(menu, isPreferences: isPreferencesMenuActive)
+        } else {
+            buildDisconnectedMenu(menu, isPreferences: isPreferencesMenuActive)
+        }
+        isRebuildingMenu = false
     }
     
     private func updateIcon() {
@@ -645,7 +683,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     }
     
     // MARK: - Data Refresh
-    private func refreshMenuData() {
+    private func refreshMenuData(includeDockApps: Bool = false) {
         Task {
             // Si échecs consécutifs détectés, forcer un reset de session
             if consecutiveRefreshFailures >= maxConsecutiveFailures {
@@ -659,8 +697,14 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             let maxAttempts = 2
 
             while attempts < maxAttempts {
-                let stateSuccess = await refreshState()
-                let volumeSuccess = await refreshVolumeStatus()
+                // Lancer tous les fetches en parallèle
+                async let stateResult = refreshState()
+                async let volumeResult = refreshVolumeStatus()
+                async let dockAppsResult = includeDockApps ? refreshDockApps() : true
+
+                let stateSuccess = await stateResult
+                let volumeSuccess = await volumeResult
+                let _ = await dockAppsResult
 
                 if stateSuccess || volumeSuccess {
                     await MainActor.run {
@@ -702,6 +746,19 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             return true
         } catch {
             // Échec silencieux
+            return false
+        }
+    }
+
+    @discardableResult
+    private func refreshDockApps() async -> Bool {
+        guard let apiService = connectionManager.getAPIService() else { return false }
+
+        do {
+            let apps = try await apiService.fetchDockApps()
+            await MainActor.run { self.enabledDockApps = apps }
+            return true
+        } catch {
             return false
         }
     }
@@ -759,7 +816,7 @@ extension MenuBarController {
 
         hotkeyManager?.startMonitoring()
         startBackgroundRefresh()
-        refreshMenuData()
+        refreshMenuData(includeDockApps: true)
     }
     
     func miloDidDisconnect() {
@@ -778,6 +835,7 @@ extension MenuBarController {
     }
     
     func didReceiveStateUpdate(_ state: MiloState) {
+        NSLog("📬 didReceiveStateUpdate: source=\(state.activeSource), plugin=\(state.pluginState), menuOpen=\(isMenuOpen), activeMenu=\(activeMenu != nil)")
         let previousSource = currentState?.activeSource
         currentState = state
 
@@ -795,6 +853,11 @@ extension MenuBarController {
 
         checkFunctionalityStateChange(state)
         syncLoadingStatesWithBackend()
+
+        // Toujours rafraîchir le menu ouvert pour refléter les changements d'état
+        if isMenuOpen, let menu = activeMenu {
+            updateMenuInRealTime(menu)
+        }
     }
     
     func didReceiveVolumeUpdate(_ volume: VolumeStatus) {
@@ -814,9 +877,17 @@ extension MenuBarController {
         }
         volumeController.setCurrentVolume(currentVolume!)
 
+        // Show VolumeHUD on volume changes if setting enabled
+        if UserDefaults.standard.bool(forKey: "ShowVolumeHUDOnAllChanges"),
+           hotkeyManager?.isActivelyAdjusting != true,
+           let vol = currentVolume {
+            hotkeyManager?.volumeHUD?.updateLimits(minDb: vol.limitMinDb, maxDb: vol.limitMaxDb)
+            hotkeyManager?.volumeHUD?.show(volumeDb: vol.volumeDb)
+        }
+
         // Skip slider update during active hotkey use to avoid tug-of-war
         // between local prediction (accurate) and lagging server state
-        if hotkeyManager?.volumeHUD?.isVisible == true {
+        if hotkeyManager?.isActivelyAdjusting == true {
             return
         }
         volumeController.updateSliderFromWebSocket(volume.volumeDb)
@@ -825,8 +896,9 @@ extension MenuBarController {
     private func clearState() {
         currentState = nil
         currentVolume = nil
+        enabledDockApps = nil
         volumeController.apiService = nil
-        
+
         loadingStates.keys.forEach { stopLoading(for: $0) }
         manualLoadingProtection.removeAll()
         expectedFunctionalityStates.removeAll()

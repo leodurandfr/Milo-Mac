@@ -23,6 +23,7 @@
 
 // MARK: - Features
 "feature.multiroom" = "मल्टीरूम";
+"feature.equalizer" = "इक्वलाइज़र";
 
 // MARK: - Configuration Menu
 "config.settings" = "सेटिंग्स...";
@@ -37,6 +38,7 @@
 "settings.hotkeys" = "वॉल्यूम शॉर्टकट (⌥↑/↓)";
 "settings.volume_increment" = "वॉल्यूम वृद्धि";
 "settings.launch_at_login" = "Mac स्टार्टअप पर लॉन्च करें";
+"settings.volume_hud_all_changes" = "हर बदलाव पर वॉल्यूम सूचना दिखाएं, Milo Mac के बाहरी बदलाव सहित";
 
 // Mac Audio section
 "settings.preset" = "प्रीसेट";

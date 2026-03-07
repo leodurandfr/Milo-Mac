@@ -23,6 +23,7 @@
 
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
+"feature.equalizer" = "Equalizador";
 
 // MARK: - Configuration Menu
 "config.settings" = "Definições...";
@@ -37,6 +38,7 @@
 "settings.hotkeys" = "Atalhos de volume (⌥↑/↓)";
 "settings.volume_increment" = "Incremento de volume";
 "settings.launch_at_login" = "Iniciar ao arrancar o Mac";
+"settings.volume_hud_all_changes" = "Mostrar notificação de volume em cada alteração, mesmo externa ao Milo Mac";
 
 // Mac Audio section
 "settings.preset" = "Predefinição";

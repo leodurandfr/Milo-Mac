@@ -100,7 +100,17 @@ class MenuItemFactory {
     }
     
     // MARK: - Audio Sources Section
-    static func createAudioSourcesSection(state: MiloState?, loadingStates: [String: Bool] = [:], target: AnyObject, action: Selector) -> [NSMenuItem] {
+
+    private static let allSourceConfigs: [(title: () -> String, iconName: String, sourceId: String)] = [
+        ({ L("source.spotify") }, "music.note", "spotify"),
+        ({ L("source.bluetooth") }, "bluetooth", "bluetooth"),
+        ({ L("source.radio") }, "radio", "radio"),
+        ({ L("source.podcast") }, "podcasts-icon", "podcast"),
+        ({ L("source.airplay") }, "airplayaudio", "airplay"),
+        ({ L("source.mac") }, "desktopcomputer", "mac")
+    ]
+
+    static func createAudioSourcesSection(state: MiloState?, loadingStates: [String: Bool] = [:], enabledApps: [String]? = nil, target: AnyObject, action: Selector) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 
         items.append(createSecondaryHeader(title: L("menu.audio_sources.title")))
@@ -108,22 +118,25 @@ class MenuItemFactory {
         let activeSource = state?.activeSource ?? "none"
         let isPluginStarting = state?.pluginState.lowercased() == "starting"
 
-        let sourceConfigs = [
-            (L("source.spotify"), "music.note", "spotify"),
-            (L("source.bluetooth"), "bluetooth", "bluetooth"),
-            (L("source.radio"), "radio", "radio"),
-            (L("source.podcast"), "podcasts-icon", "podcast"),
-            (L("source.airplay"), "airplayaudio", "airplay"),
-            (L("source.mac"), "desktopcomputer", "mac")
-        ]
+        let configMap = Dictionary(uniqueKeysWithValues: allSourceConfigs.map { ($0.sourceId, $0) })
 
-        for (title, iconName, sourceId) in sourceConfigs {
+        // Use enabledApps order, filtering to audio sources only; fallback to default order
+        let orderedSourceIds: [String]
+        if let enabledApps = enabledApps {
+            orderedSourceIds = enabledApps.filter { configMap[$0] != nil }
+        } else {
+            orderedSourceIds = allSourceConfigs.map { $0.sourceId }
+        }
+
+        for sourceId in orderedSourceIds {
+            guard let source = configMap[sourceId] else { continue }
+
             let isLoading = isPluginStarting && (activeSource == sourceId)
             let isActive = (activeSource == sourceId)
 
             let config = MenuItemConfig(
-                title: title,
-                iconName: iconName,
+                title: source.title(),
+                iconName: source.iconName,
                 isActive: isActive,
                 target: target,
                 action: action,
@@ -142,15 +155,20 @@ class MenuItemFactory {
     }
     
     // MARK: - System Controls Section
-    static func createSystemControlsSection(state: MiloState?, loadingStates: [String: Bool] = [:], target: AnyObject, action: Selector) -> [NSMenuItem] {
+    static func createSystemControlsSection(state: MiloState?, loadingStates: [String: Bool] = [:], enabledApps: [String]? = nil, target: AnyObject, action: Selector) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        
+
         items.append(createSecondaryHeader(title: L("menu.features.title")))
-        
-        let systemConfigs = [
-            (L("feature.multiroom"), "speaker.wave.3", "multiroom", state?.multiroomEnabled ?? false)
-        ]
-        
+
+        var systemConfigs: [(String, String, String, Bool)] = []
+
+        if enabledApps?.contains("multiroom") ?? true {
+            systemConfigs.append((L("feature.multiroom"), "speaker.wave.3", "multiroom", state?.multiroomEnabled ?? false))
+        }
+        if enabledApps?.contains("equalizer") ?? false {
+            systemConfigs.append((L("feature.equalizer"), "slider.horizontal.3", "equalizer", state?.equalizerEnabled ?? true))
+        }
+
         for (title, iconName, toggleId, currentlyEnabled) in systemConfigs {
             let isLoading = loadingStates[toggleId] == true
             let isActive = isLoading || (!isLoading && currentlyEnabled)

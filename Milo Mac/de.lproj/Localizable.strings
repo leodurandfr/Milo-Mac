@@ -23,6 +23,7 @@
 
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
+"feature.equalizer" = "Equalizer";
 
 // MARK: - Configuration Menu
 "config.settings" = "Einstellungen...";
@@ -37,6 +38,7 @@
 "settings.hotkeys" = "Lautstärke-Kurzbefehle (⌥↑/↓)";
 "settings.volume_increment" = "Lautstärke-Schrittweite";
 "settings.launch_at_login" = "Beim Mac-Start öffnen";
+"settings.volume_hud_all_changes" = "Lautstärkebenachrichtigung bei jeder Änderung anzeigen, auch außerhalb von Milo Mac";
 
 // Mac Audio section
 "settings.preset" = "Voreinstellung";

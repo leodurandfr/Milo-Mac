@@ -23,6 +23,7 @@
 
 // MARK: - Features
 "feature.multiroom" = "多房间";
+"feature.equalizer" = "均衡器";
 
 // MARK: - Configuration Menu
 "config.settings" = "设置...";
@@ -37,6 +38,7 @@
 "settings.hotkeys" = "音量快捷键 (⌥↑/↓)";
 "settings.volume_increment" = "音量增量";
 "settings.launch_at_login" = "Mac 启动时运行";
+"settings.volume_hud_all_changes" = "每次音量变化时显示通知，包括 Milo Mac 外部的变化";
 
 // Mac Audio section
 "settings.preset" = "预设";

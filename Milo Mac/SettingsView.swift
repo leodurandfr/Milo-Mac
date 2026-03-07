@@ -14,6 +14,7 @@ class SettingsViewModel {
     var launchAtLogin: Bool
     var hotkeysEnabled: Bool
     var volumeDelta: Double
+    var showVolumeHUDOnAllChanges: Bool
 
     // ROC VAD
     var rocVADInstalled: Bool
@@ -93,6 +94,7 @@ class SettingsViewModel {
 
         self.hotkeysEnabled = hotkeyManager?.isCurrentlyMonitoring() ?? false
         self.volumeDelta = hotkeyManager?.getVolumeDeltaDb() ?? 3
+        self.showVolumeHUDOnAllChanges = UserDefaults.standard.bool(forKey: "ShowVolumeHUDOnAllChanges")
 
         self.rocVADInstalled = rocVADManager?.checkInstallation() ?? false
         self.macAudioExpanded = UserDefaults.standard.object(forKey: "RocVAD.ShowAdvancedOptions") as? Bool ?? false
@@ -126,6 +128,10 @@ class SettingsViewModel {
 
     func updateVolumeDelta() {
         hotkeyManager?.setVolumeDeltaDb(volumeDelta)
+    }
+
+    func toggleShowVolumeHUD() {
+        UserDefaults.standard.set(showVolumeHUDOnAllChanges, forKey: "ShowVolumeHUDOnAllChanges")
     }
 
     func apply() {
@@ -178,6 +184,11 @@ struct SettingsView: View {
                 Toggle(L("settings.launch_at_login"), isOn: $vm.launchAtLogin)
                     .onChange(of: vm.launchAtLogin) { _, _ in
                         vm.toggleLaunchAtLogin()
+                    }
+
+                Toggle(L("settings.volume_hud_all_changes"), isOn: $vm.showVolumeHUDOnAllChanges)
+                    .onChange(of: vm.showVolumeHUDOnAllChanges) { _, _ in
+                        vm.toggleShowVolumeHUD()
                     }
 
                 Toggle(L("settings.hotkeys"), isOn: $vm.hotkeysEnabled)
