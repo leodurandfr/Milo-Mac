@@ -158,58 +158,50 @@ class MiloAPIService {
     }
     
     func getVolumeStatus() async throws -> VolumeStatus {
-        guard let url = buildURL(path: "/api/volume/status") else {
+        guard let stateUrl = buildURL(path: "/api/volume/state"),
+              let limitsUrl = buildURL(path: "/api/settings/volume-limits"),
+              let stepsUrl = buildURL(path: "/api/settings/volume-steps") else {
             throw APIError.invalidURL
         }
 
-        let (data, response) = try await session.data(from: url)
+        // Fetch volume state, limits, and steps in parallel
+        async let stateResult = session.data(from: stateUrl)
+        async let limitsResult = session.data(from: limitsUrl)
+        async let stepsResult = session.data(from: stepsUrl)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
+        let (stateData, stateResponse) = try await stateResult
+        let (limitsData, limitsResponse) = try await limitsResult
+        let (stepsData, stepsResponse) = try await stepsResult
+
+        guard let stateHttp = stateResponse as? HTTPURLResponse, stateHttp.statusCode == 200,
+              let limitsHttp = limitsResponse as? HTTPURLResponse, limitsHttp.statusCode == 200,
+              let stepsHttp = stepsResponse as? HTTPURLResponse, stepsHttp.statusCode == 200 else {
             throw APIError.httpError
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataDict = json["data"] as? [String: Any] else {
+        guard let stateJson = try JSONSerialization.jsonObject(with: stateData) as? [String: Any],
+              let dataDict = stateJson["data"] as? [String: Any],
+              let limitsJson = try JSONSerialization.jsonObject(with: limitsData) as? [String: Any],
+              let limits = limitsJson["limits"] as? [String: Any],
+              let stepsJson = try JSONSerialization.jsonObject(with: stepsData) as? [String: Any],
+              let stepsConfig = stepsJson["config"] as? [String: Any] else {
             throw APIError.invalidResponse
         }
 
-        // Parser la config (les limites sont directement dans config)
-        let config = dataDict["config"] as? [String: Any] ?? [:]
-
-        // Les valeurs peuvent être Int ou Double, gérer les différents cas
-        let limitMin = (config["limit_min_db"] as? Double) ?? Double(config["limit_min_db"] as? Int ?? -80)
-        let limitMax = (config["limit_max_db"] as? Double) ?? Double(config["limit_max_db"] as? Int ?? -21)
-        let stepMobile = (config["step_mobile_db"] as? Double) ?? Double(config["step_mobile_db"] as? Int ?? 3)
+        let volumeDb = (dataDict["global_volume_db"] as? Double) ?? Double(dataDict["global_volume_db"] as? Int ?? 0)
+        let mode = dataDict["mode"] as? String ?? "direct"
+        let limitMin = (limits["min_db"] as? Double) ?? Double(limits["min_db"] as? Int ?? 0)
+        let limitMax = (limits["max_db"] as? Double) ?? Double(limits["max_db"] as? Int ?? 0)
+        let stepMobile = (stepsConfig["step_mobile_db"] as? Double) ?? Double(stepsConfig["step_mobile_db"] as? Int ?? 0)
 
         return VolumeStatus(
-            volumeDb: (dataDict["volume_db"] as? Double) ?? Double(dataDict["volume_db"] as? Int ?? 0),
-            multiroomEnabled: dataDict["multiroom_enabled"] as? Bool ?? false,
-            dspAvailable: dataDict["dsp_available"] as? Bool ?? true,
+            volumeDb: volumeDb,
+            multiroomEnabled: mode == "multiroom",
+            dspAvailable: true,
             limitMinDb: limitMin,
             limitMaxDb: limitMax,
             stepMobileDb: stepMobile
         )
-    }
-    
-    func setVolumeDb(_ volumeDb: Double) async throws {
-        guard let url = buildURL(path: "/api/volume/set") else {
-            throw APIError.invalidURL
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = ["volume_db": volumeDb, "show_bar": true]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (_, response) = try await session.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw APIError.httpError
-        }
     }
 
     func adjustVolumeDb(_ deltaDb: Double) async throws {

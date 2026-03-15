@@ -188,29 +188,34 @@ class WebSocketService: NSObject {
 
     private func handleVolumeChange(_ data: [String: Any]) {
         let volumeDb: Double
-        if let db = data["volume_db"] as? Double {
+        let state = data["state"] as? [String: Any]
+
+        // Priorité au nouveau format (state.global_volume_db)
+        if let state = state, let db = state["global_volume_db"] as? Double {
+            volumeDb = db
+        } else if let state = state, let globalStr = state["global_volume_db"] as? String,
+                  let db = Double(globalStr) {
+            volumeDb = db
+        } else if let db = data["volume_db"] as? Double {
             volumeDb = db
         } else if let db = data["volume_db"] as? Int {
             volumeDb = Double(db)
-        } else if let state = data["state"] as? [String: Any],
-                  let globalStr = state["global_volume_db"] as? String,
-                  let db = Double(globalStr) {
-            volumeDb = db
-        } else if let state = data["state"] as? [String: Any],
-                  let db = state["global_volume_db"] as? Double {
-            volumeDb = db
         } else {
             return
         }
-        let multiroomEnabled = data["multiroom_enabled"] as? Bool ?? false
+
+        let mode = state?["mode"] as? String
+        let multiroomEnabled = (mode == "multiroom") || (data["multiroom_enabled"] as? Bool ?? false)
         let stepMobileDb = data["step_mobile_db"] as? Double ?? 3.0
 
+        // Les limites ne sont pas dans les événements WebSocket ;
+        // elles sont préservées côté MenuBarController depuis le dernier getVolumeStatus()
         let volumeStatus = VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: multiroomEnabled,
             dspAvailable: true,
-            limitMinDb: -80.0,
-            limitMaxDb: -21.0,
+            limitMinDb: 0,
+            limitMaxDb: 0,
             stepMobileDb: stepMobileDb
         )
 

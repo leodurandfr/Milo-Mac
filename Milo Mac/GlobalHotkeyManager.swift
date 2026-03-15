@@ -20,6 +20,7 @@ class GlobalHotkeyManager {
     private var limitMaxDb: Double = -21
     private var isSendingVolume = false
     private var hasPendingSend = false
+    private var lastSentVolumeDb: Double = 0
 
     // MARK: - Event Monitoring
     private var flagsChangedMonitor: Any?
@@ -291,6 +292,7 @@ class GlobalHotkeyManager {
         if let volume = menuController?.currentVolume {
             if isNewSequence {
                 localVolumeDb = volume.volumeDb
+                lastSentVolumeDb = volume.volumeDb
             }
             limitMinDb = volume.limitMinDb
             limitMaxDb = volume.limitMaxDb
@@ -366,11 +368,15 @@ class GlobalHotkeyManager {
         }
 
         let targetDb = localVolumeDb
+        let delta = targetDb - lastSentVolumeDb
+        guard abs(delta) > 0.01 else { return }
+
+        lastSentVolumeDb = targetDb
         isSendingVolume = true
 
         Task {
             do {
-                try await apiService.setVolumeDb(targetDb)
+                try await apiService.adjustVolumeDb(delta)
             } catch {
                 // Ignore errors during rapid changes
             }

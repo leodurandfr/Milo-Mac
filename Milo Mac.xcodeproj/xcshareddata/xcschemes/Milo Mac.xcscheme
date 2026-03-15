@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "B3A7E0542E216D2400785117"
-               BuildableName = "Milo Mac.app"
+               BuildableName = "Milo&#x304;.app"
                BlueprintName = "Milo Mac"
                ReferencedContainer = "container:Milo Mac.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B3A7E0542E216D2400785117"
-            BuildableName = "Milo Mac.app"
+            BuildableName = "Milo&#x304;.app"
             BlueprintName = "Milo Mac"
             ReferencedContainer = "container:Milo Mac.xcodeproj">
          </BuildableReference>
@@ -62,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "B3A7E0542E216D2400785117"
-            BuildableName = "Milo Mac.app"
+            BuildableName = "Milo&#x304;.app"
             BlueprintName = "Milo Mac"
             ReferencedContainer = "container:Milo Mac.xcodeproj">
          </BuildableReference>

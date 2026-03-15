@@ -12,6 +12,7 @@ class VolumeController {
     private var lastUserInteraction: Date?
     private var volumeSlider: NSSlider?
     private var currentVolume: VolumeStatus?
+    private var referenceVolumeDb: Double = 0
 
     private let volumeDebounceDelay: TimeInterval = 0.03
     private let volumeImmediateSendThreshold: TimeInterval = 0.1
@@ -23,7 +24,10 @@ class VolumeController {
 
     func setCurrentVolume(_ volume: VolumeStatus) {
         self.currentVolume = volume
-        // Ne met à jour que la valeur, pas les limites
+        // Synchroniser la référence quand l'utilisateur n'interagit pas (serveur = source de vérité)
+        if !isUserInteracting {
+            referenceVolumeDb = volume.volumeDb
+        }
     }
 
     /// Met à jour les limites min/max du volume (appelé au démarrage et quand les limites changent)
@@ -103,17 +107,19 @@ class VolumeController {
         guard let apiService = apiService else { return }
         guard activeMenu != nil || volumeSlider != nil else { return }
 
+        let delta = volumeDb - referenceVolumeDb
+        guard abs(delta) > 0.01 else { return }
+
+        referenceVolumeDb = volumeDb
         lastVolumeAPICall = Date()
 
         Task {
             do {
-                try await apiService.setVolumeDb(volumeDb)
-                // Clear pending volume en cas de succès
+                try await apiService.adjustVolumeDb(delta)
                 if self.pendingVolumeDb == volumeDb {
                     self.pendingVolumeDb = nil
                 }
             } catch {
-                // Garder la valeur en pending si échec
                 self.pendingVolumeDb = volumeDb
             }
         }
