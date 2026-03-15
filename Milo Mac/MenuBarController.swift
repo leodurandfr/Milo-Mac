@@ -861,7 +861,7 @@ extension MenuBarController {
     }
     
     func didReceiveVolumeUpdate(_ volume: VolumeStatus) {
-        // WebSocket volume events don't include real limits (hardcoded -80/-21).
+        // WebSocket volume events don't include limits.
         // Preserve the API-sourced limits from the previous currentVolume.
         if let existing = currentVolume {
             currentVolume = VolumeStatus(
@@ -878,8 +878,10 @@ extension MenuBarController {
         volumeController.setCurrentVolume(currentVolume!)
 
         // Show VolumeHUD on volume changes if setting enabled
+        // Skip when menu is open (user is adjusting via the slider)
         if UserDefaults.standard.bool(forKey: "ShowVolumeHUDOnAllChanges"),
            hotkeyManager?.isActivelyAdjusting != true,
+           !isMenuOpen,
            let vol = currentVolume {
             hotkeyManager?.volumeHUD?.updateLimits(minDb: vol.limitMinDb, maxDb: vol.limitMaxDb)
             hotkeyManager?.volumeHUD?.show(volumeDb: vol.volumeDb)

@@ -2,9 +2,24 @@ import AppKit
 import Foundation
 import CoreText
 
+// NSTextField subclass that disables font smoothing for thinner rendering
+// Matches -webkit-font-smoothing: antialiased behavior
+private class ThinTextField: NSTextField {
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else {
+            super.draw(dirtyRect)
+            return
+        }
+        ctx.setShouldSmoothFonts(false)
+        super.draw(dirtyRect)
+    }
+}
+
 class VolumeHUD {
     private var window: NSWindow?
-    private var containerView: NSVisualEffectView?
+    private var containerView: NSView?
+    private var blurView: NSVisualEffectView?
+    private var gradientBorderLayer: CAGradientLayer?
     private var fillView: NSView?
     private var volumeLabel: NSTextField?
     private var hideTimer: Timer?
@@ -19,6 +34,7 @@ class VolumeHUD {
     // Extra space below resting position for spring overshoot (peak ~1.148 → 12px below rest)
     private let overshootMargin: CGFloat = 16
     private(set) var isVisible = false
+    private var isHiding = false
     private var animationTimer: Timer?
     private var currentOffset: CGFloat = 0
 
@@ -75,6 +91,8 @@ class VolumeHUD {
 
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self = self, event.window == self.window else { return event }
+            // Block clicks while the HUD is hiding (fade-out animation)
+            guard !self.isHiding else { return event }
             // Only respond to clicks in the visible HUD area
             let y = event.locationInWindow.y
             if y >= self.overshootMargin && y <= self.overshootMargin + self.windowHeight {
@@ -95,18 +113,43 @@ class VolumeHUD {
         window.contentView = wrapperView
 
         // ContainerView rests at overshootMargin from bottom (leaving room for spring bounce below)
-        containerView = NSVisualEffectView(frame: NSRect(x: 0, y: overshootMargin, width: windowWidth, height: windowHeight))
+        // Container view (opaque wrapper for clipping + shadow)
+        containerView = NSView(frame: NSRect(x: 0, y: overshootMargin, width: windowWidth, height: windowHeight))
         guard let containerView = containerView else { return }
-
-        containerView.material = .hudWindow
-        containerView.blendingMode = .behindWindow
-        containerView.state = .active
         containerView.wantsLayer = true
         containerView.layer?.cornerRadius = cornerRadius
-        containerView.layer?.borderWidth = 2
-        containerView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.1).cgColor
+        containerView.layer?.masksToBounds = false
+        // box-shadow: 0px 4px 32px rgba(0, 0, 0, 0.04)
+        containerView.layer?.shadowColor = NSColor.black.cgColor
+        containerView.layer?.shadowOpacity = 0.04
+        containerView.layer?.shadowOffset = CGSize(width: 0, height: -4)
+        containerView.layer?.shadowRadius = 32
 
         wrapperView.addSubview(containerView)
+
+        // Backdrop blur layer (fills container, clipped to rounded rect)
+        blurView = NSVisualEffectView(frame: containerView.bounds)
+        guard let blurView = blurView else { return }
+        blurView.autoresizingMask = [.width, .height]
+        blurView.material = .hudWindow
+        blurView.blendingMode = .behindWindow
+        blurView.state = .active
+        blurView.wantsLayer = true
+        blurView.layer?.cornerRadius = cornerRadius
+        blurView.layer?.masksToBounds = true
+        containerView.addSubview(blurView)
+
+        // Semi-transparent background overlay: rgba(120, 120, 120, 0.16)
+        let bgOverlay = NSView(frame: containerView.bounds)
+        bgOverlay.autoresizingMask = [.width, .height]
+        bgOverlay.wantsLayer = true
+        // #767676 at 0.24 opacity
+        bgOverlay.layer?.backgroundColor = NSColor(red: 0x76/255.0, green: 0x76/255.0, blue: 0x76/255.0, alpha: 0.24).cgColor
+        bgOverlay.layer?.cornerRadius = cornerRadius
+        containerView.addSubview(bgOverlay)
+
+        // Gradient border (top-to-bottom white fade)
+        setupGradientBorder(in: containerView)
 
         // Slider background
         let sliderContainer = NSView(frame: NSRect(
@@ -115,7 +158,8 @@ class VolumeHUD {
             height: sliderHeight
         ))
         sliderContainer.wantsLayer = true
-        sliderContainer.layer?.backgroundColor = NSColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 0.16).cgColor
+        // #FFFFFF at 0.12 opacity
+        sliderContainer.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.12).cgColor
         sliderContainer.layer?.cornerRadius = sliderHeight / 2
 
         containerView.addSubview(sliderContainer)
@@ -131,7 +175,8 @@ class VolumeHUD {
         sliderContainer.addSubview(fillView)
 
         // Volume label avec Space Mono
-        volumeLabel = NSTextField(labelWithString: "-60 dB")
+        let thinLabel = ThinTextField(labelWithString: "-60 dB")
+        volumeLabel = thinLabel
         guard let volumeLabel = volumeLabel else { return }
 
         let spaceMonoFont = getSpaceMonoFont(size: 16)
@@ -148,9 +193,58 @@ class VolumeHUD {
         volumeLabel.backgroundColor = NSColor.clear
         volumeLabel.isBordered = false
 
+
         sliderContainer.addSubview(volumeLabel)
 
         window.alphaValue = 0
+    }
+
+    private func setupGradientBorder(in container: NSView) {
+        let borderWidth: CGFloat = 1.0
+        let bounds = container.bounds
+
+        // Dedicated overlay view so the border renders ABOVE blur + background
+        let borderView = NSView(frame: bounds)
+        borderView.autoresizingMask = [.width, .height]
+        borderView.wantsLayer = true
+        borderView.layer?.masksToBounds = false
+        container.addSubview(borderView)
+
+        let gradientLayer = CAGradientLayer()
+        gradientLayer.frame = bounds
+        // Conic (angular) gradient for glass effect that shines on the rounded sides
+        // Starts at 12 o'clock (top), goes clockwise:
+        // 0.0=top, 0.25=right curve, 0.5=bottom, 0.75=left curve, 1.0=top
+        gradientLayer.type = .conic
+        gradientLayer.colors = [
+            NSColor(white: 1.0, alpha: 0.12).cgColor,  // top — medium
+            NSColor(white: 1.0, alpha: 0.18).cgColor,  // top-right transition
+            NSColor(white: 1.0, alpha: 0.28).cgColor,  // right curve — bright shine
+            NSColor(white: 1.0, alpha: 0.12).cgColor,  // bottom-right transition
+            NSColor(white: 1.0, alpha: 0.05).cgColor,  // bottom — dim
+            NSColor(white: 1.0, alpha: 0.12).cgColor,  // bottom-left transition
+            NSColor(white: 1.0, alpha: 0.28).cgColor,  // left curve — bright shine
+            NSColor(white: 1.0, alpha: 0.18).cgColor,  // top-left transition
+            NSColor(white: 1.0, alpha: 0.12).cgColor,  // top — close loop
+        ]
+        gradientLayer.locations = [0.0, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 1.0]
+        gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5) // center of the pill
+
+        // Mask to ring shape (rounded rect border only)
+        let maskLayer = CAShapeLayer()
+        let outerPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        let innerRect = bounds.insetBy(dx: borderWidth, dy: borderWidth)
+        let innerPath = CGPath(roundedRect: innerRect, cornerWidth: cornerRadius - borderWidth, cornerHeight: cornerRadius - borderWidth, transform: nil)
+
+        let combinedPath = CGMutablePath()
+        combinedPath.addPath(outerPath)
+        combinedPath.addPath(innerPath)
+        maskLayer.path = combinedPath
+        maskLayer.fillRule = .evenOdd
+
+        gradientLayer.mask = maskLayer
+        borderView.layer?.addSublayer(gradientLayer)
+        self.gradientBorderLayer = gradientLayer
     }
 
     // Limites de volume en dB (peuvent être mises à jour)
@@ -178,6 +272,7 @@ class VolumeHUD {
         updateVolume(volumeDb, animated: false)
 
         isVisible = true
+        isHiding = false
         animationTimer?.invalidate()
 
         // Reposition window for current screen
@@ -273,10 +368,12 @@ class VolumeHUD {
         hideTimer?.invalidate()
         hideTimer = nil
         isVisible = false
+        isHiding = true
 
         // Slide up + fade out with easeInCubic (200ms) via layer transform
         startAnimation(from: 0, to: slideOffset, duration: 0.3, easing: Self.easeInCubic, animateOpacity: (from: 1, to: 0)) { [weak self] in
             guard let self = self, !self.isVisible else { return }
+            self.isHiding = false
             window.orderOut(nil)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
