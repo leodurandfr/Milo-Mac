@@ -283,24 +283,24 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         for item in sourceItems {
             menu.addItem(item)
 
-            // Attacher submenu directement au Radio item si favoris disponibles
+            // Ajouter chevron interactif pour ouvrir le submenu radio au hover
             if let sourceId = item.representedObject as? String,
                sourceId == "radio",
                currentState?.activeSource == "radio",
+               ["ready", "connected"].contains(currentState?.pluginState.lowercased()),
                cachedRadioFavorites != nil {
-                item.submenu = buildRadioSubmenu()
+                let radioSubmenu = buildRadioSubmenu()
 
-                // Ajouter chevron visuel à la vue personnalisée (SF Symbol)
-                if let containerView = item.view,
-                   let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
-                    let chevronView = NSImageView(image: chevronImage)
-                    chevronView.contentTintColor = NSColor.secondaryLabelColor
-                    chevronView.frame = NSRect(x: 275, y: 10, width: 12, height: 12)
-                    chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+                if let containerView = item.view {
+                    let chevronView = RadioChevronView(
+                        frame: NSRect(x: 265, y: 0, width: 35, height: 32),
+                        submenu: radioSubmenu,
+                        menuItem: item
+                    )
                     containerView.addSubview(chevronView)
                 }
 
-                NSLog("📋 Radio submenu attached: \(item.submenu?.items.count ?? 0) items")
+                NSLog("📋 Radio chevron added: \(radioSubmenu.items.count) items")
             }
         }
     }
@@ -377,9 +377,11 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             return name1.localizedCaseInsensitiveCompare(name2) == .orderedAscending
         }
 
-        // Get currently playing station info
-        let currentStationId = (currentState?.activeSource == "radio") ?
+        // Get currently playing station info (use is_playing flag, not just station_id presence)
+        let metadataIsPlaying = currentState?.metadata["is_playing"] as? Int == 1
+        let currentStationId = (currentState?.activeSource == "radio" && metadataIsPlaying) ?
             currentState?.metadata["station_id"] as? String : nil
+        NSLog("📻 buildRadioSubmenu: is_playing=\(metadataIsPlaying), currentStationId=\(currentStationId ?? "nil")")
 
         var addedCount = 0
         // Add each favorite station (synchrone, pas de Task)
@@ -391,15 +393,21 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             }
 
             let isCurrentStation = (stationId == currentStationId)
-            let title = isCurrentStation ? "● \(stationName) ⏹" : stationName
 
-            let stationItem = NSMenuItem(
-                title: title,
-                action: #selector(radioStationClicked(_:)),
-                keyEquivalent: ""
+            // All items use custom views to prevent menu from closing on click
+            let stationItem = NSMenuItem()
+            let view = RadioStationItemView(
+                stationName: stationName,
+                isPlaying: isCurrentStation,
+                clickHandler: { [weak self] in
+                    if isCurrentStation {
+                        self?.handleRadioStationStop(stationId: stationId)
+                    } else {
+                        self?.handleRadioStationPlay(stationId: stationId)
+                    }
+                }
             )
-            stationItem.target = self
-            stationItem.representedObject = ["stationId": stationId, "isPlaying": isCurrentStation]
+            stationItem.view = view
 
             submenu.addItem(stationItem)
             addedCount += 1
@@ -414,24 +422,55 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
               let info = sender.representedObject as? [String: Any],
               let stationId = info["stationId"] as? String,
               let isPlaying = info["isPlaying"] as? Bool else {
+            NSLog("⚠️ radioStationClicked: guard failed, representedObject=\(String(describing: sender.representedObject))")
             return
         }
+
+        NSLog("📻 radioStationClicked: stationId=\(stationId), isPlaying=\(isPlaying)")
 
         Task {
             do {
                 if isPlaying {
-                    // Stop playback
                     try await apiService.stopRadioPlayback()
+                    NSLog("⏹ Radio stopped")
                 } else {
-                    // Play the selected station
                     try await apiService.playRadioStation(stationId)
-                    // Switch to radio source if not already active
+                    NSLog("▶️ Radio playing: \(stationId)")
                     if currentState?.activeSource != "radio" {
                         try await apiService.changeSource("radio")
                     }
                 }
             } catch {
                 NSLog("❌ Error handling radio station click: \(error)")
+            }
+        }
+    }
+
+    private func handleRadioStationStop(stationId: String) {
+        guard let apiService = connectionManager.getAPIService() else { return }
+        NSLog("📻 handleRadioStationStop: \(stationId)")
+        Task {
+            do {
+                try await apiService.stopRadioPlayback()
+                NSLog("⏹ Radio stopped: \(stationId)")
+            } catch {
+                NSLog("❌ Error stopping radio: \(error)")
+            }
+        }
+    }
+
+    private func handleRadioStationPlay(stationId: String) {
+        guard let apiService = connectionManager.getAPIService() else { return }
+        NSLog("📻 handleRadioStationPlay: \(stationId)")
+        Task {
+            do {
+                try await apiService.playRadioStation(stationId)
+                NSLog("▶️ Radio playing: \(stationId)")
+                if currentState?.activeSource != "radio" {
+                    try await apiService.changeSource("radio")
+                }
+            } catch {
+                NSLog("❌ Error playing radio: \(error)")
             }
         }
     }
@@ -742,7 +781,13 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
 
         do {
             let state = try await apiService.fetchState()
-            await MainActor.run { self.currentState = state }
+            await MainActor.run {
+                self.currentState = state
+                // Load radio favorites if radio is already active on connect
+                if state.activeSource == "radio" && self.cachedRadioFavorites == nil {
+                    self.loadRadioFavoritesInBackground()
+                }
+            }
             return true
         } catch {
             // Échec silencieux

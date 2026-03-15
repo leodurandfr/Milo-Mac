@@ -435,35 +435,239 @@ class HoverableView: NSView {
         updateTrackingAreas()
     }
     
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        
-        let hoverColor: NSColor
-        if #available(macOS 10.14, *) {
-            hoverColor = NSColor.tertiaryLabelColor
-        } else {
-            hoverColor = NSColor.lightGray.withAlphaComponent(0.2)
-        }
-        
+    func setHoverActive(_ active: Bool) {
+        let color: NSColor = active ? {
+            if #available(macOS 10.14, *) {
+                return NSColor.tertiaryLabelColor
+            } else {
+                return NSColor.lightGray.withAlphaComponent(0.2)
+            }
+        }() : .clear
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        hoverBackgroundLayer?.backgroundColor = hoverColor.cgColor
+        hoverBackgroundLayer?.backgroundColor = color.cgColor
         CATransaction.commit()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        setHoverActive(true)
+        // Set chevron to full opacity when hovering the radio item
+        for subview in subviews {
+            if let chevron = subview as? RadioChevronView {
+                chevron.setChevronOpacity(1.0)
+            }
+        }
     }
     
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        hoverBackgroundLayer?.backgroundColor = NSColor.clear.cgColor
-        CATransaction.commit()
+        setHoverActive(false)
+        // Reset chevron opacity when leaving the radio item
+        for subview in subviews {
+            if let chevron = subview as? RadioChevronView {
+                chevron.setChevronOpacity(0.5)
+            }
+        }
     }
     
     override func mouseDown(with event: NSEvent) {
         clickHandler?()
     }
-    
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return bounds.contains(point) ? self : nil
+    }
+}
+
+// MARK: - Radio Chevron View
+/// Chevron that dynamically attaches/detaches the submenu on the parent NSMenuItem.
+/// On hover: attaches submenu → NSMenu natively shows the flyout.
+/// On exit: detaches submenu so hovering the rest of the radio item doesn't trigger it.
+class RadioChevronView: NSView {
+    private var chevronImageView: NSImageView?
+    private var trackingArea: NSTrackingArea?
+    private var radioSubmenu: NSMenu
+    private weak var menuItem: NSMenuItem?
+
+    init(frame: NSRect, submenu: NSMenu, menuItem: NSMenuItem) {
+        self.radioSubmenu = submenu
+        self.menuItem = menuItem
+        super.init(frame: frame)
+
+        wantsLayer = true
+
+        if let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
+            let imageView = NSImageView(image: chevronImage)
+            imageView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
+            imageView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+            imageView.frame = NSRect(
+                x: (frame.width - 12) / 2,
+                y: (frame.height - 12) / 2,
+                width: 12,
+                height: 12
+            )
+            addSubview(imageView)
+            self.chevronImageView = imageView
+        }
+
+        setupTrackingArea()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setChevronOpacity(_ opacity: CGFloat) {
+        chevronImageView?.contentTintColor = NSColor.labelColor.withAlphaComponent(opacity)
+    }
+
+    private func setupTrackingArea() {
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea!)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea { removeTrackingArea(ta) }
+        setupTrackingArea()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        chevronImageView?.contentTintColor = NSColor.labelColor.withAlphaComponent(1.0)
+        // Attach submenu → NSMenu natively opens the flyout
+        menuItem?.submenu = radioSubmenu
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        chevronImageView?.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
+
+        // Restore parent HoverableView highlight if mouse is still over it
+        if let parent = superview as? HoverableView {
+            let mouseInParent = parent.convert(event.locationInWindow, from: nil)
+            if parent.bounds.contains(mouseInParent) {
+                parent.setHoverActive(true)
+            }
+        }
+
+        // Detach after a short delay to let the flyout open
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            if self?.radioSubmenu.highlightedItem == nil {
+                self?.menuItem?.submenu = nil
+            }
+        }
+    }
+}
+
+// MARK: - Radio Station Item View
+/// Custom view for radio station submenu items.
+/// Using custom views prevents NSMenu from closing on click.
+class RadioStationItemView: NSView {
+    private var clickHandler: (() -> Void)?
+    private var trackingArea: NSTrackingArea?
+    private var hoverLayer: CALayer?
+
+    private static let viewWidth: CGFloat = 200
+    private static let viewHeight: CGFloat = 22
+    private static let horizontalPadding: CGFloat = 12
+    private static let cornerRadius: CGFloat = 4
+
+    convenience init(stationName: String, isPlaying: Bool, clickHandler: @escaping () -> Void) {
+        self.init(frame: NSRect(x: 0, y: 0, width: Self.viewWidth, height: Self.viewHeight))
+        self.clickHandler = clickHandler
+
+        wantsLayer = true
+
+        // Hover background (like standard menu item)
+        hoverLayer = CALayer()
+        hoverLayer?.frame = NSRect(x: 4, y: 0, width: bounds.width - 8, height: bounds.height)
+        hoverLayer?.cornerRadius = Self.cornerRadius
+        hoverLayer?.backgroundColor = NSColor.clear.cgColor
+        layer?.addSublayer(hoverLayer!)
+
+        // Station name (vertically centered)
+        let nameLabel = NSTextField(labelWithString: stationName)
+        nameLabel.font = NSFont.menuFont(ofSize: 13)
+        nameLabel.textColor = NSColor.labelColor
+        nameLabel.sizeToFit()
+        nameLabel.frame = NSRect(
+            x: Self.horizontalPadding,
+            y: (Self.viewHeight - nameLabel.frame.height) / 2,
+            width: bounds.width - 50,
+            height: nameLabel.frame.height
+        )
+        nameLabel.isEditable = false
+        nameLabel.isBordered = false
+        nameLabel.backgroundColor = .clear
+        nameLabel.lineBreakMode = .byTruncatingTail
+        addSubview(nameLabel)
+
+        // Stop symbol for playing station (vertically centered, right-aligned)
+        if isPlaying {
+            let stop = NSTextField(labelWithString: "⏹")
+            stop.font = NSFont.systemFont(ofSize: 11)
+            stop.textColor = NSColor.secondaryLabelColor
+            stop.sizeToFit()
+            stop.frame = NSRect(
+                x: bounds.width - 28,
+                y: (Self.viewHeight - stop.frame.height) / 2,
+                width: 16,
+                height: stop.frame.height
+            )
+            stop.isEditable = false
+            stop.isBordered = false
+            stop.backgroundColor = .clear
+            stop.alignment = .right
+            addSubview(stop)
+        }
+
+        setupTrackingArea()
+    }
+
+    private func setupTrackingArea() {
+        trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea!)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea { removeTrackingArea(ta) }
+        setupTrackingArea()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hoverLayer?.backgroundColor = NSColor.tertiaryLabelColor.cgColor
+        CATransaction.commit()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hoverLayer?.backgroundColor = NSColor.clear.cgColor
+        CATransaction.commit()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        clickHandler?()
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         return bounds.contains(point) ? self : nil
     }
