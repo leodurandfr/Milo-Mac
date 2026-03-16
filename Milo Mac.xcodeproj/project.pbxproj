@@ -51,7 +51,7 @@
 
 /* Begin PBXFileReference section */
 		B39E9F442E28EF8F00CDCA62 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
-		B3A7E0552E216D2400785117 /* Milo Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Milo Mac.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B3A7E0552E216D2400785117 /* Milo Mac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = "Milo Mac.app"; path = "Milō.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B3A7E0632E216D2500785117 /* Milo MacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Milo MacTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B3A7E06D2E216D2500785117 /* Milo MacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Milo MacUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
