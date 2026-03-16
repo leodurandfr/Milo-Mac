@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-class MenuBarController: NSObject, MiloConnectionManagerDelegate {
+class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate {
     // MARK: - Properties
     private var statusItem: NSStatusItem
     private(set) var connectionManager: MiloConnectionManager!
@@ -23,7 +23,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - UI State
     private var activeMenu: NSMenu?
     private var isPreferencesMenuActive = false
-    private var isRebuildingMenu = false
     
     // MARK: - Loading State Management
     private var loadingStates: [String: Bool] = [:]
@@ -146,28 +145,23 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     // MARK: - Menu Display
     @objc private func menuButtonClicked() {
         statusItem.menu = nil
-        
-        guard let event = NSApp.currentEvent else {
-            showMainMenu()
-            return
-        }
-        
-        if event.modifierFlags.contains(.option) {
-            showPreferencesMenu()
+
+        let isPreferences: Bool
+        if let event = NSApp.currentEvent, event.modifierFlags.contains(.option) {
+            isPreferences = true
         } else {
-            showMainMenu()
+            isPreferences = false
         }
+
+        hotkeyManager?.volumeHUD?.hideWithCoreAnimation()
+        openMenu(isPreferences: isPreferences)
     }
-    
-    private func showMainMenu() {
-        let menu = createMenu(isPreferences: false)
+
+    private func openMenu(isPreferences: Bool) {
+        let menu = createMenu(isPreferences: isPreferences)
         displayMenu(menu)
     }
     
-    private func showPreferencesMenu() {
-        let menu = createMenu(isPreferences: true)
-        displayMenu(menu)
-    }
     
     private func createMenu(isPreferences: Bool) -> NSMenu {
         isMenuOpen = true
@@ -190,6 +184,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     
     private func displayMenu(_ menu: NSMenu) {
         NSApp.activate(ignoringOtherApps: true)
+        menu.delegate = self
         statusItem.menu = menu
 
         statusItem.button?.performClick(nil)
@@ -198,32 +193,17 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
             self?.statusItem.menu = nil
         }
 
-        // Use notification for reliable menu closure detection
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(menuDidEndTracking),
-            name: NSMenu.didEndTrackingNotification,
-            object: menu
-        )
-
         if isMiloConnected {
             refreshMenuData(includeDockApps: true)
         }
     }
 
-    @objc private func menuDidEndTracking(_ notification: Notification) {
-        guard let menu = notification.object as? NSMenu, menu === activeMenu else { return }
-        // Ignore if menu is being rebuilt (removeAllItems can trigger end-tracking)
-        if isRebuildingMenu { return }
-        NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: menu)
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === activeMenu else { return }
         handleMenuClosed()
     }
     
     private func handleMenuClosed() {
-        NSLog("🚪 handleMenuClosed called (was menuOpen=\(isMenuOpen))")
-        if let menu = activeMenu {
-            NotificationCenter.default.removeObserver(self, name: NSMenu.didEndTrackingNotification, object: menu)
-        }
         isMenuOpen = false
         volumeController.cleanup()
         activeMenu = nil
@@ -417,34 +397,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         return submenu
     }
 
-    @objc private func radioStationClicked(_ sender: NSMenuItem) {
-        guard let apiService = connectionManager.getAPIService(),
-              let info = sender.representedObject as? [String: Any],
-              let stationId = info["stationId"] as? String,
-              let isPlaying = info["isPlaying"] as? Bool else {
-            NSLog("⚠️ radioStationClicked: guard failed, representedObject=\(String(describing: sender.representedObject))")
-            return
-        }
 
-        NSLog("📻 radioStationClicked: stationId=\(stationId), isPlaying=\(isPlaying)")
-
-        Task {
-            do {
-                if isPlaying {
-                    try await apiService.stopRadioPlayback()
-                    NSLog("⏹ Radio stopped")
-                } else {
-                    try await apiService.playRadioStation(stationId)
-                    NSLog("▶️ Radio playing: \(stationId)")
-                    if currentState?.activeSource != "radio" {
-                        try await apiService.changeSource("radio")
-                    }
-                }
-            } catch {
-                NSLog("❌ Error handling radio station click: \(error)")
-            }
-        }
-    }
 
     private func handleRadioStationStop(stationId: String) {
         guard let apiService = connectionManager.getAPIService() else { return }
@@ -703,7 +656,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
     }
     
     private func updateMenuInRealTime(_ menu: NSMenu) {
-        isRebuildingMenu = true
         CircularMenuItem.cleanupAllSpinners()
         menu.removeAllItems()
 
@@ -712,7 +664,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate {
         } else {
             buildDisconnectedMenu(menu, isPreferences: isPreferencesMenuActive)
         }
-        isRebuildingMenu = false
     }
     
     private func updateIcon() {
