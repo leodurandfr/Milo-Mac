@@ -116,7 +116,7 @@ class MenuItemFactory {
         items.append(createSecondaryHeader(title: L("menu.audio_sources.title")))
 
         let activeSource = state?.activeSource ?? "none"
-        let isPluginStarting = state?.pluginState.lowercased() == "starting"
+        let isSourceTransitioning = (state?.sourceState.lowercased() == "starting") || (state?.transitioning ?? false)
 
         let configMap = Dictionary(uniqueKeysWithValues: allSourceConfigs.map { ($0.sourceId, $0) })
 
@@ -131,7 +131,7 @@ class MenuItemFactory {
         for sourceId in orderedSourceIds {
             guard let source = configMap[sourceId] else { continue }
 
-            let isLoading = isPluginStarting && (activeSource == sourceId)
+            let isLoading = isSourceTransitioning && (activeSource == sourceId)
             let isActive = (activeSource == sourceId)
 
             let config = MenuItemConfig(

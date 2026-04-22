@@ -177,7 +177,8 @@ class WebSocketService: NSObject {
 
         let state = MiloState(
             activeSource: fullState["active_source"] as? String ?? "none",
-            pluginState: fullState["plugin_state"] as? String ?? "ready",
+            sourceState: fullState["source_state"] as? String ?? "active",
+            transitioning: fullState["transitioning"] as? Bool ?? false,
             multiroomEnabled: fullState["multiroom_enabled"] as? Bool ?? false,
             equalizerEnabled: fullState["equalizer_effects_enabled"] as? Bool ?? true,
             metadata: fullState["metadata"] as? [String: Any] ?? [:]

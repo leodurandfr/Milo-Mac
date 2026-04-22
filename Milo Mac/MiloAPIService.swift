@@ -2,7 +2,8 @@ import Foundation
 
 struct MiloState {
     let activeSource: String
-    let pluginState: String       // "starting", "ready", "connected", "error" - INDICATEUR utilisé pour les spinners
+    let sourceState: String       // "starting", "waiting", "active", "error"
+    let transitioning: Bool       // true pendant un changement de source
     let multiroomEnabled: Bool
     let equalizerEnabled: Bool
     let metadata: [String: Any]
@@ -118,7 +119,8 @@ class MiloAPIService {
         
         return MiloState(
             activeSource: json["active_source"] as? String ?? "none",
-            pluginState: json["plugin_state"] as? String ?? "ready",  // "starting" déclenche le spinner
+            sourceState: json["source_state"] as? String ?? "active",
+            transitioning: json["transitioning"] as? Bool ?? false,
             multiroomEnabled: json["multiroom_enabled"] as? Bool ?? false,
             equalizerEnabled: json["equalizer_effects_enabled"] as? Bool ?? true,
             metadata: json["metadata"] as? [String: Any] ?? [:]

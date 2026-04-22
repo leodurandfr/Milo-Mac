@@ -267,7 +267,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
             if let sourceId = item.representedObject as? String,
                sourceId == "radio",
                currentState?.activeSource == "radio",
-               ["ready", "connected"].contains(currentState?.pluginState.lowercased()),
+               ["waiting", "active"].contains(currentState?.sourceState.lowercased()),
                cachedRadioFavorites != nil {
                 let radioSubmenu = buildRadioSubmenu()
 
@@ -624,10 +624,10 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
 
         let allKnownSources = ["spotify", "bluetooth", "mac", "airplay", "radio", "podcast"]
         let audioSources = enabledDockApps?.filter { allKnownSources.contains($0) } ?? allKnownSources
-        let isPluginStarting = state.pluginState.lowercased() == "starting"
+        let isSourceTransitioning = state.sourceState.lowercased() == "starting" || state.transitioning
 
         for identifier in audioSources {
-            if isPluginStarting && identifier == state.activeSource {
+            if isSourceTransitioning && identifier == state.activeSource {
                 if loadingStates[identifier] != true {
                     setLoadingState(for: identifier, isLoading: true)
                 }
@@ -831,7 +831,7 @@ extension MenuBarController {
     }
     
     func didReceiveStateUpdate(_ state: MiloState) {
-        NSLog("📬 didReceiveStateUpdate: source=\(state.activeSource), plugin=\(state.pluginState), menuOpen=\(isMenuOpen), activeMenu=\(activeMenu != nil)")
+        NSLog("📬 didReceiveStateUpdate: source=\(state.activeSource), sourceState=\(state.sourceState), transitioning=\(state.transitioning), menuOpen=\(isMenuOpen), activeMenu=\(activeMenu != nil)")
         let previousSource = currentState?.activeSource
         currentState = state
 
