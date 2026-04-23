@@ -15,6 +15,7 @@
 "source.radio" = "广播";
 "source.podcast" = "播客";
 "source.airplay" = "AirPlay";
+"source.cd" = "CD 播放器";
 
 // MARK: - Radio
 "radio.favorites" = "收藏的电台";

@@ -15,6 +15,7 @@
 "source.radio" = "Radio";
 "source.podcast" = "Podcast";
 "source.airplay" = "AirPlay";
+"source.cd" = "Lettore CD";
 
 // MARK: - Radio
 "radio.favorites" = "Radio preferite";

@@ -15,6 +15,7 @@
 "source.radio" = "रेडियो";
 "source.podcast" = "पॉडकास्ट";
 "source.airplay" = "AirPlay";
+"source.cd" = "सीडी प्लेयर";
 
 // MARK: - Radio
 "radio.favorites" = "पसंदीदा रेडियो";

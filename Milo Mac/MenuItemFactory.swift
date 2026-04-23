@@ -107,7 +107,8 @@ class MenuItemFactory {
         ({ L("source.radio") }, "radio", "radio"),
         ({ L("source.podcast") }, "podcasts-icon", "podcast"),
         ({ L("source.airplay") }, "airplayaudio", "airplay"),
-        ({ L("source.mac") }, "desktopcomputer", "mac")
+        ({ L("source.mac") }, "desktopcomputer", "mac"),
+        ({ L("source.cd") }, "cd-icon", "cd")
     ]
 
     static let allSourceIds: [String] = allSourceConfigs.map { $0.sourceId }
