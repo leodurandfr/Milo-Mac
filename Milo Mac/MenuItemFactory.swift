@@ -110,6 +110,8 @@ class MenuItemFactory {
         ({ L("source.mac") }, "desktopcomputer", "mac")
     ]
 
+    static let allSourceIds: [String] = allSourceConfigs.map { $0.sourceId }
+
     static func createAudioSourcesSection(state: MiloState?, loadingStates: [String: Bool] = [:], enabledApps: [String]? = nil, target: AnyObject, action: Selector) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 

@@ -622,7 +622,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     private func syncLoadingStatesWithBackend() {
         guard let state = currentState else { return }
 
-        let allKnownSources = ["spotify", "bluetooth", "mac", "airplay", "radio", "podcast"]
+        let allKnownSources = MenuItemFactory.allSourceIds
         let audioSources = enabledDockApps?.filter { allKnownSources.contains($0) } ?? allKnownSources
         let isSourceTransitioning = state.sourceState.lowercased() == "starting" || state.transitioning
 
