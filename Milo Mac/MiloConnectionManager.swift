@@ -36,6 +36,7 @@ protocol MiloConnectionManagerDelegate: AnyObject {
     func miloDidDisconnect()
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
+    func didReceiveMultiroomTransitionComplete(success: Bool)
 }
 
 class MiloConnectionManager: NSObject {
@@ -465,6 +466,10 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 
     func didReceiveVolumeUpdate(_ volume: VolumeStatus) {
         delegate?.didReceiveVolumeUpdate(volume)
+    }
+
+    func didReceiveMultiroomTransitionComplete(success: Bool) {
+        delegate?.didReceiveMultiroomTransitionComplete(success: success)
     }
 }
 

@@ -39,6 +39,9 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     // MARK: - Constants
     private let loadingTimeoutDuration: TimeInterval = 15.0
     private let functionalityLoadingTimeout: TimeInterval = 10.0
+    // Multiroom toggles take longer on the backend (snapserver start,
+    // wait_for_ready up to 15s, volume push), so its safety timeout is higher.
+    private let multiroomLoadingTimeout: TimeInterval = 35.0
     private let minimumFunctionalityLoadingDuration: TimeInterval = 1.2
     private let maxConsecutiveFailures = 3
     
@@ -514,9 +517,17 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                     return
                 }
             } catch {
-                // En cas d'erreur HTTP, arrêter le loading silencieusement
-                await MainActor.run {
-                    self.stopFunctionalityLoading(for: toggleType)
+                // Multiroom: the PUT can still fail spuriously even with the
+                // extended timeout while the backend finishes the transition.
+                // Keep the spinner — it will resolve on multiroom_changed /
+                // multiroom_error via WebSocket, or via the safety timeout.
+                // For other toggles, stop immediately.
+                if toggleType != "multiroom" {
+                    await MainActor.run {
+                        self.stopFunctionalityLoading(for: toggleType)
+                    }
+                } else {
+                    NSLog("⚠️ setMultiroom HTTP error (spinner kept until WS signal): \(error)")
                 }
             }
         }
@@ -529,14 +540,15 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     // MARK: - Functionality Loading Management
     private func startFunctionalityLoading(for identifier: String, expectedState: Bool) {
         guard loadingStates[identifier] != true else { return }
-        
+
         expectedFunctionalityStates[identifier] = expectedState
         loadingStartTimes[identifier] = Date()
         manualLoadingProtection[identifier] = Date()
         setLoadingState(for: identifier, isLoading: true)
-        
+
+        let safetyTimeout = identifier == "multiroom" ? multiroomLoadingTimeout : functionalityLoadingTimeout
         loadingTimers[identifier]?.invalidate()
-        loadingTimers[identifier] = Timer.scheduledTimer(withTimeInterval: functionalityLoadingTimeout, repeats: false) { _ in
+        loadingTimers[identifier] = Timer.scheduledTimer(withTimeInterval: safetyTimeout, repeats: false) { _ in
             Task { @MainActor in self.stopFunctionalityLoading(for: identifier) }
         }
     }
@@ -567,14 +579,12 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     }
     
     private func checkFunctionalityStateChange(_ newState: MiloState) {
-        // Vérifier multiroom
-        if let expectedMultiroom = expectedFunctionalityStates["multiroom"],
-           newState.multiroomEnabled == expectedMultiroom,
-           loadingStates["multiroom"] == true {
-            stopFunctionalityLoading(for: "multiroom")
-        }
+        // Multiroom loading is resolved via didReceiveMultiroomTransitionComplete,
+        // not by matching state here: the backend silently pre-sets
+        // multiroom_enabled before the actual routing work (snapserver start,
+        // WebSocket readiness up to 15s), so intermediate state broadcasts
+        // already carry the new value and would resolve the spinner too early.
 
-        // Vérifier equalizer (DSP)
         if let expectedEqualizer = expectedFunctionalityStates["equalizer"],
            newState.equalizerEnabled == expectedEqualizer,
            loadingStates["equalizer"] == true {
@@ -856,6 +866,16 @@ extension MenuBarController {
         }
     }
     
+    func didReceiveMultiroomTransitionComplete(success: Bool) {
+        guard loadingStates["multiroom"] == true else { return }
+        if !success {
+            // Clear expected state on failure so no late state_changed accidentally
+            // re-resolves via any future code path.
+            expectedFunctionalityStates["multiroom"] = nil
+        }
+        stopFunctionalityLoading(for: "multiroom")
+    }
+
     func didReceiveVolumeUpdate(_ volume: VolumeStatus) {
         // WebSocket volume events don't include limits.
         // Preserve the API-sourced limits from the previous currentVolume.

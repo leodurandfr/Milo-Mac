@@ -26,6 +26,11 @@ struct VolumeStatus {
 class MiloAPIService {
     private let baseURL: String
     private var session: URLSession
+    // Dedicated session for endpoints where the backend holds the HTTP
+    // connection open for the full duration of a slow operation (e.g. multiroom
+    // toggle blocks on snapserver start + source restart + volume push, up to
+    // ~20s). The fast session's 3s/5s timeouts would fire mid-transition.
+    private var longSession: URLSession
     private let host: String
     private let port: Int
     private var resolvedIPv4: String?
@@ -43,6 +48,7 @@ class MiloAPIService {
         config.urlCache = nil
 
         self.session = URLSession(configuration: config)
+        self.longSession = Self.makeLongSession()
 
         // Résoudre l'IP IPv4 en arrière-plan pour éviter les priority inversions
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -50,9 +56,20 @@ class MiloAPIService {
         }
     }
 
+    private static func makeLongSession() -> URLSession {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30.0
+        config.timeoutIntervalForResource = 45.0
+        config.waitsForConnectivity = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }
+
     /// Recréer la session pour éviter les connexions TCP stales
     func resetSession() {
         session.invalidateAndCancel()
+        longSession.invalidateAndCancel()
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 3.0
@@ -62,6 +79,7 @@ class MiloAPIService {
         config.urlCache = nil
 
         session = URLSession(configuration: config)
+        longSession = Self.makeLongSession()
 
         // Re-résoudre l'IP en arrière-plan
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -144,15 +162,20 @@ class MiloAPIService {
     }
     
     func setMultiroom(_ enabled: Bool) async throws {
-        guard let url = buildURL(path: "/api/routing/multiroom/\(enabled)") else {
+        guard let url = buildURL(path: "/api/routing/multiroom") else {
             throw APIError.invalidURL
         }
-        
+
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        
-        let (_, response) = try await session.data(for: request)
-        
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = ["enabled": enabled]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        // Backend blocks until the full routing transition completes (up to ~20s).
+        let (_, response) = try await longSession.data(for: request)
+
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             throw APIError.httpError

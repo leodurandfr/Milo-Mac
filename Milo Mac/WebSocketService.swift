@@ -5,6 +5,7 @@ protocol WebSocketServiceDelegate: AnyObject {
     func webSocketDidDisconnect()
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
+    func didReceiveMultiroomTransitionComplete(success: Bool)
 }
 
 class WebSocketService: NSObject {
@@ -166,6 +167,10 @@ class WebSocketService: NSObject {
                 if eventType == "enabled_changed" {
                     self?.handleSystemStateChange(eventData)
                 }
+            case "routing":
+                if eventType == "multiroom_error" {
+                    self?.delegate?.didReceiveMultiroomTransitionComplete(success: false)
+                }
             default:
                 break
             }
@@ -185,6 +190,16 @@ class WebSocketService: NSObject {
         )
 
         delegate?.didReceiveStateUpdate(state)
+
+        // The backend silently pre-sets multiroom_enabled at the start of a
+        // routing transition, then broadcasts many intermediate source state
+        // changes that all carry the new multiroom_enabled in full_state.
+        // Only the final update_multiroom_state broadcast carries the
+        // multiroom_changed discriminator — treat it as the authoritative
+        // completion signal for the multiroom loading spinner.
+        if data["multiroom_changed"] as? Bool == true {
+            delegate?.didReceiveMultiroomTransitionComplete(success: true)
+        }
     }
 
     private func handleVolumeChange(_ data: [String: Any]) {
