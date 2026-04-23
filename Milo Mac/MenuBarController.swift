@@ -266,24 +266,25 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         for item in sourceItems {
             menu.addItem(item)
 
-            // Ajouter chevron interactif pour ouvrir le submenu radio au hover
+            // Attacher le submenu radio : NSMenu ouvre nativement le flyout au hover sur toute la ligne
             if let sourceId = item.representedObject as? String,
                sourceId == "radio",
                currentState?.activeSource == "radio",
                ["waiting", "active"].contains(currentState?.sourceState.lowercased()),
                cachedRadioFavorites != nil {
                 let radioSubmenu = buildRadioSubmenu()
+                item.submenu = radioSubmenu
 
-                if let containerView = item.view {
-                    let chevronView = RadioChevronView(
-                        frame: NSRect(x: 265, y: 0, width: 35, height: 32),
-                        submenu: radioSubmenu,
-                        menuItem: item
-                    )
+                if let containerView = item.view,
+                   let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
+                    let chevronView = NSImageView(image: chevronImage)
+                    chevronView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
+                    chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+                    chevronView.frame = NSRect(x: 276, y: 10, width: 12, height: 12)
                     containerView.addSubview(chevronView)
                 }
 
-                NSLog("📋 Radio chevron added: \(radioSubmenu.items.count) items")
+                NSLog("📋 Radio submenu attached: \(radioSubmenu.items.count) items")
             }
         }
     }

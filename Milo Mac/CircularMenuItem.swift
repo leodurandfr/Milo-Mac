@@ -453,23 +453,11 @@ class HoverableView: NSView {
     override func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
         setHoverActive(true)
-        // Set chevron to full opacity when hovering the radio item
-        for subview in subviews {
-            if let chevron = subview as? RadioChevronView {
-                chevron.setChevronOpacity(1.0)
-            }
-        }
     }
-    
+
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         setHoverActive(false)
-        // Reset chevron opacity when leaving the radio item
-        for subview in subviews {
-            if let chevron = subview as? RadioChevronView {
-                chevron.setChevronOpacity(0.5)
-            }
-        }
     }
     
     override func mouseDown(with event: NSEvent) {
@@ -478,92 +466,6 @@ class HoverableView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         return bounds.contains(point) ? self : nil
-    }
-}
-
-// MARK: - Radio Chevron View
-/// Chevron that dynamically attaches/detaches the submenu on the parent NSMenuItem.
-/// On hover: attaches submenu → NSMenu natively shows the flyout.
-/// On exit: detaches submenu so hovering the rest of the radio item doesn't trigger it.
-class RadioChevronView: NSView {
-    private var chevronImageView: NSImageView?
-    private var trackingArea: NSTrackingArea?
-    private var radioSubmenu: NSMenu
-    private weak var menuItem: NSMenuItem?
-
-    init(frame: NSRect, submenu: NSMenu, menuItem: NSMenuItem) {
-        self.radioSubmenu = submenu
-        self.menuItem = menuItem
-        super.init(frame: frame)
-
-        wantsLayer = true
-
-        if let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
-            let imageView = NSImageView(image: chevronImage)
-            imageView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
-            imageView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-            imageView.frame = NSRect(
-                x: (frame.width - 12) / 2,
-                y: (frame.height - 12) / 2,
-                width: 12,
-                height: 12
-            )
-            addSubview(imageView)
-            self.chevronImageView = imageView
-        }
-
-        setupTrackingArea()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func setChevronOpacity(_ opacity: CGFloat) {
-        chevronImageView?.contentTintColor = NSColor.labelColor.withAlphaComponent(opacity)
-    }
-
-    private func setupTrackingArea() {
-        trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea!)
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let ta = trackingArea { removeTrackingArea(ta) }
-        setupTrackingArea()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        chevronImageView?.contentTintColor = NSColor.labelColor.withAlphaComponent(1.0)
-        // Attach submenu → NSMenu natively opens the flyout
-        menuItem?.submenu = radioSubmenu
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        chevronImageView?.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
-
-        // Restore parent HoverableView highlight if mouse is still over it
-        if let parent = superview as? HoverableView {
-            let mouseInParent = parent.convert(event.locationInWindow, from: nil)
-            if parent.bounds.contains(mouseInParent) {
-                parent.setHoverActive(true)
-            }
-        }
-
-        // Detach after a short delay to let the flyout open
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            if self?.radioSubmenu.highlightedItem == nil {
-                self?.menuItem?.submenu = nil
-            }
-        }
     }
 }
 

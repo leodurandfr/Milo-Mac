@@ -35,7 +35,7 @@ gh api repos/leodurandfr/Milo/contents/backend/core/models/audio_state.py
 3. Add `"source.X"` to every `*.lproj/Localizable.strings`.
 4. Add the icon to `Assets.xcassets` if not an SF Symbol.
 5. Whether it shows up at runtime is gated by the backend's `enabled_apps` — confirm the source is listed there.
-6. If the source needs a submenu (like Radio favorites), extend `MenuBarController.addAudioSourcesSection` and follow the `RadioChevronView` pattern.
+6. If the source needs a submenu (like Radio favorites), extend `MenuBarController.addAudioSourcesSection`: build the submenu, attach it via `item.submenu = submenu` so NSMenu handles the flyout natively on hover, and add a decorative chevron (`NSImageView` with `chevron.right`) to the item's custom view.
 
 ## Testing
 
