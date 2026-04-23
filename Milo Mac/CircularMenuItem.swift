@@ -61,6 +61,13 @@ class CircularMenuItem {
         activeSpinners.removeAll()
     }
 
+    /// Register an externally-created spinner so it gets stopped by
+    /// cleanupAllSpinners on the next menu rebuild, matching the lifecycle of
+    /// spinners created internally by createCircleViewWithLoading.
+    static func registerSpinner(_ spinner: LoadingSpinner) {
+        activeSpinners.append(spinner)
+    }
+
     // MARK: - Private Methods
     private static func createContainerView(config: MenuItemConfig, menuItem: NSMenuItem) -> NSView {
         return createContainerViewWithLoading(config: config, menuItem: menuItem, isLoading: false, loadingIsActive: false)
@@ -473,17 +480,20 @@ class HoverableView: NSView {
 /// Custom view for radio station submenu items.
 /// Using custom views prevents NSMenu from closing on click.
 class RadioStationItemView: NSView {
+    let stationId: String
     private var clickHandler: (() -> Void)?
     private var trackingArea: NSTrackingArea?
     private var hoverLayer: CALayer?
+    private var stopLabel: NSTextField?
 
     private static let viewWidth: CGFloat = 200
     private static let viewHeight: CGFloat = 22
     private static let horizontalPadding: CGFloat = 12
     private static let cornerRadius: CGFloat = 4
 
-    convenience init(stationName: String, isPlaying: Bool, clickHandler: @escaping () -> Void) {
-        self.init(frame: NSRect(x: 0, y: 0, width: Self.viewWidth, height: Self.viewHeight))
+    init(stationId: String, stationName: String, isPlaying: Bool, clickHandler: @escaping () -> Void) {
+        self.stationId = stationId
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.viewWidth, height: Self.viewHeight))
         self.clickHandler = clickHandler
 
         wantsLayer = true
@@ -512,26 +522,45 @@ class RadioStationItemView: NSView {
         nameLabel.lineBreakMode = .byTruncatingTail
         addSubview(nameLabel)
 
-        // Stop symbol for playing station (vertically centered, right-aligned)
-        if isPlaying {
-            let stop = NSTextField(labelWithString: "⏹")
-            stop.font = NSFont.systemFont(ofSize: 11)
-            stop.textColor = NSColor.secondaryLabelColor
-            stop.sizeToFit()
-            stop.frame = NSRect(
-                x: bounds.width - 28,
-                y: (Self.viewHeight - stop.frame.height) / 2,
-                width: 16,
-                height: stop.frame.height
-            )
-            stop.isEditable = false
-            stop.isBordered = false
-            stop.backgroundColor = .clear
-            stop.alignment = .right
-            addSubview(stop)
-        }
-
+        applyPlayingState(isPlaying)
         setupTrackingArea()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Mutate the view in place — add/remove the ⏹ glyph and swap the click
+    /// handler — so the visible submenu flyout refreshes without needing to
+    /// be rebuilt or closed.
+    func update(isPlaying: Bool, clickHandler: @escaping () -> Void) {
+        self.clickHandler = clickHandler
+        applyPlayingState(isPlaying)
+    }
+
+    private func applyPlayingState(_ isPlaying: Bool) {
+        stopLabel?.removeFromSuperview()
+        stopLabel = nil
+
+        guard isPlaying else { return }
+
+        let stop = NSTextField(labelWithString: "⏹")
+        stop.font = NSFont.systemFont(ofSize: 11)
+        stop.textColor = NSColor.secondaryLabelColor
+        stop.sizeToFit()
+        stop.frame = NSRect(
+            x: bounds.width - 28,
+            y: (Self.viewHeight - stop.frame.height) / 2,
+            width: 16,
+            height: stop.frame.height
+        )
+        stop.isEditable = false
+        stop.isBordered = false
+        stop.backgroundColor = .clear
+        stop.alignment = .right
+        addSubview(stop)
+        stopLabel = stop
+        needsDisplay = true
     }
 
     private func setupTrackingArea() {
@@ -567,6 +596,13 @@ class RadioStationItemView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        // Clear the hover background before the click fires: NSMenu dismisses
+        // the flyout on click without calling mouseExited on the reused view,
+        // so the highlight would otherwise persist on the next open.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hoverLayer?.backgroundColor = NSColor.clear.cgColor
+        CATransaction.commit()
         clickHandler?()
     }
 

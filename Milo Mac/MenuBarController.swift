@@ -19,6 +19,17 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
 
     // MARK: - Radio Cache
     private var cachedRadioFavorites: [[String: Any]]?
+    // Persistent submenu instance kept across top-menu rebuilds. Mutating its
+    // items (via populateRadioSubmenu) refreshes the visible flyout in place
+    // without closing it — a new NSMenu per rebuild would detach the open
+    // flyout from the tree and leave it stale.
+    private var radioSubmenu: NSMenu?
+    // Set while a station play/change is in flight. When non-nil, the Radio
+    // row's right-side chevron is replaced by a LoadingSpinner; cleared when
+    // the backend broadcasts is_buffering=false (success or failed stream).
+    private var radioStationLoadingId: String?
+    private var radioStationLoadingTimer: Timer?
+    private let radioStationLoadingTimeout: TimeInterval = 15.0
 
     // MARK: - UI State
     private var activeMenu: NSMenu?
@@ -272,19 +283,37 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                currentState?.activeSource == "radio",
                ["waiting", "active"].contains(currentState?.sourceState.lowercased()),
                cachedRadioFavorites != nil {
-                let radioSubmenu = buildRadioSubmenu()
-                item.submenu = radioSubmenu
+                // Reuse the persistent NSMenu instance across rebuilds: attaching
+                // a new NSMenu each time would orphan an already-displayed flyout
+                // and leave its items stale.
+                let submenu = radioSubmenu ?? NSMenu()
+                radioSubmenu = submenu
+                populateRadioSubmenu(submenu)
+                item.submenu = submenu
 
-                if let containerView = item.view,
-                   let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
-                    let chevronView = NSImageView(image: chevronImage)
-                    chevronView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
-                    chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-                    chevronView.frame = NSRect(x: 276, y: 10, width: 12, height: 12)
-                    containerView.addSubview(chevronView)
+                if let containerView = item.view {
+                    if radioStationLoadingId != nil {
+                        // A station play/change is in flight: swap the chevron
+                        // for a spinner until is_buffering resolves. Match the
+                        // chevron's 50% alpha so the indicator blends in at the
+                        // same visual weight. Register with CircularMenuItem so
+                        // cleanupAllSpinners stops the timer deterministically
+                        // on the next menu rebuild instead of relying on ARC.
+                        let spinner = LoadingSpinner(frame: NSRect(x: 272, y: 7, width: 18, height: 18))
+                        spinner.alphaValue = 0.5
+                        containerView.addSubview(spinner)
+                        spinner.startAnimating()
+                        CircularMenuItem.registerSpinner(spinner)
+                    } else if let chevronImage = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) {
+                        let chevronView = NSImageView(image: chevronImage)
+                        chevronView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
+                        chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+                        chevronView.frame = NSRect(x: 276, y: 10, width: 12, height: 12)
+                        containerView.addSubview(chevronView)
+                    }
                 }
 
-                NSLog("📋 Radio submenu attached: \(radioSubmenu.items.count) items")
+                NSLog("📋 Radio submenu attached: \(submenu.items.count) items, loading=\(radioStationLoadingId != nil)")
             }
         }
     }
@@ -334,24 +363,20 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     }
 
     // MARK: - Radio Submenu
-    private func buildRadioSubmenu() -> NSMenu {
-        let submenu = NSMenu()
-
-        // Utiliser le cache au lieu de fetch async
+    /// Fills (or refills) the given submenu with current favorites and play
+    /// state. When the station set hasn't changed (common case: play/stop a
+    /// favorite), mutates the existing RadioStationItemViews in place so the
+    /// visible flyout refreshes without AppKit tearing it down. Only falls
+    /// back to removeAllItems + re-add when the favorites list itself changes.
+    private func populateRadioSubmenu(_ submenu: NSMenu) {
+        // No favorites cached yet (or empty): show placeholder.
         guard let favorites = cachedRadioFavorites, !favorites.isEmpty else {
-            NSLog("⚠️ buildRadioSubmenu: cache empty or nil (count: \(cachedRadioFavorites?.count ?? 0))")
+            NSLog("⚠️ populateRadioSubmenu: cache empty or nil (count: \(cachedRadioFavorites?.count ?? 0))")
+            submenu.removeAllItems()
             let noFavoritesItem = NSMenuItem(title: L("radio.noFavorites"), action: nil, keyEquivalent: "")
             noFavoritesItem.isEnabled = false
             submenu.addItem(noFavoritesItem)
-            return submenu
-        }
-
-        NSLog("📋 buildRadioSubmenu: \(favorites.count) stations in cache")
-
-        // Log la structure de la première station pour debug
-        if let firstStation = favorites.first {
-            NSLog("🔍 Sample station keys: \(Array(firstStation.keys))")
-            NSLog("🔍 Sample station: \(firstStation)")
+            return
         }
 
         // Trier par ordre alphabétique
@@ -365,23 +390,48 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         let metadataIsPlaying = currentState?.metadata["is_playing"] as? Int == 1
         let currentStationId = (currentState?.activeSource == "radio" && metadataIsPlaying) ?
             currentState?.metadata["station_id"] as? String : nil
-        NSLog("📻 buildRadioSubmenu: is_playing=\(metadataIsPlaying), currentStationId=\(currentStationId ?? "nil")")
+        NSLog("📻 populateRadioSubmenu: is_playing=\(metadataIsPlaying), currentStationId=\(currentStationId ?? "nil")")
 
-        var addedCount = 0
-        // Add each favorite station (synchrone, pas de Task)
+        // Build the expected (id, name, isCurrent) tuples.
+        var expected: [(id: String, name: String, isCurrent: Bool)] = []
         for station in sortedFavorites {
-            guard let stationId = station["id"] as? String,
-                  let stationName = station["name"] as? String else {
-                NSLog("⚠️ Station skipped - missing keys. Available: \(Array(station.keys))")
-                continue
+            guard let id = station["id"] as? String,
+                  let name = station["name"] as? String else { continue }
+            expected.append((id, name, id == currentStationId))
+        }
+
+        // If the set of station ids (and order) already matches, update the
+        // existing views in place. This is the common case triggered by a
+        // play/stop event and is what keeps the open flyout from going stale.
+        let existingStationIds: [String] = submenu.items.compactMap {
+            ($0.view as? RadioStationItemView)?.stationId
+        }
+        if existingStationIds == expected.map({ $0.id }) {
+            for (index, entry) in expected.enumerated() {
+                guard let view = submenu.items[index].view as? RadioStationItemView else { continue }
+                let stationId = entry.id
+                let isCurrentStation = entry.isCurrent
+                view.update(isPlaying: isCurrentStation, clickHandler: { [weak self] in
+                    if isCurrentStation {
+                        self?.handleRadioStationStop(stationId: stationId)
+                    } else {
+                        self?.handleRadioStationPlay(stationId: stationId)
+                    }
+                })
             }
+            NSLog("♻️ populateRadioSubmenu: \(expected.count) stations updated in place")
+            return
+        }
 
-            let isCurrentStation = (stationId == currentStationId)
-
-            // All items use custom views to prevent menu from closing on click
+        // Favorites list itself changed (first build, add/remove, rename): full rebuild.
+        submenu.removeAllItems()
+        for entry in expected {
+            let stationId = entry.id
+            let isCurrentStation = entry.isCurrent
             let stationItem = NSMenuItem()
             let view = RadioStationItemView(
-                stationName: stationName,
+                stationId: stationId,
+                stationName: entry.name,
                 isPlaying: isCurrentStation,
                 clickHandler: { [weak self] in
                     if isCurrentStation {
@@ -392,13 +442,19 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                 }
             )
             stationItem.view = view
-
             submenu.addItem(stationItem)
-            addedCount += 1
         }
+        let addedCount = expected.count
 
-        NSLog("✅ Submenu built: \(addedCount)/\(favorites.count) stations added")
-        return submenu
+        NSLog("✅ Submenu populated: \(addedCount)/\(favorites.count) stations added")
+    }
+
+    /// Refresh the visible radio flyout in place if one is currently attached.
+    /// Called on state updates so the ⏹/▶ affordances on each station reflect
+    /// the backend without closing the menu.
+    private func refreshRadioSubmenuInPlace() {
+        guard let submenu = radioSubmenu else { return }
+        populateRadioSubmenu(submenu)
     }
 
 
@@ -419,6 +475,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     private func handleRadioStationPlay(stationId: String) {
         guard let apiService = connectionManager.getAPIService() else { return }
         NSLog("📻 handleRadioStationPlay: \(stationId)")
+        beginRadioStationLoading(stationId: stationId)
         Task {
             do {
                 try await apiService.playRadioStation(stationId)
@@ -428,7 +485,34 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                 }
             } catch {
                 NSLog("❌ Error playing radio: \(error)")
+                await MainActor.run { self.endRadioStationLoading() }
             }
+        }
+    }
+
+    private func beginRadioStationLoading(stationId: String) {
+        radioStationLoadingId = stationId
+        radioStationLoadingTimer?.invalidate()
+        radioStationLoadingTimer = Timer.scheduledTimer(withTimeInterval: radioStationLoadingTimeout, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                NSLog("⏱️ Radio station loading timeout — clearing spinner")
+                self?.endRadioStationLoading()
+            }
+        }
+        // Refresh the menu so the chevron swaps to a spinner immediately if
+        // the menu is still open on the next display.
+        if let menu = activeMenu {
+            updateMenuInRealTime(menu)
+        }
+    }
+
+    private func endRadioStationLoading() {
+        guard radioStationLoadingId != nil else { return }
+        radioStationLoadingId = nil
+        radioStationLoadingTimer?.invalidate()
+        radioStationLoadingTimer = nil
+        if let menu = activeMenu {
+            updateMenuInRealTime(menu)
         }
     }
 
@@ -855,7 +939,27 @@ extension MenuBarController {
         // Effacer cache si on quitte Radio
         if state.activeSource != "radio" && previousSource == "radio" {
             cachedRadioFavorites = nil
+            radioSubmenu = nil
             NSLog("🗑️ Radio favorites cache cleared")
+        }
+
+        // Clear the chevron→spinner swap as soon as buffering ends — covers
+        // both successful playback start and stream-load failures, so the
+        // spinner never gets stuck. Also clear if radio stops being active.
+        if radioStationLoadingId != nil {
+            if state.activeSource != "radio" {
+                radioStationLoadingId = nil
+                radioStationLoadingTimer?.invalidate()
+                radioStationLoadingTimer = nil
+            } else {
+                let isBuffering = state.metadata["is_buffering"] as? Int == 1
+                if !isBuffering {
+                    NSLog("✅ Radio station loading cleared (is_buffering=false)")
+                    radioStationLoadingId = nil
+                    radioStationLoadingTimer?.invalidate()
+                    radioStationLoadingTimer = nil
+                }
+            }
         }
 
         checkFunctionalityStateChange(state)

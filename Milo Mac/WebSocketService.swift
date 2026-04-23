@@ -155,6 +155,14 @@ class WebSocketService: NSObject {
                 if eventType == "state_changed" || eventType == "transition_complete" || eventType == "transition_start" {
                     self?.handleSystemStateChange(eventData)
                 }
+            case "source":
+                // Backend broadcasts per-source state changes (including radio
+                // play/stop, which carries the new is_playing/station_id in
+                // metadata) under category "source" with full_state attached —
+                // see _FULL_STATE_CATEGORIES in backend/core/state.py.
+                if eventType == "state_changed" {
+                    self?.handleSystemStateChange(eventData)
+                }
             case "volume":
                 if eventType == "volume_changed" {
                     self?.handleVolumeChange(eventData)
