@@ -16,14 +16,14 @@
 			containerPortal = B3A7E04D2E216D2400785117 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = B3A7E0542E216D2400785117;
-			remoteInfo = "Sonoak Menu";
+			remoteInfo = "Milo Mac";
 		};
 		B3A7E06E2E216D2500785117 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = B3A7E04D2E216D2400785117 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = B3A7E0542E216D2400785117;
-			remoteInfo = "Sonoak Menu";
+			remoteInfo = "Milo Mac";
 		};
 /* End PBXContainerItemProxy section */
 
@@ -143,7 +143,7 @@
 			name = "Milo Mac";
 			packageProductDependencies = (
 			);
-			productName = "Sonoak Menu";
+			productName = "Milo Mac";
 			productReference = B3A7E0552E216D2400785117 /* Milo Mac.app */;
 			productType = "com.apple.product-type.application";
 		};
@@ -166,7 +166,7 @@
 			name = "Milo MacTests";
 			packageProductDependencies = (
 			);
-			productName = "Sonoak MenuTests";
+			productName = "Milo MacTests";
 			productReference = B3A7E0632E216D2500785117 /* Milo MacTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
@@ -189,7 +189,7 @@
 			name = "Milo MacUITests";
 			packageProductDependencies = (
 			);
-			productName = "Sonoak MenuUITests";
+			productName = "Milo MacUITests";
 			productReference = B3A7E06D2E216D2500785117 /* Milo MacUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
@@ -578,7 +578,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = "Sonoak Menu";
+				TEST_TARGET_NAME = "Milo Mac";
 			};
 			name = Debug;
 		};
@@ -595,7 +595,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = "Sonoak Menu";
+				TEST_TARGET_NAME = "Milo Mac";
 			};
 			name = Release;
 		};
