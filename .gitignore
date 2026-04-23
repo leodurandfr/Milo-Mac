@@ -23,3 +23,7 @@ Pods/
 # DS_Store
 .DS_Store
 
+# SourceKit-LSP / xcode-build-server (machine-specific paths)
+buildServer.json
+.bsp/
+
