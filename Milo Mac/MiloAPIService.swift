@@ -252,7 +252,7 @@ class MiloAPIService {
     // MARK: - DSP API
 
     func setEqualizer(_ enabled: Bool) async throws {
-        guard let url = buildURL(path: "/api/equalizer/enabled") else {
+        guard let url = buildURL(path: "/api/equalizer/target/local/enabled") else {
             throw APIError.invalidURL
         }
 
