@@ -15,12 +15,19 @@ struct VolumeStatus {
     let dspAvailable: Bool
     let limitMinDb: Double        // Limite min configurée (défaut -80)
     let limitMaxDb: Double        // Limite max configurée (défaut -21)
-    let stepMobileDb: Double      // Step pour les ajustements (défaut 3)
 
     /// Volume arrondi pour affichage
     var displayText: String {
         return "\(Int(round(volumeDb))) dB"
     }
+}
+
+/// Réglages statiques du device, servis en un seul appel par `/api/settings/bulk`
+/// (remplace les anciennes routes par catégorie volume-limits / dock-apps).
+struct BulkSettings {
+    let limitMinDb: Double
+    let limitMaxDb: Double
+    let enabledApps: [String]
 }
 
 class MiloAPIService {
@@ -34,6 +41,14 @@ class MiloAPIService {
     private let host: String
     private let port: Int
     private var resolvedIPv4: String?
+
+    // Limites de volume : config statique du device servie par /api/settings/bulk.
+    // Mises en cache une fois à la connexion (via fetchBulkSettings) pour que le
+    // HUD volume ne tire pas tout le payload /bulk à chaque getVolumeStatus() —
+    // c'est ce que fait le frontend Milō via son settingsStore. Les défauts
+    // correspondent aux valeurs de repli de VolumeHUD.
+    private var cachedLimitMinDb: Double = -80.0
+    private var cachedLimitMaxDb: Double = -21.0
 
     init(host: String, port: Int = 80) {
         self.host = host
@@ -182,50 +197,35 @@ class MiloAPIService {
         }
     }
     
+    /// Lit la valeur de volume + le mode en direct. Les limites proviennent du
+    /// cache amorcé par fetchBulkSettings() à la connexion (plus de fetch REST
+    /// des limites ici — voir la migration vers /bulk). Le step n'est plus porté :
+    /// le pas du raccourci clavier est un réglage local (GlobalHotkeyManager.volumeDeltaDb).
     func getVolumeStatus() async throws -> VolumeStatus {
-        guard let stateUrl = buildURL(path: "/api/volume/state"),
-              let limitsUrl = buildURL(path: "/api/settings/volume-limits"),
-              let stepsUrl = buildURL(path: "/api/settings/volume-steps") else {
+        guard let stateUrl = buildURL(path: "/api/volume/state") else {
             throw APIError.invalidURL
         }
 
-        // Fetch volume state, limits, and steps in parallel
-        async let stateResult = session.data(from: stateUrl)
-        async let limitsResult = session.data(from: limitsUrl)
-        async let stepsResult = session.data(from: stepsUrl)
+        let (stateData, stateResponse) = try await session.data(from: stateUrl)
 
-        let (stateData, stateResponse) = try await stateResult
-        let (limitsData, limitsResponse) = try await limitsResult
-        let (stepsData, stepsResponse) = try await stepsResult
-
-        guard let stateHttp = stateResponse as? HTTPURLResponse, stateHttp.statusCode == 200,
-              let limitsHttp = limitsResponse as? HTTPURLResponse, limitsHttp.statusCode == 200,
-              let stepsHttp = stepsResponse as? HTTPURLResponse, stepsHttp.statusCode == 200 else {
+        guard let stateHttp = stateResponse as? HTTPURLResponse, stateHttp.statusCode == 200 else {
             throw APIError.httpError
         }
 
         guard let stateJson = try JSONSerialization.jsonObject(with: stateData) as? [String: Any],
-              let dataDict = stateJson["data"] as? [String: Any],
-              let limitsJson = try JSONSerialization.jsonObject(with: limitsData) as? [String: Any],
-              let limits = limitsJson["limits"] as? [String: Any],
-              let stepsJson = try JSONSerialization.jsonObject(with: stepsData) as? [String: Any],
-              let stepsConfig = stepsJson["config"] as? [String: Any] else {
+              let dataDict = stateJson["data"] as? [String: Any] else {
             throw APIError.invalidResponse
         }
 
         let volumeDb = (dataDict["global_volume_db"] as? Double) ?? Double(dataDict["global_volume_db"] as? Int ?? 0)
         let mode = dataDict["mode"] as? String ?? "direct"
-        let limitMin = (limits["min_db"] as? Double) ?? Double(limits["min_db"] as? Int ?? 0)
-        let limitMax = (limits["max_db"] as? Double) ?? Double(limits["max_db"] as? Int ?? 0)
-        let stepMobile = (stepsConfig["step_mobile_db"] as? Double) ?? Double(stepsConfig["step_mobile_db"] as? Int ?? 0)
 
         return VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: mode == "multiroom",
             dspAvailable: true,
-            limitMinDb: limitMin,
-            limitMaxDb: limitMax,
-            stepMobileDb: stepMobile
+            limitMinDb: cachedLimitMinDb,
+            limitMaxDb: cachedLimitMaxDb
         )
     }
 
@@ -273,8 +273,14 @@ class MiloAPIService {
 
     // MARK: - Settings API
 
-    func fetchDockApps() async throws -> [String] {
-        guard let url = buildURL(path: "/api/settings/dock-apps") else {
+    /// Récupère les réglages statiques du device (limites volume + dock apps) en un
+    /// seul appel. Remplace les anciennes routes par catégorie /api/settings/volume-limits
+    /// et /api/settings/dock-apps — mêmes sous-clés, enveloppe différente :
+    ///   volume-limits {"limits": {...}} → bulk {"volume_limits": {...}}
+    ///   dock-apps     {"config": {...}} → bulk {"dock_apps": {...}}
+    /// Effet de bord : amorce le cache des limites lu par getVolumeStatus().
+    func fetchBulkSettings() async throws -> BulkSettings {
+        guard let url = buildURL(path: "/api/settings/bulk") else {
             throw APIError.invalidURL
         }
 
@@ -285,13 +291,32 @@ class MiloAPIService {
             throw APIError.httpError
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let config = json["config"] as? [String: Any],
-              let enabledApps = config["enabled_apps"] as? [String] else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw APIError.invalidResponse
         }
 
-        return enabledApps
+        // volume_limits.{min_db,max_db} : sous-clés identiques à l'ancienne route ;
+        // on retombe sur le cache courant si la clé est absente (jamais 0/0).
+        let limits = json["volume_limits"] as? [String: Any]
+        let limitMin = (limits?["min_db"] as? Double) ?? (limits?["min_db"] as? Int).map(Double.init) ?? cachedLimitMinDb
+        let limitMax = (limits?["max_db"] as? Double) ?? (limits?["max_db"] as? Int).map(Double.init) ?? cachedLimitMaxDb
+
+        // dock_apps.enabled_apps : sous-clé identique à l'ancienne route.
+        let dockApps = json["dock_apps"] as? [String: Any]
+        let enabledApps = dockApps?["enabled_apps"] as? [String] ?? []
+
+        cachedLimitMinDb = limitMin
+        cachedLimitMaxDb = limitMax
+
+        return BulkSettings(limitMinDb: limitMin, limitMaxDb: limitMax, enabledApps: enabledApps)
+    }
+
+    /// Met à jour le cache de limites suite à l'événement WS `settings/volume_limits_changed`
+    /// (les limites ont changé côté device). getVolumeStatus() lira ces nouvelles valeurs
+    /// — évite de re-tirer /bulk à chaque séquence du raccourci clavier.
+    func updateCachedLimits(minDb: Double, maxDb: Double) {
+        cachedLimitMinDb = minDb
+        cachedLimitMaxDb = maxDb
     }
 
     // MARK: - Radio API

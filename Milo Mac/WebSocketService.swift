@@ -6,6 +6,8 @@ protocol WebSocketServiceDelegate: AnyObject {
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
+    func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
+    func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
 
 class WebSocketService: NSObject {
@@ -179,6 +181,16 @@ class WebSocketService: NSObject {
                 if eventType == "multiroom_error" {
                     self?.delegate?.didReceiveMultiroomTransitionComplete(success: false)
                 }
+            case "settings":
+                // Réglages statiques poussés en direct par le backend (mêmes events
+                // que le frontend Milō). On garde ainsi le cache limites/dock-apps
+                // frais sans re-tirer /bulk. Le step (volume_steps_changed) est
+                // volontairement ignoré : le pas du raccourci est local.
+                if eventType == "volume_limits_changed" {
+                    self?.handleVolumeLimitsChange(eventData)
+                } else if eventType == "dock_apps_changed" {
+                    self?.handleDockAppsChange(eventData)
+                }
             default:
                 break
             }
@@ -230,7 +242,6 @@ class WebSocketService: NSObject {
 
         let mode = state?["mode"] as? String
         let multiroomEnabled = (mode == "multiroom") || (data["multiroom_enabled"] as? Bool ?? false)
-        let stepMobileDb = data["step_mobile_db"] as? Double ?? 3.0
 
         // Les limites ne sont pas dans les événements WebSocket ;
         // elles sont préservées côté MenuBarController depuis le dernier getVolumeStatus()
@@ -239,11 +250,29 @@ class WebSocketService: NSObject {
             multiroomEnabled: multiroomEnabled,
             dspAvailable: true,
             limitMinDb: 0,
-            limitMaxDb: 0,
-            stepMobileDb: stepMobileDb
+            limitMaxDb: 0
         )
 
         delegate?.didReceiveVolumeUpdate(volumeStatus)
+    }
+
+    // settings/volume_limits_changed → data.limits.{min_db,max_db}
+    // (même enveloppe "limits" que l'ancienne route /api/settings/volume-limits)
+    private func handleVolumeLimitsChange(_ data: [String: Any]) {
+        guard let limits = data["limits"] as? [String: Any],
+              let minDb = (limits["min_db"] as? Double) ?? (limits["min_db"] as? Int).map(Double.init),
+              let maxDb = (limits["max_db"] as? Double) ?? (limits["max_db"] as? Int).map(Double.init),
+              minDb < maxDb else { return }  // garde-fou : jamais de 0/0 ni de plage inversée
+
+        delegate?.didReceiveVolumeLimitsUpdate(minDb: minDb, maxDb: maxDb)
+    }
+
+    // settings/dock_apps_changed → data.config.enabled_apps
+    private func handleDockAppsChange(_ data: [String: Any]) {
+        guard let config = data["config"] as? [String: Any],
+              let enabledApps = config["enabled_apps"] as? [String] else { return }
+
+        delegate?.didReceiveDockAppsUpdate(enabledApps)
     }
 
     // MARK: - Ping

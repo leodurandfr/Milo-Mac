@@ -354,7 +354,7 @@ class GlobalHotkeyManager {
             object: VolumeStatus(
                 volumeDb: localVolumeDb, multiroomEnabled: false,
                 dspAvailable: false, limitMinDb: limitMinDb,
-                limitMaxDb: limitMaxDb, stepMobileDb: volumeDeltaDb
+                limitMaxDb: limitMaxDb
             ),
             userInfo: ["animationDuration": animationDuration]
         )

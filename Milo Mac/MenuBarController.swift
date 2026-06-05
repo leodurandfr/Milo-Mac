@@ -117,13 +117,10 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
             }
 
             Task {
-                // Le volume est mis à jour via WebSocket en temps réel,
-                // pas besoin de le poll ici
-                async let stateResult = self.refreshState()
-                async let dockAppsResult = self.refreshDockApps()
-
-                let stateSuccess = await stateResult
-                let _ = await dockAppsResult
+                // Le volume est mis à jour via WebSocket en temps réel, pas besoin
+                // de le poll ici. Les réglages statiques (dock apps + limites) sont
+                // chargés une fois à la connexion + à l'ouverture du menu, pas ici.
+                let stateSuccess = await self.refreshState()
 
                 await MainActor.run {
                     if stateSuccess {
@@ -785,11 +782,11 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                 // Lancer tous les fetches en parallèle
                 async let stateResult = refreshState()
                 async let volumeResult = refreshVolumeStatus()
-                async let dockAppsResult = includeDockApps ? refreshDockApps() : true
+                async let bulkResult = includeDockApps ? refreshBulkSettings() : true
 
                 let stateSuccess = await stateResult
                 let volumeSuccess = await volumeResult
-                let _ = await dockAppsResult
+                let _ = await bulkResult
 
                 if stateSuccess || volumeSuccess {
                     await MainActor.run {
@@ -841,13 +838,16 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         }
     }
 
+    /// Récupère les réglages statiques (dock apps + limites volume) via /api/settings/bulk.
+    /// Met à jour la liste des apps du dock et, par effet de bord côté MiloAPIService,
+    /// amorce le cache de limites lu par getVolumeStatus().
     @discardableResult
-    private func refreshDockApps() async -> Bool {
+    private func refreshBulkSettings() async -> Bool {
         guard let apiService = connectionManager.getAPIService() else { return false }
 
         do {
-            let apps = try await apiService.fetchDockApps()
-            await MainActor.run { self.enabledDockApps = apps }
+            let settings = try await apiService.fetchBulkSettings()
+            await MainActor.run { self.enabledDockApps = settings.enabledApps }
             return true
         } catch {
             return false
@@ -907,7 +907,16 @@ extension MenuBarController {
 
         hotkeyManager?.startMonitoring()
         startBackgroundRefresh()
-        refreshMenuData(includeDockApps: true)
+
+        // Amorcer le cache des réglages statiques (limites volume + dock apps) via
+        // /api/settings/bulk AVANT le premier refresh volume : getVolumeStatus() lit
+        // les limites en cache, donc ce fetch doit atterrir d'abord pour éviter une
+        // fenêtre où le HUD afficherait les limites par défaut (-80/-21).
+        Task { [weak self] in
+            guard let self else { return }
+            await self.refreshBulkSettings()
+            await MainActor.run { self.refreshMenuData(includeDockApps: false) }
+        }
     }
     
     func miloDidDisconnect() {
@@ -990,8 +999,7 @@ extension MenuBarController {
                 multiroomEnabled: volume.multiroomEnabled,
                 dspAvailable: volume.dspAvailable,
                 limitMinDb: existing.limitMinDb,
-                limitMaxDb: existing.limitMaxDb,
-                stepMobileDb: volume.stepMobileDb
+                limitMaxDb: existing.limitMaxDb
             )
         } else {
             currentVolume = volume
@@ -1015,7 +1023,42 @@ extension MenuBarController {
         }
         volumeController.updateSliderFromWebSocket(volume.volumeDb)
     }
-    
+
+    /// Limites poussées en direct par le backend (settings/volume_limits_changed)
+    /// quand elles changent côté device. On ré-amorce le cache de l'API (lu par
+    /// getVolumeStatus) ET la limite en mémoire pour que le slider du menu et le HUD
+    /// du raccourci utilisent immédiatement les nouvelles bornes — sans re-fetch /bulk.
+    /// Le raccourci relit currentVolume.limit* au début de chaque séquence.
+    func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double) {
+        connectionManager.getAPIService()?.updateCachedLimits(minDb: minDb, maxDb: maxDb)
+
+        if let existing = currentVolume {
+            let updated = VolumeStatus(
+                volumeDb: existing.volumeDb,
+                multiroomEnabled: existing.multiroomEnabled,
+                dspAvailable: existing.dspAvailable,
+                limitMinDb: minDb,
+                limitMaxDb: maxDb
+            )
+            currentVolume = updated
+            volumeController.setCurrentVolume(updated)
+        }
+        volumeController.updateVolumeLimits(minDb: minDb, maxDb: maxDb)
+
+        if isMenuOpen, let menu = activeMenu {
+            updateMenuInRealTime(menu)
+        }
+    }
+
+    /// Apps du dock poussées en direct (settings/dock_apps_changed). Met à jour le
+    /// filtre/ordre des sources ; rebuild si le menu est ouvert.
+    func didReceiveDockAppsUpdate(_ enabledApps: [String]) {
+        enabledDockApps = enabledApps
+        if isMenuOpen, let menu = activeMenu {
+            updateMenuInRealTime(menu)
+        }
+    }
+
     private func clearState() {
         currentState = nil
         currentVolume = nil
