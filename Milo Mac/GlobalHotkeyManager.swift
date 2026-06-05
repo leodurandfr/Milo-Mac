@@ -380,7 +380,7 @@ class GlobalHotkeyManager {
             } catch {
                 // Ignore errors during rapid changes
             }
-            DispatchQueue.main.async {
+            await MainActor.run {
                 self.isSendingVolume = false
                 if self.hasPendingSend {
                     self.hasPendingSend = false
