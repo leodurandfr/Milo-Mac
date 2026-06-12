@@ -18,8 +18,6 @@ private class ThinTextField: NSTextField {
 class VolumeHUD {
     private var window: NSWindow?
     private var containerView: NSView?
-    private var blurView: NSVisualEffectView?
-    private var gradientBorderLayer: CAGradientLayer?
     private var fillView: NSView?
     private var volumeLabel: NSTextField?
     private var hideTimer: Timer?
@@ -29,7 +27,7 @@ class VolumeHUD {
     private let windowHeight: CGFloat = 64
     private let sliderHeight: CGFloat = 32
     private let cornerRadius: CGFloat = 32
-    // Match CSS translateY(-80px) exactly for identical spring feel
+    // Slide distance for the show/hide animation (one HUD height)
     private let slideOffset: CGFloat = 64
     // Extra space below resting position for spring overshoot (peak ~1.148 → 12px below rest)
     private let overshootMargin: CGFloat = 16
@@ -38,20 +36,23 @@ class VolumeHUD {
     private var animationTimer: Timer?
     private var currentOffset: CGFloat = 0
 
+    // Police + attributs construits une seule fois : updateVolume() tourne à
+    // ~33 Hz pendant un appui maintenu du raccourci, pas de lookup par tick.
+    private lazy var labelFont: NSFont = {
+        // Nom exact de la police (trouvé dans les informations du fichier)
+        NSFont(name: "Space Mono Regular", size: 16)
+            ?? NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+    }()
+    private lazy var labelAttributes: [NSAttributedString.Key: Any] = [
+        .font: labelFont,
+        .foregroundColor: NSColor.secondaryLabelColor,
+        .kern: -0.32
+    ]
+    private var lastRenderedText = ""
+
     init() {
         setupWindow()
         setupViews()
-    }
-
-    // Fonction pour obtenir la police Space Mono
-    private func getSpaceMonoFont(size: CGFloat) -> NSFont {
-        // Nom exact de la police (trouvé dans les informations du fichier)
-        if let font = NSFont(name: "Space Mono Regular", size: size) {
-            return font
-        }
-
-        print("⚠️ Space Mono non trouvée, utilisation de la police système monospace")
-        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     private func setupWindow() {
@@ -128,8 +129,7 @@ class VolumeHUD {
         wrapperView.addSubview(containerView)
 
         // Backdrop blur layer (fills container, clipped to rounded rect)
-        blurView = NSVisualEffectView(frame: containerView.bounds)
-        guard let blurView = blurView else { return }
+        let blurView = NSVisualEffectView(frame: containerView.bounds)
         blurView.autoresizingMask = [.width, .height]
         blurView.material = .hudWindow
         blurView.blendingMode = .behindWindow
@@ -139,7 +139,7 @@ class VolumeHUD {
         blurView.layer?.masksToBounds = true
         containerView.addSubview(blurView)
 
-        // Semi-transparent background overlay: rgba(120, 120, 120, 0.16)
+        // Semi-transparent background overlay
         let bgOverlay = NSView(frame: containerView.bounds)
         bgOverlay.autoresizingMask = [.width, .height]
         bgOverlay.wantsLayer = true
@@ -179,20 +179,14 @@ class VolumeHUD {
         volumeLabel = thinLabel
         guard let volumeLabel = volumeLabel else { return }
 
-        let spaceMonoFont = getSpaceMonoFont(size: 16)
-        volumeLabel.font = spaceMonoFont
-
-        let attributedString = NSMutableAttributedString(string: "-60 dB")
-        attributedString.addAttribute(.font, value: spaceMonoFont, range: NSRange(location: 0, length: attributedString.length))
-        attributedString.addAttribute(.kern, value: -0.32, range: NSRange(location: 0, length: attributedString.length))
-        volumeLabel.attributedStringValue = attributedString
+        volumeLabel.font = labelFont
+        volumeLabel.attributedStringValue = NSAttributedString(string: "-60 dB", attributes: labelAttributes)
 
         volumeLabel.textColor = NSColor.secondaryLabelColor
         volumeLabel.frame = NSRect(x: 14, y: (sliderHeight - 16) / 2, width: 80, height: 20.5)
         volumeLabel.alignment = .left
         volumeLabel.backgroundColor = NSColor.clear
         volumeLabel.isBordered = false
-
 
         sliderContainer.addSubview(volumeLabel)
 
@@ -244,12 +238,11 @@ class VolumeHUD {
 
         gradientLayer.mask = maskLayer
         borderView.layer?.addSublayer(gradientLayer)
-        self.gradientBorderLayer = gradientLayer
     }
 
     // Limites de volume en dB (peuvent être mises à jour)
-    private var limitMinDb: Double = -80.0
-    private var limitMaxDb: Double = -21.0
+    private var limitMinDb: Double = VolumeDefaults.limitMinDb
+    private var limitMaxDb: Double = VolumeDefaults.limitMaxDb
 
     func updateLimits(minDb: Double, maxDb: Double) {
         self.limitMinDb = minDb
@@ -258,8 +251,6 @@ class VolumeHUD {
 
     func show(volumeDb: Double) {
         guard let window = window, let layer = containerView?.layer else { return }
-
-        hideTimer?.invalidate()
 
         if isVisible {
             updateVolume(volumeDb)
@@ -311,15 +302,12 @@ class VolumeHUD {
         guard let fillView = fillView,
               let volumeLabel = volumeLabel else { return }
 
-        // --- Mise à jour du texte avec Space Mono (affichage en dB) ---
+        // --- Mise à jour du texte (seulement quand le dB arrondi change) ---
         let volumeText = "\(Int(round(volumeDb))) dB"
-        let spaceMonoFont = getSpaceMonoFont(size: 16)
-
-        let attributedString = NSMutableAttributedString(string: volumeText)
-        attributedString.addAttribute(.font, value: spaceMonoFont, range: NSRange(location: 0, length: attributedString.length))
-        attributedString.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: NSRange(location: 0, length: attributedString.length))
-        attributedString.addAttribute(.kern, value: -0.32, range: NSRange(location: 0, length: attributedString.length))
-        volumeLabel.attributedStringValue = attributedString
+        if volumeText != lastRenderedText {
+            lastRenderedText = volumeText
+            volumeLabel.attributedStringValue = NSAttributedString(string: volumeText, attributes: labelAttributes)
+        }
 
         // --- Calcul largeur/position basé sur les limites dB ---
         let sliderWidth = windowWidth - 32
@@ -359,6 +347,12 @@ class VolumeHUD {
     }
 
     private func scheduleHide() {
+        // Réutiliser le timer en repoussant son échéance : show() est appelé à
+        // chaque tick du raccourci, recréer un Timer 33 fois/s est inutile.
+        if let timer = hideTimer, timer.isValid {
+            timer.fireDate = Date().addingTimeInterval(3.0)
+            return
+        }
         hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
             self?.hide()
         }

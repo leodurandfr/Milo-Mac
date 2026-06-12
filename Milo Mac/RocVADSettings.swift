@@ -65,19 +65,7 @@ enum RocVADPreset: String, CaseIterable {
 
     /// Find which preset matches the given settings, or nil if custom
     static func matchingPreset(for settings: RocVADSettings) -> RocVADPreset? {
-        for preset in allCases {
-            let presetSettings = preset.toSettings()
-            if presetSettings.deviceBuffer == settings.deviceBuffer &&
-               presetSettings.fecEncoding == settings.fecEncoding &&
-               presetSettings.resamplerProfile == settings.resamplerProfile &&
-               presetSettings.packetLength == settings.packetLength &&
-               presetSettings.fecBlockSource == settings.fecBlockSource &&
-               presetSettings.fecBlockRepair == settings.fecBlockRepair &&
-               presetSettings.packetInterleaving == settings.packetInterleaving {
-                return preset
-            }
-        }
-        return nil
+        return allCases.first { $0.toSettings() == settings }
     }
 }
 
@@ -191,7 +179,9 @@ struct RocVADSettings {
 
     // MARK: - UserDefaults Keys
 
-    private enum Keys {
+    // Interne (pas private) : SettingsView lit Keys.showAdvancedOptions au lieu
+    // de re-taper le littéral — une faute de frappe scinderait l'état persisté.
+    enum Keys {
         static let deviceBuffer = "RocVAD.DeviceBuffer"
         static let fecEncoding = "RocVAD.FECEncoding"
         static let resamplerProfile = "RocVAD.ResamplerProfile"
@@ -277,16 +267,6 @@ struct RocVADSettings {
                packetInterleaving != Self.defaultPacketInterleaving
     }
 
-    /// Reset to default values
-    mutating func resetToDefaults() {
-        deviceBuffer = Self.defaultDeviceBuffer
-        fecEncoding = Self.defaultFECEncoding
-        resamplerProfile = Self.defaultResamplerProfile
-        packetLength = Self.defaultPacketLength
-        fecBlockSource = Self.defaultFECBlockSource
-        fecBlockRepair = Self.defaultFECBlockRepair
-        packetInterleaving = Self.defaultPacketInterleaving
-    }
 }
 
 // MARK: - Equatable

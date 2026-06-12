@@ -8,7 +8,9 @@ class VolumeController {
     private var pendingVolumeDb: Double?
     private var lastVolumeAPICall: Date?
     private var volumeDebounceWorkItem: DispatchWorkItem?
-    private var isUserInteracting = false
+    // Lu par MenuBarController pour ne pas reconstruire le menu (et donc
+    // détruire le slider) pendant que l'utilisateur le manipule.
+    private(set) var isUserInteracting = false
     private var lastUserInteraction: Date?
     private var volumeSlider: NSSlider?
     private var currentVolume: VolumeStatus?
@@ -101,6 +103,9 @@ class VolumeController {
         isUserInteracting = false
         volumeDebounceWorkItem?.cancel()
         volumeDebounceWorkItem = nil
+        // Libérer le slider du menu fermé : sinon il reste retenu (avec ses
+        // CALayers) et continue d'être animé par les événements WS volume.
+        volumeSlider = nil
     }
 
     private func sendVolumeUpdate(_ volumeDb: Double) {
@@ -114,13 +119,19 @@ class VolumeController {
         lastVolumeAPICall = Date()
 
         Task {
+            // pendingVolumeDb est manipulé sur le main thread partout ailleurs
+            // (drag du slider, debounce) — repasser par MainActor après l'await.
             do {
                 try await apiService.adjustVolumeDb(delta)
-                if self.pendingVolumeDb == volumeDb {
-                    self.pendingVolumeDb = nil
+                await MainActor.run {
+                    if self.pendingVolumeDb == volumeDb {
+                        self.pendingVolumeDb = nil
+                    }
                 }
             } catch {
-                self.pendingVolumeDb = volumeDb
+                await MainActor.run {
+                    self.pendingVolumeDb = volumeDb
+                }
             }
         }
     }

@@ -41,13 +41,6 @@ class SettingsWindowController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Close the settings window
-    func closeWindow() {
-        window?.close()
-        window = nil
-        hostingController = nil
-    }
-
     // MARK: - Window Creation
 
     @available(macOS 14.0, *)

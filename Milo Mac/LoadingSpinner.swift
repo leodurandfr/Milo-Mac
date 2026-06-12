@@ -114,9 +114,7 @@ class LoadingSpinner: NSView {
     
     func startAnimating() {
         stopAnimating()
-        
-        print("🎬 LoadingSpinner: Starting animation")
-        
+
         // Pour que 12h (position 0) soit case 0 (opacité 1.0), il faut currentStep = 0
         currentStep = 0
         updateOpacities()
@@ -142,18 +140,13 @@ class LoadingSpinner: NSView {
     }
     
     func stopAnimating() {
-        print("🛑 LoadingSpinner: Stopping animation")
+        // Pas de bloc différé ici : stopAnimating() est appelé depuis deinit,
+        // et capturer self dans une closure échappante pendant la
+        // désallocation est un use-after-free. L'invalidation synchrone suffit.
         animationTimer?.invalidate()
         animationTimer = nil
         currentStep = 0  // Reset à la position de départ (12h brillant)
-        
-        // AJOUT : Forcer l'arrêt immédiat de tous les timers actifs
-        RunLoop.main.perform {
-            // S'assurer qu'aucun timer résiduel ne continue
-            self.animationTimer?.invalidate()
-            self.animationTimer = nil
-        }
-        
+
         // Reset des opacités
         updateOpacities()
     }

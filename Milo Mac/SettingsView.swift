@@ -92,13 +92,20 @@ class SettingsViewModel {
 
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
 
-        self.hotkeysEnabled = hotkeyManager?.isCurrentlyMonitoring() ?? false
-        self.volumeDelta = hotkeyManager?.getVolumeDeltaDb() ?? 3
-        self.showVolumeHUDOnAllChanges = UserDefaults.standard.bool(forKey: "ShowVolumeHUDOnAllChanges")
+        self.hotkeysEnabled = hotkeyManager?.isMonitoring ?? false
+        self.volumeDelta = hotkeyManager?.volumeDeltaDb ?? 3
+        self.showVolumeHUDOnAllChanges = UserDefaults.standard.bool(forKey: DefaultsKey.showVolumeHUDOnAllChanges)
 
-        self.rocVADInstalled = rocVADManager?.checkInstallation() ?? false
-        self.macAudioExpanded = UserDefaults.standard.object(forKey: "RocVAD.ShowAdvancedOptions") as? Bool ?? false
+        // Test rapide (présence du binaire) pour ne pas bloquer l'ouverture de
+        // la fenêtre — `roc-vad info` passe par gRPC et peut prendre plusieurs
+        // secondes ; le vrai statut driver est rafraîchi en arrière-plan.
+        self.rocVADInstalled = RocVADManager.isBinaryInstalled
+        self.macAudioExpanded = UserDefaults.standard.object(forKey: RocVADSettings.Keys.showAdvancedOptions) as? Bool ?? false
         self.pendingSettings = rocVADManager?.settings ?? RocVADSettings()
+
+        rocVADManager?.checkInstallation { [weak self] isWorking in
+            self?.rocVADInstalled = isWorking
+        }
     }
 
     // MARK: - Actions
@@ -127,11 +134,11 @@ class SettingsViewModel {
     }
 
     func updateVolumeDelta() {
-        hotkeyManager?.setVolumeDeltaDb(volumeDelta)
+        hotkeyManager?.volumeDeltaDb = volumeDelta
     }
 
     func toggleShowVolumeHUD() {
-        UserDefaults.standard.set(showVolumeHUDOnAllChanges, forKey: "ShowVolumeHUDOnAllChanges")
+        UserDefaults.standard.set(showVolumeHUDOnAllChanges, forKey: DefaultsKey.showVolumeHUDOnAllChanges)
     }
 
     func apply() {
@@ -322,7 +329,7 @@ struct SettingsView: View {
                         }
                 }
                 .onChange(of: vm.macAudioExpanded) { _, newValue in
-                    UserDefaults.standard.set(newValue, forKey: "RocVAD.ShowAdvancedOptions")
+                    UserDefaults.standard.set(newValue, forKey: RocVADSettings.Keys.showAdvancedOptions)
                     vm.onNeedsResize?()
                 }
                 .animation(nil, value: vm.macAudioExpanded)

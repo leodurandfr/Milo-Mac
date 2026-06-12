@@ -1,10 +1,25 @@
 import SwiftUI
 import ServiceManagement
 
+// MARK: - Shared identifiers
+
+/// Clés UserDefaults partagées entre fichiers — une seule définition pour
+/// qu'une faute de frappe ne puisse pas scinder silencieusement l'état persisté.
+enum DefaultsKey {
+    static let showVolumeHUDOnAllChanges = "ShowVolumeHUDOnAllChanges"
+    static let hotkeyVolumeDeltaDb = "HotkeyVolumeDeltaDb"
+}
+
+extension Notification.Name {
+    /// Posté par GlobalHotkeyManager à chaque ajustement local du volume,
+    /// observé par MenuBarController pour synchroniser slider et cache.
+    static let volumeChangedViaHotkey = Notification.Name("VolumeChangedViaHotkey")
+}
+
 @main
 struct Milo_MacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var body: some Scene {
         Settings {
             EmptyView()
@@ -14,43 +29,51 @@ struct Milo_MacApp: App {
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem?
-    var menuBarController: MenuBarController?
-    var rocVADManager: RocVADManager?
-    
+    private var statusItem: NSStatusItem?
+    private var menuBarController: MenuBarController?
+    private var rocVADManager: RocVADManager?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        
+
         if NSApp.activationPolicy() != .accessory {
             NSApp.setActivationPolicy(.prohibited)
             NSApp.setActivationPolicy(.accessory)
         }
-        
-        NSLog(L("log.milo_starting"))
-        
+
+        NSLog("🚀 Milō Mac starting...")
+
         // Démarrer le processus d'installation/setup
         startSetupProcess()
     }
-    
+
     private func startSetupProcess() {
-        rocVADManager = RocVADManager()
-        
-        // Vérifier si roc-vad est installé ET que le driver est chargé
-        if rocVADManager!.checkInstallation() {
-            NSLog("✅ roc-vad installed and driver loaded - configuring device")
-            configureDeviceAndStart()
-        } else if FileManager.default.fileExists(atPath: "/usr/local/bin/roc-vad") {
-            NSLog("⚠️ roc-vad installed but driver not loaded - waiting for initialization")
-            waitForDriverAndConfigure()
-        } else {
+        let manager = RocVADManager()
+        rocVADManager = manager
+
+        guard RocVADManager.isBinaryInstalled else {
             NSLog("❓ roc-vad not installed - showing setup choice")
             showInitialChoice()
+            return
+        }
+
+        // `roc-vad info` interroge le driver via gRPC et peut prendre plusieurs
+        // secondes — async pour ne pas bloquer le lancement (l'icône de menu
+        // n'existe pas encore à ce stade).
+        manager.checkInstallation { [weak self] driverLoaded in
+            if driverLoaded {
+                NSLog("✅ roc-vad installed and driver loaded - configuring device")
+                self?.configureDeviceAndStart()
+            } else {
+                NSLog("⚠️ roc-vad installed but driver not loaded - waiting for initialization")
+                self?.waitForDriverAndConfigure()
+            }
         }
     }
-    
+
     private func waitForDriverAndConfigure() {
         NSLog("⏳ Waiting for roc-vad driver to initialize...")
-        
+
         rocVADManager!.waitForDriverInitialization { [weak self] success in
             DispatchQueue.main.async {
                 if success {
@@ -63,7 +86,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-    
+
     private func configureDeviceAndStart() {
         rocVADManager!.configureDeviceOnly { [weak self] success in
             if success {
@@ -71,11 +94,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 NSLog("⚠️ Device configuration failed, continuing anyway")
             }
-            
+
             self?.initializeMiloApp()
         }
     }
-    
+
     private func showDriverTimeoutAlert() {
         let alert = NSAlert()
         alert.messageText = L("setup.initialization.title")
@@ -83,9 +106,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: L("setup.driver.timeout.continue"))
         alert.addButton(withTitle: L("setup.driver.timeout.restart"))
         alert.alertStyle = .informational
-        
+
         let response = alert.runModal()
-        
+
         if response == .alertFirstButtonReturn {
             // Continuer sans audio Mac
             initializeMiloApp()
@@ -94,24 +117,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             restartMac()
         }
     }
-    
-    private func showDriverNotLoadedAlert() {
-        let alert = NSAlert()
-        alert.messageText = L("setup.restart.required")
-        alert.informativeText = L("setup.restart.message")
-        alert.addButton(withTitle: L("setup.restart.now"))
-        alert.addButton(withTitle: L("setup.restart.continue_without"))
-        alert.alertStyle = .informational
-        
-        let response = alert.runModal()
-        
-        if response == .alertFirstButtonReturn {
-            restartMac()
-        } else {
-            initializeMiloApp()
-        }
-    }
-    
+
     private func showInitialChoice() {
         let alert = NSAlert()
         alert.messageText = L("setup.main.title")
@@ -119,9 +125,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: L("setup.main.install_button"))
         alert.addButton(withTitle: L("setup.main.cancel_button"))
         alert.alertStyle = .informational
-        
+
         let response = alert.runModal()
-        
+
         if response == .alertFirstButtonReturn {
             NSLog("🔧 User chose to install roc-vad")
             startInstallationProcess()
@@ -130,13 +136,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
         }
     }
-    
+
     private func startInstallationProcess() {
         guard let rocVADManager = rocVADManager else {
             initializeMiloApp()
             return
         }
-        
+
         // Installer avec retour visuel
         rocVADManager.performInstallation { [weak self] success in
             DispatchQueue.main.async {
@@ -148,7 +154,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
-    
+
     private func showRestartChoice() {
         let alert = NSAlert()
         alert.messageText = L("setup.installation.completed")
@@ -156,9 +162,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: L("setup.installation.completed.restart_auto"))
         alert.addButton(withTitle: L("setup.installation.completed.restart_later"))
         alert.alertStyle = .informational
-        
+
         let response = alert.runModal()
-        
+
         if response == .alertFirstButtonReturn {
             // Activer launch at login puis redémarrer
             enableLaunchAtLogin()
@@ -169,7 +175,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
         }
     }
-    
+
     private func showInstallationError() {
         let alert = NSAlert()
         alert.messageText = L("setup.installation.error")
@@ -177,9 +183,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: L("setup.installation.error.retry"))
         alert.addButton(withTitle: L("setup.installation.error.cancel"))
         alert.alertStyle = .warning
-        
+
         let response = alert.runModal()
-        
+
         if response == .alertFirstButtonReturn {
             startInstallationProcess()
         } else {
@@ -187,44 +193,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
         }
     }
-    
+
     private func enableLaunchAtLogin() {
         NSLog("🔧 Enabling launch at login...")
-        
+
         if #available(macOS 13.0, *) {
             do {
                 try SMAppService.mainApp.register()
                 NSLog("✅ Launch at login enabled")
             } catch {
-                NSLog("❌ Failed to enable launch at login: \(error)")
+                NSLog("❌ Failed to enable launch at login: %@", String(describing: error))
             }
         } else {
-            // Fallback pour macOS plus anciens
-            let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
-            SMLoginItemSetEnabled(bundleIdentifier as CFString, true)
-            NSLog("✅ Launch at login enabled (legacy)")
+            // SMLoginItemSetEnabled ne fonctionne que pour un helper embarqué,
+            // pas pour le bundle principal — il n'y a pas d'équivalent fiable
+            // avant macOS 13, donc on ne prétend pas avoir réussi.
+            NSLog("⚠️ Launch at login requires macOS 13+ - skipped")
         }
     }
-    
-    private func isLaunchAtLoginEnabled() -> Bool {
-        if #available(macOS 13.0, *) {
-            return SMAppService.mainApp.status == .enabled
-        } else {
-            return false
-        }
-    }
-    
+
     private func restartMac() {
         NSLog("🔄 Restarting Mac...")
-        
+
         let script = """
         do shell script "sudo shutdown -r now" with administrator privileges
         """
-        
+
         let appleScript = NSAppleScript(source: script)
         appleScript?.executeAndReturnError(nil)
     }
-    
+
     private func initializeMiloApp() {
         NSLog("🎯 Initializing Milo app interface...")
 
@@ -237,7 +235,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSLog("✅ Milo Mac ready")
     }
-    
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         return false
     }

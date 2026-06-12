@@ -55,13 +55,17 @@ class MiloConnectionManager: NSObject {
 
     // State machine
     private var phase: ConnectionPhase = .idle {
-        didSet { NSLog("🔄 Connection phase: \(oldValue) → \(phase)") }
+        didSet { NSLog("🔄 Connection phase: %@ → %@", oldValue.description, phase.description) }
     }
     private var connectionGeneration: Int = 0
 
     // Services
     private let webSocketService = WebSocketService()
-    private var apiService: MiloAPIService?
+    /// Service HTTP de la connexion active. Créé à la connexion, nil sinon.
+    private(set) var apiService: MiloAPIService?
+    /// Instance unique réutilisée pour les 20 tests de readiness — en créer une
+    /// par tentative laissait fuiter deux URLSessions toutes les 2 secondes.
+    private var probeAPIService: MiloAPIService?
 
     // mDNS/Bonjour Discovery
     private var serviceBrowser: NetServiceBrowser?
@@ -82,23 +86,12 @@ class MiloConnectionManager: NSObject {
     private func setupSleepWakeNotifications() {
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
-            selector: #selector(systemWillSleep),
-            name: NSWorkspace.willSleepNotification,
-            object: nil
-        )
-
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self,
             selector: #selector(systemDidWake),
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
 
-        NSLog("💤 Sleep/wake notifications registered")
-    }
-
-    @objc private func systemWillSleep() {
-        NSLog("💤 System going to sleep - preparing for sleep...")
+        NSLog("💤 Wake notification registered")
     }
 
     @objc private func systemDidWake() {
@@ -134,28 +127,9 @@ class MiloConnectionManager: NSObject {
 
     /// Résout le hostname en IPv4, teste la latence de toutes les IPs et sélectionne la meilleure
     private func resolveIPv4Address() {
-        let cfHost = CFHostCreateWithName(nil, self.host as CFString).takeRetainedValue()
-        CFHostStartInfoResolution(cfHost, .addresses, nil)
-
-        var allIPv4: [String] = []
-
-        var success: DarwinBoolean = false
-        if let addresses = CFHostGetAddressing(cfHost, &success)?.takeUnretainedValue() as NSArray? {
-            for case let address as NSData in addresses {
-                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                if getnameinfo(address.bytes.assumingMemoryBound(to: sockaddr.self),
-                             socklen_t(address.length),
-                             &hostname,
-                             socklen_t(hostname.count),
-                             nil, 0, NI_NUMERICHOST) == 0 {
-                    let ipAddress = String(cString: hostname)
-                    // Ne garder que les IPv4 (pas d'IPv6 avec ":")
-                    if !ipAddress.contains(":") {
-                        allIPv4.append(ipAddress)
-                        NSLog("📍 Found IPv4: \(ipAddress)")
-                    }
-                }
-            }
+        let allIPv4 = IPv4Resolver.resolveAll(host: host)
+        for ip in allIPv4 {
+            NSLog("📍 Found IPv4: %@", ip)
         }
 
         // Si plusieurs IPs trouvées, sélectionner la meilleure par latence
@@ -163,14 +137,14 @@ class MiloConnectionManager: NSObject {
             selectBestIP(from: allIPv4)
         } else if let firstIP = allIPv4.first {
             resolvedIPv4 = firstIP
-            NSLog("✅ Resolved \(self.host) to IPv4: \(firstIP)")
+            NSLog("✅ Resolved %@ to IPv4: %@", host, firstIP)
             rocVADManager?.updateMiloHost(firstIP)
         }
     }
 
     /// Sélectionne la meilleure IP parmi plusieurs candidats en testant la latence
     private func selectBestIP(from candidates: [String]) {
-        NSLog("🔄 Testing latency for \(candidates.count) IP candidates...")
+        NSLog("🔄 Testing latency for %d IP candidates...", candidates.count)
 
         let group = DispatchGroup()
         var results: [(ip: String, latency: TimeInterval)] = []
@@ -183,9 +157,9 @@ class MiloConnectionManager: NSObject {
                     resultsLock.lock()
                     results.append((ip, latency))
                     resultsLock.unlock()
-                    NSLog("📊 Latency to \(ip): \(String(format: "%.1f", latency * 1000))ms")
+                    NSLog("📊 Latency to %@: %.1fms", ip, latency * 1000)
                 } else {
-                    NSLog("⚠️ Failed to measure latency to \(ip)")
+                    NSLog("⚠️ Failed to measure latency to %@", ip)
                 }
                 group.leave()
             }
@@ -198,14 +172,20 @@ class MiloConnectionManager: NSObject {
             NSLog("⚠️ Latency test timed out, using first available IP")
         }
 
+        // Lire sous verrou : en cas de timeout, des probes retardataires peuvent
+        // encore écrire dans `results` depuis leurs queues.
+        resultsLock.lock()
+        let snapshot = results
+        resultsLock.unlock()
+
         // Sélectionner l'IP avec la meilleure latence
-        if let best = results.min(by: { $0.latency < $1.latency }) {
+        if let best = snapshot.min(by: { $0.latency < $1.latency }) {
             resolvedIPv4 = best.ip
-            NSLog("✅ Selected best IP: \(best.ip) (\(String(format: "%.1f", best.latency * 1000))ms)")
+            NSLog("✅ Selected best IP: %@ (%.1fms)", best.ip, best.latency * 1000)
             rocVADManager?.updateMiloHost(best.ip)
         } else if let firstIP = candidates.first {
             resolvedIPv4 = firstIP
-            NSLog("✅ Fallback to first IP: \(firstIP)")
+            NSLog("✅ Fallback to first IP: %@", firstIP)
             rocVADManager?.updateMiloHost(firstIP)
         }
     }
@@ -289,19 +269,8 @@ class MiloConnectionManager: NSObject {
         }
     }
 
-    func getAPIService() -> MiloAPIService? {
-        return apiService
-    }
-
-    func isCurrentlyConnected() -> Bool {
+    var isConnected: Bool {
         return phase.isConnected
-    }
-
-    func forceReconnect() {
-        guard case .connected = phase else { return }
-
-        NSLog("🔄 Forcing reconnection to clear stale state...")
-        handleDisconnection()
     }
 
     // MARK: - mDNS Discovery
@@ -335,23 +304,29 @@ class MiloConnectionManager: NSObject {
     private func startAPIRetry() {
         guard case .discovering = phase else { return }
 
-        NSLog("🔄 Milo detected - starting 20 rapid API tests...")
+        NSLog("🔄 Milo detected - starting %d rapid API tests...", maxRetries)
 
         stopDiscovery()
 
         retryCount = 0
         phase = .testingAPI(attempt: 0)
+        probeAPIService = MiloAPIService(host: host, port: httpPort)
 
-        retryTimer = Timer.scheduledTimer(withTimeInterval: retryInterval, repeats: true) { [weak self] _ in
+        // Mode .common : continuer les tests même si l'utilisateur garde le menu
+        // ouvert (le mode par défaut suspend les timers pendant le tracking).
+        let timer = Timer(timeInterval: retryInterval, repeats: true) { [weak self] _ in
             self?.testAPIWithRetry()
         }
-        retryTimer?.fire()
+        RunLoop.main.add(timer, forMode: .common)
+        retryTimer = timer
+        timer.fire()
     }
 
     private func stopRetry() {
         retryTimer?.invalidate()
         retryTimer = nil
         retryCount = 0
+        probeAPIService = nil
     }
 
     private func testAPIWithRetry() {
@@ -359,26 +334,26 @@ class MiloConnectionManager: NSObject {
 
         retryCount += 1
         phase = .testingAPI(attempt: retryCount)
-        NSLog("🔍 API test \(retryCount)/\(maxRetries)...")
+        NSLog("🔍 API test %d/%d...", retryCount, maxRetries)
 
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             guard case .testingAPI = self.phase else { return }
+            guard let probe = self.probeAPIService else { return }
 
             do {
-                let testAPI = MiloAPIService(host: self.host, port: self.httpPort)
-                _ = try await testAPI.fetchState()
+                _ = try await probe.fetchState()
 
                 guard case .testingAPI = self.phase else { return }
-                NSLog("✅ API ready after \(self.retryCount) attempts!")
+                NSLog("✅ API ready after %d attempts!", self.retryCount)
                 await self.connectToMilo()
 
             } catch {
                 guard case .testingAPI = self.phase else { return }
-                NSLog("❌ API test \(self.retryCount) failed: \(error.localizedDescription)")
+                NSLog("❌ API test %d failed: %@", self.retryCount, error.localizedDescription)
 
                 if self.retryCount >= self.maxRetries {
-                    NSLog("🚫 20 attempts failed - resuming mDNS discovery...")
+                    NSLog("🚫 %d attempts failed - resuming mDNS discovery...", self.maxRetries)
                     self.resumeDiscoveryAfterFailure()
                 }
             }
@@ -400,7 +375,7 @@ class MiloConnectionManager: NSObject {
         connectionGeneration += 1
         let myGeneration = connectionGeneration
 
-        NSLog("🔌 Connecting to Milo (gen \(myGeneration))...")
+        NSLog("🔌 Connecting to Milo (gen %d)...", myGeneration)
 
         stopRetry()
         phase = .connecting
@@ -424,7 +399,10 @@ class MiloConnectionManager: NSObject {
         NSLog("🎉 Milo connected successfully!")
 
         phase = .connected
-        apiService = MiloAPIService(host: host, port: httpPort)
+        // Transmettre l'IP validée par le test de latence : laisser le service
+        // HTTP re-résoudre de son côté pourrait choisir une autre adresse
+        // (interface Wi-Fi vs Ethernet du Pi, bail périmé) que celle sondée.
+        apiService = MiloAPIService(host: host, port: httpPort, resolvedIPv4: resolvedIPv4)
         delegate?.miloDidConnect()
     }
 
@@ -462,6 +440,20 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
         handleDisconnection()
     }
 
+    func webSocketDidFailToConnect() {
+        // Handshake jamais abouti (port 8000 fermé, service WS pas encore prêt).
+        // Sans cette voie de sortie, la machine resterait en .connecting pour
+        // toujours : mDNS et retry sont déjà arrêtés à ce stade. On ne réagit
+        // qu'en phase .connecting — un teardown volontaire (stop, sleep/wake)
+        // ne doit pas ressusciter la découverte via un callback tardif.
+        guard case .connecting = phase else { return }
+
+        NSLog("💔 WebSocket handshake failed - resuming discovery...")
+        stopRetry()
+        phase = .discovering
+        startDiscovery()
+    }
+
     func didReceiveStateUpdate(_ state: MiloState) {
         delegate?.didReceiveStateUpdate(state)
     }
@@ -486,7 +478,7 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 // MARK: - NetServiceBrowserDelegate
 extension MiloConnectionManager: NetServiceBrowserDelegate {
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        NSLog("🔍 Found service: \(service.name) (type: \(service.type), domain: \(service.domain))")
+        NSLog("🔍 Found service: %@ (type: %@, domain: %@)", service.name, service.type, service.domain)
 
         guard case .discovering = phase else { return }
 
@@ -496,7 +488,7 @@ extension MiloConnectionManager: NetServiceBrowserDelegate {
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        NSLog("📤 Service removed: \(service.name)")
+        NSLog("📤 Service removed: %@", service.name)
 
         let serviceName = service.name.lowercased()
         let hostName = service.hostName?.lowercased() ?? ""
@@ -528,7 +520,7 @@ extension MiloConnectionManager: NetServiceBrowserDelegate {
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
-        NSLog("❌ mDNS browser search failed: \(errorDict)")
+        NSLog("❌ mDNS browser search failed: %@", String(describing: errorDict))
     }
 }
 
@@ -536,7 +528,7 @@ extension MiloConnectionManager: NetServiceBrowserDelegate {
 extension MiloConnectionManager: NetServiceDelegate {
     func netServiceDidResolveAddress(_ sender: NetService) {
         let hostName = sender.hostName ?? ""
-        NSLog("✅ Service resolved: \(sender.name) -> hostname: \(hostName)")
+        NSLog("✅ Service resolved: %@ -> hostname: %@", sender.name, hostName)
 
         resolvingServices.remove(sender)
 
@@ -547,15 +539,15 @@ extension MiloConnectionManager: NetServiceDelegate {
 
         let cleanedHostname = hostName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         if cleanedHostname == "milo.local" {
-            NSLog("🎯 Confirmed Milo service (hostname: \(hostName)) - starting rapid API tests...")
+            NSLog("🎯 Confirmed Milo service (hostname: %@) - starting rapid API tests...", hostName)
             startAPIRetry()
         } else {
-            NSLog("⏭️  Skipping service \(sender.name) (hostname: \(hostName)) - not milo.local")
+            NSLog("⏭️  Skipping service %@ (hostname: %@) - not milo.local", sender.name, hostName)
         }
     }
 
     func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
-        NSLog("⚠️ Failed to resolve service \(sender.name): \(errorDict)")
+        NSLog("⚠️ Failed to resolve service %@: %@", sender.name, String(describing: errorDict))
         resolvingServices.remove(sender)
     }
 }

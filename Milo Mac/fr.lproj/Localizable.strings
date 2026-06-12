@@ -18,9 +18,7 @@
 "source.cd" = "Lecteur CD";
 
 // MARK: - Radio
-"radio.favorites" = "Radios favorites";
 "radio.noFavorites" = "Aucune station favorite";
-"radio.loadError" = "Erreur de chargement";
 
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
@@ -44,11 +42,8 @@
 // Mac Audio section
 "settings.preset" = "Préréglage";
 "settings.buffer" = "Buffer";
-"settings.buffer.low" = "Faible latence";
-"settings.buffer.high" = "Stable";
 "settings.fec" = "Correction d'erreur";
 "settings.quality" = "Qualité";
-"settings.advanced" = "Options avancées";
 "settings.packet_length" = "Longueur paquet";
 "settings.fec_source" = "Paquets source FEC";
 "settings.fec_repair" = "Paquets réparation FEC";
@@ -64,7 +59,6 @@
 "setup.installation.title" = "Installation Milō Mac";
 "setup.installation.completed" = "Installation terminée";
 "setup.installation.error" = "Erreur d'installation";
-"setup.restart.required" = "Redémarrage requis";
 "setup.initialization.title" = "Initialisation en cours";
 
 // MARK: - Setup/Installation - Messages
@@ -79,10 +73,6 @@
 "setup.installation.error.message" = "L'installation de Milō Mac a échoué. Voulez-vous réessayer ?";
 "setup.installation.error.retry" = "Réessayer";
 "setup.installation.error.cancel" = "Annuler";
-
-"setup.restart.message" = "Milō est installé sur le Mac mais le driver audio n'est pas encore chargé.\n\nVeuillez redémarrer votre ordinateur pour que la sortie audio \"Milō\" soit disponible.";
-"setup.restart.now" = "Redémarrer maintenant";
-"setup.restart.continue_without" = "Continuer sans l'émetteur audio Mac";
 
 "setup.driver.timeout.message" = "Le driver audio Milō prend plus de temps que prévu à s'initialiser.\n\nVous pouvez continuer sans la fonctionnalité audio Mac ou redémarrer pour réessayer.";
 "setup.driver.timeout.continue" = "Continuer sans audio Mac";
@@ -99,16 +89,9 @@
 "progress.driver_waiting_attempt" = "Attente d'initialisation du driver... (tentative %d/%d)";
 "progress.driver_initialized" = "Driver initialisé avec succès !";
 
-// MARK: - Volume HUD
-"volume.percentage" = "%d %%";
-
 // MARK: - Accessibility
 "accessibility.volume_slider" = "Curseur de Volume";
 "accessibility.milo_icon" = "Milo";
-
-// MARK: - Buttons
-"button.decrease" = "−";
-"button.increase" = "+";
 
 // MARK: - ROC VAD Settings (enum localization)
 "config.rocvad.fec.rs8m" = "Standard (RS8M)";
@@ -123,8 +106,3 @@
 "config.rocvad.preset.high_quality" = "Haute qualité";
 "config.rocvad.preset.custom" = "Personnalisé";
 "progress.applying_settings" = "Application des paramètres audio...";
-
-// MARK: - Logging/Debug (optional, can remain in English)
-"log.milo_starting" = "Milō Mac starting...";
-"log.installation_success" = "roc-vad installation completed successfully";
-"log.installation_failed" = "roc-vad installation failed";

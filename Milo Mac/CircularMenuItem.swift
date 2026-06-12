@@ -23,31 +23,18 @@ class CircularMenuItem {
     private static let textHeight: CGFloat = 16
     private static let textTopMargin: CGFloat = 8
     private static let circleLeftMargin: CGFloat = 14
-    
+
     // MARK: - Gestion globale des spinners
     private static var activeSpinners: [LoadingSpinner] = []
-    
+
     // MARK: - Public Interface
-    static func create(with config: MenuItemConfig) -> NSMenuItem {
-        let item = NSMenuItem()
-        item.target = config.target
-        item.action = config.action
-        item.representedObject = config.representedObject
-        
-        let containerView = createContainerView(config: config, menuItem: item)
-        item.view = containerView
-        
-        return item
-    }
-    
-    // MARK: - Public Interface avec support loading
     static func createWithLoadingSupport(with config: MenuItemConfig, isLoading: Bool = false, loadingIsActive: Bool = false) -> NSMenuItem {
         let item = NSMenuItem()
         item.target = config.target
         item.action = config.action
         item.representedObject = config.representedObject
 
-        let containerView = createContainerViewWithLoading(config: config, menuItem: item, isLoading: isLoading, loadingIsActive: loadingIsActive)
+        let containerView = createContainerView(config: config, menuItem: item, isLoading: isLoading, loadingIsActive: loadingIsActive)
         item.view = containerView
 
         return item
@@ -57,23 +44,20 @@ class CircularMenuItem {
     static func cleanupAllSpinners() {
         for spinner in activeSpinners {
             spinner.stopAnimating()
+            spinner.removeFromSuperview()
         }
         activeSpinners.removeAll()
     }
 
     /// Register an externally-created spinner so it gets stopped by
     /// cleanupAllSpinners on the next menu rebuild, matching the lifecycle of
-    /// spinners created internally by createCircleViewWithLoading.
+    /// spinners created internally by createCircleView.
     static func registerSpinner(_ spinner: LoadingSpinner) {
         activeSpinners.append(spinner)
     }
 
     // MARK: - Private Methods
-    private static func createContainerView(config: MenuItemConfig, menuItem: NSMenuItem) -> NSView {
-        return createContainerViewWithLoading(config: config, menuItem: menuItem, isLoading: false, loadingIsActive: false)
-    }
-
-    private static func createContainerViewWithLoading(config: MenuItemConfig, menuItem: NSMenuItem, isLoading: Bool, loadingIsActive: Bool = false) -> NSView {
+    private static func createContainerView(config: MenuItemConfig, menuItem: NSMenuItem, isLoading: Bool, loadingIsActive: Bool) -> NSView {
         let containerView = HoverableView(frame: NSRect(
             x: 0,
             y: 0,
@@ -84,14 +68,19 @@ class CircularMenuItem {
         let target = config.target
         let action = config.action
 
-        containerView.clickHandler = { [weak target] in
+        // menuItem capturé weak : NSMenuItem retient la vue (item.view), la vue
+        // retient la closure — une capture forte formerait un cycle qui ferait
+        // fuiter chaque ligne du menu à chaque rebuild. L'item est forcément
+        // vivant tant que sa vue est cliquable (le NSMenu le retient).
+        containerView.clickHandler = { [weak target, weak menuItem] in
+            guard let menuItem else { return }
             _ = target?.perform(action, with: menuItem)
         }
 
         containerView.configureHoverBackground(leftMargin: 5, rightMargin: 5)
 
         // Créer le cercle avec loader ou icône
-        let circleView = createCircleViewWithLoading(config: config, isLoading: isLoading, loadingIsActive: loadingIsActive)
+        let circleView = createCircleView(config: config, isLoading: isLoading, loadingIsActive: loadingIsActive)
         containerView.addSubview(circleView)
 
         // Ajouter le texte
@@ -100,53 +89,41 @@ class CircularMenuItem {
 
         return containerView
     }
-    
-    private static func createCircleView(config: MenuItemConfig) -> NSView {
-        return createCircleViewWithLoading(config: config, isLoading: false, loadingIsActive: false)
-    }
-    
-    private static func createCircleViewWithLoading(config: MenuItemConfig, isLoading: Bool, loadingIsActive: Bool = false) -> NSView {
+
+    private static func createCircleView(config: MenuItemConfig, isLoading: Bool, loadingIsActive: Bool) -> NSView {
         let circleView = NSView(frame: NSRect(
             x: circleLeftMargin,
             y: circleMargin,
             width: circleSize,
             height: circleSize
         ))
-        
+
         circleView.wantsLayer = true
         circleView.layer?.cornerRadius = circleSize / 2
-        
+
         if isLoading {
-            // État loading : fond bleu si loadingIsActive, sinon gris
-            if loadingIsActive {
-                // Fond bleu comme un élément actif
-                if #available(macOS 10.14, *) {
-                    circleView.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-                } else {
-                    circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
-                }
-            } else {
-                // Fond gris pour loading inactif
-                circleView.layer?.backgroundColor = NSColor.systemGray.cgColor
-            }
-            
+            // État loading : fond accent si loadingIsActive, sinon gris
+            circleView.layer?.backgroundColor = loadingIsActive
+                ? NSColor.controlAccentColor.cgColor
+                : NSColor.systemGray.cgColor
+
             // Ajouter le spinner blanc et l'enregistrer
             let spinner = LoadingSpinner(frame: NSRect(x: 0, y: 0, width: circleSize, height: circleSize))
             circleView.addSubview(spinner)
-            activeSpinners.append(spinner) // AJOUT : Enregistrer le spinner
+            activeSpinners.append(spinner)
             spinner.startAnimating()
-            
+
         } else {
             // État normal : couleur selon l'activation + icône
             applyCircleColor(to: circleView, isActive: config.isActive)
-            
+
             let iconView = createIconView(config: config)
             circleView.addSubview(iconView)
         }
-        
+
         return circleView
     }
-    
+
     private static func createIconView(config: MenuItemConfig) -> NSImageView {
         let iconView = NSImageView(frame: NSRect(
             x: 0, // Centrer dans le cercle de 26px
@@ -170,7 +147,7 @@ class CircularMenuItem {
 
         return iconView
     }
-    
+
     private static func createTextField(config: MenuItemConfig) -> NSTextField {
         let textField = NSTextField(labelWithString: config.title)
         textField.font = NSFont.menuFont(ofSize: 13)
@@ -184,89 +161,26 @@ class CircularMenuItem {
         textField.isEditable = false
         textField.isBordered = false
         textField.backgroundColor = NSColor.clear
-        
+
         return textField
     }
-    
+
     private static func applyCircleColor(to circleView: NSView, isActive: Bool) {
-        if isActive {
-            if #available(macOS 10.14, *) {
-                circleView.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-            } else {
-                circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
-            }
-        } else {
-            circleView.layer?.backgroundColor = NSColor.tertiaryLabelColor.cgColor
-        }
-    }
-    
-    // MARK: - Méthode pour mettre à jour un item existant avec loading
-    static func updateItemLoadingState(_ item: NSMenuItem, isLoading: Bool, config: MenuItemConfig, loadingIsActive: Bool = false) {
-        guard let containerView = item.view as? HoverableView,
-              let circleView = containerView.subviews.first(where: { $0.frame.minX == circleLeftMargin }) else {
-            return
-        }
-        
-        // CORRECTION : Toujours nettoyer TOUS les spinners existants d'abord
-        for subview in circleView.subviews {
-            if let spinner = subview as? LoadingSpinner {
-                print("🧹 Nettoyage spinner existant")
-                spinner.stopAnimating()
-                // Retirer de la liste globale
-                if let index = activeSpinners.firstIndex(of: spinner) {
-                    activeSpinners.remove(at: index)
-                }
-                spinner.removeFromSuperview()
-            } else {
-                // Supprimer les autres subviews (icônes, etc.)
-                subview.removeFromSuperview()
-            }
-        }
-        
-        if isLoading {
-            print("🎬 Création d'un nouveau spinner pour loading")
-            
-            // Définir la couleur de fond selon l'état
-            if loadingIsActive {
-                // Fond bleu comme un élément actif
-                if #available(macOS 10.14, *) {
-                    circleView.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-                } else {
-                    circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
-                }
-            } else {
-                // Fond gris pour loading inactif
-                circleView.layer?.backgroundColor = NSColor.systemGray.cgColor
-            }
-            
-            // Créer et ajouter le nouveau spinner
-            let spinner = LoadingSpinner(frame: NSRect(x: 0, y: 0, width: circleSize, height: circleSize))
-            circleView.addSubview(spinner)
-            activeSpinners.append(spinner) // AJOUT : Enregistrer le spinner
-            spinner.startAnimating()
-            
-        } else {
-            print("🛑 Arrêt du loading, retour à l'icône normale")
-            
-            // Retour à l'état normal
-            applyCircleColor(to: circleView, isActive: config.isActive)
-            
-            // Ajouter l'icône normale
-            let iconView = createIconView(config: config)
-            circleView.addSubview(iconView)
-        }
+        circleView.layer?.backgroundColor = isActive
+            ? NSColor.controlAccentColor.cgColor
+            : NSColor.tertiaryLabelColor.cgColor
     }
 }
 
 // MARK: - Icon Provider simplifié
 class IconProvider {
     private static var iconCache: [String: NSImage] = [:]
-    
+
     static func getIcon(_ iconName: String) -> NSImage {
         if let cached = iconCache[iconName] {
             return cached
         }
-        
+
         // Mapper les noms d'icônes vers les noms des assets
         let assetName = mapIconNameToAsset(iconName)
 
@@ -290,7 +204,7 @@ class IconProvider {
         iconCache[iconName] = fallbackIcon
         return fallbackIcon
     }
-    
+
     static func isSFSymbol(_ iconName: String) -> Bool {
         let assetName = mapIconNameToAsset(iconName)
         return NSImage(named: assetName) == nil && NSImage(systemSymbolName: assetName, accessibilityDescription: nil) != nil
@@ -316,14 +230,14 @@ class IconProvider {
             return iconName
         }
     }
-    
+
     private static func createFallbackIcon(_ iconName: String) -> NSImage {
         let size = CGSize(width: 26, height: 26)
         let image = NSImage(size: size)
-        
+
         image.lockFocus()
         NSColor.labelColor.set()
-        
+
         switch iconName {
         case "music.note":
             let path = NSBezierPath(ovalIn: NSRect(x: 6, y: 2, width: 4, height: 4))
@@ -333,7 +247,7 @@ class IconProvider {
             line.line(to: NSPoint(x: 10, y: 12))
             line.lineWidth = 1.5
             line.stroke()
-            
+
         case "bluetooth":
             let path = NSBezierPath()
             path.move(to: NSPoint(x: 9, y: 4))
@@ -344,13 +258,13 @@ class IconProvider {
             path.line(to: NSPoint(x: 9, y: 4))
             path.lineWidth = 2
             path.stroke()
-            
+
         case "desktopcomputer":
             let screen = NSBezierPath(rect: NSRect(x: 4, y: 8, width: 18, height: 12))
             screen.fill()
             let base = NSBezierPath(rect: NSRect(x: 10, y: 6, width: 6, height: 3))
             base.fill()
-            
+
         case "speaker.wave.3":
             let speaker = NSBezierPath(rect: NSRect(x: 4, y: 10, width: 4, height: 6))
             speaker.fill()
@@ -363,12 +277,12 @@ class IconProvider {
                 wave.lineWidth = 1.5
                 wave.stroke()
             }
-            
+
         default:
             let path = NSBezierPath(ovalIn: NSRect(x: 6, y: 6, width: 14, height: 14))
             path.fill()
         }
-        
+
         image.unlockFocus()
         image.isTemplate = true
         return image
@@ -380,22 +294,22 @@ class HoverableView: NSView {
     var clickHandler: (() -> Void)?
     private var trackingArea: NSTrackingArea?
     private var hoverBackgroundLayer: CALayer?
-    
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupView()
     }
-    
+
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupView()
     }
-    
+
     private func setupView() {
         wantsLayer = true
         setupTrackingArea()
     }
-    
+
     func configureHoverBackground(leftMargin: CGFloat, rightMargin: CGFloat) {
         hoverBackgroundLayer = CALayer()
         hoverBackgroundLayer?.frame = NSRect(
@@ -406,50 +320,44 @@ class HoverableView: NSView {
         )
         hoverBackgroundLayer?.cornerRadius = 6
         hoverBackgroundLayer?.backgroundColor = NSColor.clear.cgColor
-        
+
         layer?.insertSublayer(hoverBackgroundLayer!, at: 0)
     }
-    
+
     private func setupTrackingArea() {
         let options: NSTrackingArea.Options = [
             .mouseEnteredAndExited,
             .activeAlways,
             .inVisibleRect
         ]
-        
+
         trackingArea = NSTrackingArea(
             rect: bounds,
             options: options,
             owner: self,
             userInfo: nil
         )
-        
+
         addTrackingArea(trackingArea!)
     }
-    
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        
+
         if let trackingArea = trackingArea {
             removeTrackingArea(trackingArea)
         }
-        
+
         setupTrackingArea()
     }
-    
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateTrackingAreas()
     }
-    
+
     func setHoverActive(_ active: Bool) {
-        let color: NSColor = active ? {
-            if #available(macOS 10.14, *) {
-                return NSColor.tertiaryLabelColor
-            } else {
-                return NSColor.lightGray.withAlphaComponent(0.2)
-            }
-        }() : .clear
+        let color: NSColor = active ? NSColor.tertiaryLabelColor : .clear
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -466,7 +374,7 @@ class HoverableView: NSView {
         super.mouseExited(with: event)
         setHoverActive(false)
     }
-    
+
     override func mouseDown(with event: NSEvent) {
         clickHandler?()
     }
@@ -606,19 +514,6 @@ class RadioStationItemView: NSView {
         clickHandler?()
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        return bounds.contains(point) ? self : nil
-    }
-}
-
-// MARK: - Clickable View
-class ClickableView: NSView {
-    var clickHandler: (() -> Void)?
-    
-    override func mouseDown(with event: NSEvent) {
-        clickHandler?()
-    }
-    
     override func hitTest(_ point: NSPoint) -> NSView? {
         return bounds.contains(point) ? self : nil
     }

@@ -7,17 +7,18 @@ class GlobalHotkeyManager {
     private weak var menuController: MenuBarController?
 
     // MARK: - State
-    private var isMonitoring = false
+    private(set) var isMonitoring = false
     private(set) var volumeHUD: VolumeHUD?
     private(set) var isActivelyAdjusting = false
 
     // MARK: - Repeat Logic
     private var repeatTimer: Timer?
+    private var permissionTimer: Timer?
     private var currentRepeatDirection: String?
     private var repeatStartTime: Date?
     private var localVolumeDb: Double = 0
-    private var limitMinDb: Double = -80
-    private var limitMaxDb: Double = -21
+    private var limitMinDb: Double = VolumeDefaults.limitMinDb
+    private var limitMaxDb: Double = VolumeDefaults.limitMaxDb
     private var isSendingVolume = false
     private var hasPendingSend = false
     private var lastSentVolumeDb: Double = 0
@@ -36,17 +37,18 @@ class GlobalHotkeyManager {
     private let upArrowKeyCode: UInt16 = 126
     private let downArrowKeyCode: UInt16 = 125
     private let rightOptionMask: UInt = 0x40
-    private let volumeDeltaDbKey = "HotkeyVolumeDeltaDb"
     private let defaultVolumeDeltaDb: Double = 3.0  // 3 dB par appui simple
 
     // MARK: - Volume Delta (en dB)
-    private var volumeDeltaDb: Double {
+    /// Pas du raccourci clavier — réglage local (1 à 6 dB), persisté dans
+    /// UserDefaults. Sans rapport avec le step_mobile_db du backend.
+    var volumeDeltaDb: Double {
         get {
-            let saved = UserDefaults.standard.double(forKey: volumeDeltaDbKey)
+            let saved = UserDefaults.standard.double(forKey: DefaultsKey.hotkeyVolumeDeltaDb)
             return saved == 0 ? defaultVolumeDeltaDb : saved
         }
         set {
-            UserDefaults.standard.set(newValue, forKey: volumeDeltaDbKey)
+            UserDefaults.standard.set(max(1.0, min(6.0, newValue)), forKey: DefaultsKey.hotkeyVolumeDeltaDb)
         }
     }
 
@@ -69,6 +71,7 @@ class GlobalHotkeyManager {
     deinit {
         stopCurrentRepeat()
         removeEventMonitors()
+        permissionTimer?.invalidate()
     }
 
     // MARK: - Public Interface
@@ -87,32 +90,8 @@ class GlobalHotkeyManager {
         stopCurrentRepeat()
         isMonitoring = false
         removeEventMonitors()
-    }
-
-    func isCurrentlyMonitoring() -> Bool {
-        return isMonitoring
-    }
-
-    func hasAccessibilityPermissions() -> Bool {
-        return AXIsProcessTrusted()
-    }
-
-    func recheckPermissions() {
-        if AXIsProcessTrusted() {
-            if !isMonitoring {
-                isMonitoring = true
-            }
-            setupEventMonitoring()
-            setupEventTap()
-        }
-    }
-
-    func getVolumeDeltaDb() -> Double {
-        return volumeDeltaDb
-    }
-
-    func setVolumeDeltaDb(_ deltaDb: Double) {
-        volumeDeltaDb = max(1.0, min(6.0, deltaDb))  // 1 à 6 dB
+        permissionTimer?.invalidate()
+        permissionTimer = nil
     }
 
     // MARK: - Event Monitor Setup
@@ -272,8 +251,8 @@ class GlobalHotkeyManager {
         guard isRightOptionPressed else { return }
 
         guard let connectionManager = connectionManager,
-              connectionManager.isCurrentlyConnected(),
-              connectionManager.getAPIService() != nil else {
+              connectionManager.isConnected,
+              connectionManager.apiService != nil else {
             NSSound.beep()
             return
         }
@@ -350,7 +329,7 @@ class GlobalHotkeyManager {
         localVolumeDb = min(limitMaxDb, max(limitMinDb, localVolumeDb + delta))
         volumeHUD?.show(volumeDb: localVolumeDb)
         NotificationCenter.default.post(
-            name: NSNotification.Name("VolumeChangedViaHotkey"),
+            name: .volumeChangedViaHotkey,
             object: VolumeStatus(
                 volumeDb: localVolumeDb, multiroomEnabled: false,
                 dspAvailable: false, limitMinDb: limitMinDb,
@@ -362,7 +341,7 @@ class GlobalHotkeyManager {
 
     private func sendVolumeToDevice() {
         guard !isSendingVolume,
-              let apiService = connectionManager?.getAPIService() else {
+              let apiService = connectionManager?.apiService else {
             hasPendingSend = true
             return
         }
@@ -391,7 +370,7 @@ class GlobalHotkeyManager {
     }
 
     private func refreshVolumeLimitsInBackground() {
-        guard let apiService = connectionManager?.getAPIService() else { return }
+        guard let apiService = connectionManager?.apiService else { return }
 
         Task {
             do {
@@ -429,7 +408,9 @@ class GlobalHotkeyManager {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
-        let options: CFDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
+        // takeUnretainedValue : la constante AX appartient au système — en
+        // prendre la propriété (takeRetainedValue) émettrait un release de trop.
+        let options: CFDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         let result = AXIsProcessTrustedWithOptions(options)
 
         if result {
@@ -442,9 +423,14 @@ class GlobalHotkeyManager {
     }
 
     private func startPermissionMonitoring() {
-        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        // Un seul timer de poll, stocké et invalidé : startMonitoring() est
+        // rappelé à chaque reconnexion — sans cela, chaque cycle empilait un
+        // timer répétitif perpétuel de plus.
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             if AXIsProcessTrusted() {
                 timer.invalidate()
+                self?.permissionTimer = nil
                 self?.isMonitoring = true
                 self?.setupEventMonitoring()
                 self?.setupEventTap()

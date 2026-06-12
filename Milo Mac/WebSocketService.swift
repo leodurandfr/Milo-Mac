@@ -3,6 +3,11 @@ import Foundation
 protocol WebSocketServiceDelegate: AnyObject {
     func webSocketDidConnect()
     func webSocketDidDisconnect()
+    /// La tentative de connexion a échoué avant que le handshake n'aboutisse
+    /// (didOpen jamais reçu). Distinct de webSocketDidDisconnect pour que le
+    /// connection manager puisse relancer la découverte depuis la phase
+    /// .connecting au lieu d'y rester bloqué.
+    func webSocketDidFailToConnect()
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
@@ -17,6 +22,8 @@ class WebSocketService: NSObject {
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var isOpen = false
+    // true entre connect() et didOpen — permet de signaler un échec de handshake.
+    private var isConnecting = false
 
     // Generation tracking (thread-safe via NSLock for background receive callbacks)
     private let generationLock = NSLock()
@@ -45,19 +52,24 @@ class WebSocketService: NSObject {
     // MARK: - Public API
 
     func connect(to urlString: String, generation: Int) {
-        NSLog("🔌 WebSocket connecting to \(urlString) (gen \(generation))")
+        NSLog("🔌 WebSocket connecting to %@ (gen %d)", urlString, generation)
 
         cleanupCurrentConnection()
+        // Ne pas dépendre de l'ordre d'appel du caller (resetSession avant
+        // connect) : l'état "ouvert" appartient au cycle de vie de la connexion.
+        isOpen = false
         currentGeneration = generation
 
         guard let url = URL(string: urlString) else {
-            NSLog("❌ Invalid WebSocket URL: \(urlString)")
+            NSLog("❌ Invalid WebSocket URL: %@", urlString)
             return
         }
 
-        webSocketTask = urlSession?.webSocketTask(with: url)
-        webSocketTask?.resume()
-        startListening(generation: generation)
+        isConnecting = true
+        let task = urlSession!.webSocketTask(with: url)
+        webSocketTask = task
+        task.resume()
+        startListening(task: task, generation: generation)
     }
 
     /// Closes the connection without notifying the delegate.
@@ -65,11 +77,13 @@ class WebSocketService: NSObject {
     func disconnect() {
         cleanupCurrentConnection()
         isOpen = false
+        isConnecting = false
     }
 
     func resetSession() {
         cleanupCurrentConnection()
         isOpen = false
+        isConnecting = false
         urlSession?.invalidateAndCancel()
         setupURLSession()
         NSLog("🔄 WebSocket URLSession reset")
@@ -84,22 +98,25 @@ class WebSocketService: NSObject {
         webSocketTask = nil
     }
 
-    private func startListening(generation: Int) {
-        webSocketTask?.receive { [weak self] result in
+    /// La boucle de réception capture sa propre task : le callback (queue
+    /// déléguée URLSession) ne relit jamais self.webSocketTask, qui est écrit
+    /// sur le main thread — pas de lecture croisée non synchronisée.
+    private func startListening(task: URLSessionWebSocketTask, generation: Int) {
+        task.receive { [weak self] result in
             guard let self = self, self.currentGeneration == generation else { return }
 
             switch result {
             case .success(let message):
                 self.handleMessage(message)
                 if self.currentGeneration == generation {
-                    self.startListening(generation: generation)
+                    self.startListening(task: task, generation: generation)
                 }
 
             case .failure(let error):
-                NSLog("❌ WebSocket receive error (gen \(generation)): \(error.localizedDescription)")
+                NSLog("❌ WebSocket receive error (gen %d): %@", generation, error.localizedDescription)
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self, self.currentGeneration == generation else {
-                        NSLog("💔 Stale WebSocket error (gen \(generation)), ignoring")
+                        NSLog("💔 Stale WebSocket error (gen %d), ignoring", generation)
                         return
                     }
                     self.handleSocketError()
@@ -113,7 +130,14 @@ class WebSocketService: NSObject {
 
         if isOpen {
             isOpen = false
+            isConnecting = false
             delegate?.webSocketDidDisconnect()
+        } else if isConnecting {
+            // Handshake jamais abouti (port fermé, backend WS pas encore prêt) :
+            // sans ce signal, le connection manager resterait en .connecting
+            // pour toujours — aucune autre voie de récupération n'est active.
+            isConnecting = false
+            delegate?.webSocketDidFailToConnect()
         }
     }
 
@@ -132,67 +156,62 @@ class WebSocketService: NSObject {
         }
     }
 
+    /// Événements WebSocket réellement consommés par milo-mac.
+    private enum HandledEvent {
+        /// Toute mise à jour d'état portant full_state (catégories "source" et
+        /// "system", _FULL_STATE_CATEGORIES côté backend). L'état EQ arrive via
+        /// le system/state_changed compagnon, pas via equalizer/enabled_changed.
+        case systemState
+        case volumeChanged
+        case multiroomError
+        case volumeLimitsChanged
+        case dockAppsChanged
+    }
+
     private func parseMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let category = json["category"] as? String,
-              let eventType = json["type"] as? String else {
+              let eventType = json["type"] as? String,
+              let eventData = json["data"] as? [String: Any] else {
             return
         }
 
-        // Ignorer les pings du serveur (keepalive)
-        if category == "system" && eventType == "ping" {
+        // Le backend diffuse en broadcast à TOUS les clients : milo-mac reçoit
+        // donc aussi quantité d'events destinés au frontend web
+        // (settings/fan_status_changed, settings/bt_remote_status_changed,
+        // settings/mac_roc_changed, routing/multiroom_ready, equalizer/levels,
+        // system/ping…) qu'il ne consomme pas. On ne logge et ne traite QUE les
+        // events utiles — le reste est ignoré silencieusement, sans hop main-thread.
+        let handled: HandledEvent
+        switch (category, eventType) {
+        case ("system", "state_changed"),
+             ("system", "transition_complete"),
+             ("system", "transition_start"),
+             ("source", "state_changed"):
+            handled = .systemState
+        case ("volume", "volume_changed"):
+            handled = .volumeChanged
+        case ("routing", "multiroom_error"):
+            handled = .multiroomError
+        case ("settings", "volume_limits_changed"):
+            handled = .volumeLimitsChanged
+        case ("settings", "dock_apps_changed"):
+            handled = .dockAppsChanged
+        default:
             return
         }
 
-        NSLog("📨 WebSocket event: \(category)/\(eventType) (gen \(currentGeneration))")
-
-        guard let eventData = json["data"] as? [String: Any] else {
-            return
-        }
+        NSLog("📨 WebSocket event: %@/%@ (gen %d)", category, eventType, currentGeneration)
 
         DispatchQueue.main.async { [weak self] in
-            switch category {
-            case "system":
-                if eventType == "state_changed" || eventType == "transition_complete" || eventType == "transition_start" {
-                    self?.handleSystemStateChange(eventData)
-                }
-            case "source":
-                // Backend broadcasts per-source state changes (including radio
-                // play/stop, which carries the new is_playing/station_id in
-                // metadata) under category "source" with full_state attached —
-                // see _FULL_STATE_CATEGORIES in backend/core/state.py.
-                if eventType == "state_changed" {
-                    self?.handleSystemStateChange(eventData)
-                }
-            case "volume":
-                if eventType == "volume_changed" {
-                    self?.handleVolumeChange(eventData)
-                }
-            case "plugin":
-                if eventType == "state_changed" {
-                    self?.handleSystemStateChange(eventData)
-                }
-            case "equalizer":
-                if eventType == "enabled_changed" {
-                    self?.handleSystemStateChange(eventData)
-                }
-            case "routing":
-                if eventType == "multiroom_error" {
-                    self?.delegate?.didReceiveMultiroomTransitionComplete(success: false)
-                }
-            case "settings":
-                // Réglages statiques poussés en direct par le backend (mêmes events
-                // que le frontend Milō). On garde ainsi le cache limites/dock-apps
-                // frais sans re-tirer /bulk. Le step (volume_steps_changed) est
-                // volontairement ignoré : le pas du raccourci est local.
-                if eventType == "volume_limits_changed" {
-                    self?.handleVolumeLimitsChange(eventData)
-                } else if eventType == "dock_apps_changed" {
-                    self?.handleDockAppsChange(eventData)
-                }
-            default:
-                break
+            guard let self = self else { return }
+            switch handled {
+            case .systemState:        self.handleSystemStateChange(eventData)
+            case .volumeChanged:      self.handleVolumeChange(eventData)
+            case .multiroomError:     self.delegate?.didReceiveMultiroomTransitionComplete(success: false)
+            case .volumeLimitsChanged: self.handleVolumeLimitsChange(eventData)
+            case .dockAppsChanged:    self.handleDockAppsChange(eventData)
             }
         }
     }
@@ -200,16 +219,7 @@ class WebSocketService: NSObject {
     private func handleSystemStateChange(_ data: [String: Any]) {
         guard let fullState = data["full_state"] as? [String: Any] else { return }
 
-        let state = MiloState(
-            activeSource: fullState["active_source"] as? String ?? "none",
-            sourceState: fullState["source_state"] as? String ?? "active",
-            transitioning: fullState["transitioning"] as? Bool ?? false,
-            multiroomEnabled: fullState["multiroom_enabled"] as? Bool ?? false,
-            equalizerEnabled: fullState["equalizer_effects_enabled"] as? Bool ?? true,
-            metadata: fullState["metadata"] as? [String: Any] ?? [:]
-        )
-
-        delegate?.didReceiveStateUpdate(state)
+        delegate?.didReceiveStateUpdate(MiloState(json: fullState))
 
         // The backend silently pre-sets multiroom_enabled at the start of a
         // routing transition, then broadcasts many intermediate source state
@@ -244,7 +254,7 @@ class WebSocketService: NSObject {
         let multiroomEnabled = (mode == "multiroom") || (data["multiroom_enabled"] as? Bool ?? false)
 
         // Les limites ne sont pas dans les événements WebSocket ;
-        // elles sont préservées côté MenuBarController depuis le dernier getVolumeStatus()
+        // elles sont préservées côté MenuBarController depuis le cache API.
         let volumeStatus = VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: multiroomEnabled,
@@ -279,19 +289,28 @@ class WebSocketService: NSObject {
 
     private func startPingTimer() {
         pingTimer?.invalidate()
-        pingTimer = Timer.scheduledTimer(withTimeInterval: pingInterval, repeats: true) { [weak self] _ in
+        // Mode .common : le keepalive doit continuer pendant le tracking du menu
+        // (le mode par défaut suspend les timers tant qu'un NSMenu est ouvert).
+        let timer = Timer(timeInterval: pingInterval, repeats: true) { [weak self] _ in
             self?.sendPing()
         }
+        RunLoop.main.add(timer, forMode: .common)
+        pingTimer = timer
     }
 
     private func sendPing() {
         guard isOpen else { return }
 
+        // Capturer la génération : un ping de l'ancienne connexion dont le
+        // callback d'erreur arrive après une reconnexion (sleep/wake) ne doit
+        // pas détruire la nouvelle connexion, déjà ouverte.
+        let generation = currentGeneration
         webSocketTask?.sendPing { [weak self] error in
             if let error = error {
-                NSLog("❌ Ping failed: \(error)")
+                NSLog("❌ Ping failed: %@", error.localizedDescription)
                 DispatchQueue.main.async {
-                    self?.handleSocketError()
+                    guard let self = self, self.currentGeneration == generation else { return }
+                    self.handleSocketError()
                 }
             }
         }
@@ -305,7 +324,7 @@ class WebSocketService: NSObject {
 // MARK: - URLSessionWebSocketDelegate
 extension WebSocketService: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        NSLog("✅ WebSocket connected (gen \(currentGeneration))")
+        NSLog("✅ WebSocket connected (gen %d)", currentGeneration)
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, self.webSocketTask === task else {
@@ -313,6 +332,7 @@ extension WebSocketService: URLSessionWebSocketDelegate {
                 return
             }
             self.isOpen = true
+            self.isConnecting = false
             self.startPingTimer()
             self.delegate?.webSocketDidConnect()
         }
@@ -320,7 +340,7 @@ extension WebSocketService: URLSessionWebSocketDelegate {
 
     func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "Unknown"
-        NSLog("🔌 WebSocket closed (gen \(currentGeneration)): \(closeCode.rawValue) - \(reasonString)")
+        NSLog("🔌 WebSocket closed (gen %d): %d - %@", currentGeneration, closeCode.rawValue, reasonString)
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self, self.webSocketTask === task else {
