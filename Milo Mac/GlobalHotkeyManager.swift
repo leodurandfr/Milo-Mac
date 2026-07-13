@@ -4,7 +4,7 @@ import Foundation
 class GlobalHotkeyManager {
     // MARK: - Dependencies
     private weak var connectionManager: MiloConnectionManager?
-    private weak var menuController: MenuBarController?
+    private weak var store: MiloStore?
 
     // MARK: - State
     private(set) var isMonitoring = false
@@ -62,9 +62,9 @@ class GlobalHotkeyManager {
     }
 
     // MARK: - Initialization
-    init(connectionManager: MiloConnectionManager, menuController: MenuBarController) {
+    init(connectionManager: MiloConnectionManager, store: MiloStore) {
         self.connectionManager = connectionManager
-        self.menuController = menuController
+        self.store = store
         self.volumeHUD = VolumeHUD()
     }
 
@@ -268,7 +268,7 @@ class GlobalHotkeyManager {
         // accurate than the lagging server echo). If HUD is visible from an
         // external change, we still resync to pick up the current value.
         let isNewSequence = !isActivelyAdjusting
-        if let volume = menuController?.currentVolume {
+        if let volume = store?.volume {
             if isNewSequence {
                 localVolumeDb = volume.volumeDb
                 lastSentVolumeDb = volume.volumeDb
@@ -379,7 +379,7 @@ class GlobalHotkeyManager {
                     self.limitMinDb = volumeStatus.limitMinDb
                     self.limitMaxDb = volumeStatus.limitMaxDb
                     self.volumeHUD?.updateLimits(minDb: volumeStatus.limitMinDb, maxDb: volumeStatus.limitMaxDb)
-                    self.menuController?.updateVolumeStatus(volumeStatus)
+                    self.store?.updateVolumeStatus(volumeStatus)
                 }
             } catch {
                 // Silencieux - on garde les valeurs en cache

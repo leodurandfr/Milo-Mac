@@ -1,51 +1,40 @@
-import AppKit
 import Foundation
 
+/// Envoi du volume vers le backend, avec debounce.
+///
+/// Ne connaît plus aucune vue : le slider SwiftUI écrit dans `MiloStore.sliderVolumeDb`
+/// et appelle `handleVolumeChange`. La seule chose que ce contrôleur expose à l'UI est
+/// `isUserInteracting`, qui sert à ne pas écraser la valeur que l'utilisateur est en
+/// train de manipuler avec l'écho (retardé) du serveur.
+///
+/// Comme le reste de l'app, cette classe s'utilise exclusivement depuis le main thread.
 class VolumeController {
     weak var apiService: MiloAPIService?
-    weak var activeMenu: NSMenu?
 
     private var pendingVolumeDb: Double?
     private var lastVolumeAPICall: Date?
     private var volumeDebounceWorkItem: DispatchWorkItem?
-    // Lu par MenuBarController pour ne pas reconstruire le menu (et donc
-    // détruire le slider) pendant que l'utilisateur le manipule.
+
+    /// Lu par MiloStore pour ignorer l'écho serveur pendant que l'utilisateur
+    /// fait glisser le slider (sinon la valeur locale et la valeur serveur,
+    /// en retard, se disputent le contrôle).
     private(set) var isUserInteracting = false
     private var lastUserInteraction: Date?
-    private var volumeSlider: NSSlider?
-    private var currentVolume: VolumeStatus?
+
+    /// Dernière valeur connue du serveur : les commandes envoyées sont des
+    /// deltas (`/api/volume/adjust`), pas des valeurs absolues, donc il faut
+    /// une référence pour calculer l'écart.
     private var referenceVolumeDb: Double = 0
 
     private let volumeDebounceDelay: TimeInterval = 0.03
     private let volumeImmediateSendThreshold: TimeInterval = 0.1
     private let userInteractionTimeout: TimeInterval = 0.3
 
-    // Limites de volume stockées séparément (mises à jour depuis l'API/WebSocket)
-    private var limitMinDb: Double = -80.0
-    private var limitMaxDb: Double = -21.0
-
     func setCurrentVolume(_ volume: VolumeStatus) {
-        self.currentVolume = volume
-        // Synchroniser la référence quand l'utilisateur n'interagit pas (serveur = source de vérité)
+        // Le serveur est la source de vérité tant que l'utilisateur ne touche à rien.
         if !isUserInteracting {
             referenceVolumeDb = volume.volumeDb
         }
-    }
-
-    /// Met à jour les limites min/max du volume (appelé au démarrage et quand les limites changent)
-    func updateVolumeLimits(minDb: Double, maxDb: Double) {
-        self.limitMinDb = minDb
-        self.limitMaxDb = maxDb
-        if let slider = volumeSlider {
-            slider.minValue = minDb
-            slider.maxValue = maxDb
-        }
-    }
-
-    func setVolumeSlider(_ slider: NSSlider) {
-        self.volumeSlider = slider
-        slider.minValue = limitMinDb
-        slider.maxValue = limitMaxDb
     }
 
     func handleVolumeChange(_ newVolumeDb: Double) {
@@ -55,7 +44,7 @@ class VolumeController {
 
         let now = Date()
         let shouldSendImmediately = lastVolumeAPICall == nil ||
-                                  now.timeIntervalSince(lastVolumeAPICall!) > volumeImmediateSendThreshold
+                                    now.timeIntervalSince(lastVolumeAPICall!) > volumeImmediateSendThreshold
 
         if shouldSendImmediately {
             sendVolumeUpdate(newVolumeDb)
@@ -64,7 +53,7 @@ class VolumeController {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + userInteractionTimeout) { [weak self] in
-            guard let self = self, let lastInteraction = self.lastUserInteraction else { return }
+            guard let self, let lastInteraction = self.lastUserInteraction else { return }
 
             if Date().timeIntervalSince(lastInteraction) >= self.userInteractionTimeout {
                 self.isUserInteracting = false
@@ -72,45 +61,15 @@ class VolumeController {
         }
     }
 
-    func updateSliderFromWebSocket(_ volumeDb: Double, animated: Bool = true, duration: TimeInterval? = nil) {
-        guard let slider = volumeSlider, !isUserInteracting else { return }
-
-        // Éviter les mises à jour inutiles (tolérance de 0.1 dB)
-        if abs(slider.doubleValue - volumeDb) < 0.1 {
-            return
-        }
-
-        // Désactiver temporairement l'action pour éviter les boucles
-        let originalTarget = slider.target
-        let originalAction = slider.action
-        slider.target = nil
-        slider.action = nil
-
-        // Utiliser setVolumeValue pour mettre à jour les CALayers correctement
-        if let nativeSlider = slider as? NativeVolumeSlider {
-            nativeSlider.setVolumeValue(volumeDb, animated: animated, duration: duration)
-        } else {
-            slider.doubleValue = volumeDb
-        }
-
-        slider.target = originalTarget
-        slider.action = originalAction
-    }
-
     func cleanup() {
-        // Nettoyer les états temporaires
         lastUserInteraction = nil
         isUserInteracting = false
         volumeDebounceWorkItem?.cancel()
         volumeDebounceWorkItem = nil
-        // Libérer le slider du menu fermé : sinon il reste retenu (avec ses
-        // CALayers) et continue d'être animé par les événements WS volume.
-        volumeSlider = nil
     }
 
     private func sendVolumeUpdate(_ volumeDb: Double) {
-        guard let apiService = apiService else { return }
-        guard activeMenu != nil || volumeSlider != nil else { return }
+        guard let apiService else { return }
 
         let delta = volumeDb - referenceVolumeDb
         guard abs(delta) > 0.01 else { return }
@@ -140,8 +99,7 @@ class VolumeController {
         volumeDebounceWorkItem?.cancel()
 
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self = self, let volumeDb = self.pendingVolumeDb else { return }
-            guard self.activeMenu != nil || self.volumeSlider != nil else { return }
+            guard let self, let volumeDb = self.pendingVolumeDb else { return }
             self.sendVolumeUpdate(volumeDb)
         }
 

@@ -4,7 +4,7 @@
 */
 
 // MARK: - Menu Sections
-"menu.volume.title" = "Milō 音量";
+"menu.title" = "Milō";
 "menu.audio_sources.title" = "输出";
 "menu.features.title" = "功能";
 
@@ -55,28 +55,7 @@
 "status.disconnected" = "Milō 未开机";
 
 // MARK: - Setup/Installation - Main Titles
-"setup.main.title" = "Milō Mac 配置";
 "setup.installation.title" = "Milō Mac 安装";
-"setup.installation.completed" = "安装完成";
-"setup.installation.error" = "安装错误";
-"setup.initialization.title" = "正在初始化";
-
-// MARK: - Setup/Installation - Messages
-"setup.main.message" = "Milō 可以接收您 Mac 的音频作为音频源。\n您将能够在 Mac 的声音输出中选择 Milō。";
-"setup.main.install_button" = "继续安装";
-"setup.main.cancel_button" = "取消安装";
-
-"setup.installation.completed.message" = "Milō Mac 安装已成功完成！\n\n要使 \"Milō\" 音频输出可用，您的 Mac 必须重新启动。\n\n您希望 Milō Mac 在启动时自动运行以配置音频设备吗？";
-"setup.installation.completed.restart_auto" = "立即重启";
-"setup.installation.completed.restart_later" = "稍后重启";
-
-"setup.installation.error.message" = "Milō Mac 安装失败。您想重试吗？";
-"setup.installation.error.retry" = "重试";
-"setup.installation.error.cancel" = "取消";
-
-"setup.driver.timeout.message" = "Milō 音频驱动程序初始化时间超出预期。\n\n您可以在不使用 Mac 音频功能的情况下继续，或重新启动以重试。";
-"setup.driver.timeout.continue" = "不使用 Mac 音频继续";
-"setup.driver.timeout.restart" = "立即重启";
 
 // MARK: - Installation Progress Messages
 "progress.preparing" = "正在准备安装...";
@@ -106,3 +85,11 @@
 "config.rocvad.preset.high_quality" = "高品质";
 "config.rocvad.preset.custom" = "自定义";
 "progress.applying_settings" = "正在应用音频设置...";
+
+// MARK: - Mac audio (roc-vad)
+"settings.rocvad.description" = "“Mac”音源将 Mac 的音频发送到 Milō，需要 roc-vad 音频驱动程序。";
+"settings.rocvad.install" = "安装驱动程序";
+"settings.rocvad.installing" = "正在安装…";
+"settings.rocvad.restart_required" = "请重新启动 Mac 以启用 Milō 音频输出。";
+"settings.rocvad.install_failed" = "安装失败，请重试。";
+"source.mac.needs_setup" = "需要驱动程序";

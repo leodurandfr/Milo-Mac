@@ -3,7 +3,6 @@ import ServiceManagement
 
 // MARK: - ViewModel
 
-@available(macOS 14.0, *)
 @Observable
 class SettingsViewModel {
     // Dependencies
@@ -174,9 +173,14 @@ private struct PresetOption: Identifiable, Hashable {
 
 // MARK: - SettingsView
 
-@available(macOS 14.0, *)
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
+
+    /// roc-vad n'est plus un péage au lancement : son état vit ici, et la source « Mac »
+    /// du panneau reste désactivée tant que le driver n'est pas prêt.
+    @Bindable var store: MiloStore
+
+    @State private var installFailed = false
 
     private var presetOptions: [PresetOption] {
         var options = RocVADPreset.allCases.enumerated().map { PresetOption(id: $0.offset, name: $0.element.displayName) }
@@ -221,7 +225,11 @@ struct SettingsView: View {
             }
 
             // MARK: Mac Audio Section
-            if vm.rocVADInstalled {
+            if !vm.rocVADInstalled {
+                macAudioSetupSection
+            } else if store.rocVADNeedsRestart {
+                restartRequiredSection
+            } else {
                 Section(isExpanded: $vm.macAudioExpanded) {
                     // Preset
                     Picker(L("settings.preset"), selection: $vm.selectedPresetIndex) {
@@ -337,5 +345,52 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 400)
+    }
+
+    // MARK: - roc-vad absent
+
+    /// Milō fonctionne sans roc-vad (toutes les sources sauf « Mac »). L'installation est
+    /// donc proposée ici, à la demande — jamais imposée au lancement.
+    private var macAudioSetupSection: some View {
+        Section(L("settings.mac_audio")) {
+            Text(L("settings.rocvad.description"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if installFailed {
+                Label(L("settings.rocvad.install_failed"), systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.callout)
+            }
+
+            HStack {
+                Spacer()
+                Button(store.isInstallingRocVAD ? L("settings.rocvad.installing") : L("settings.rocvad.install")) {
+                    installFailed = false
+                    store.installRocVAD { success in
+                        installFailed = !success
+                        // Le binaire vient d'apparaître : rafraîchir l'état affiché.
+                        vm.rocVADInstalled = RocVADManager.isBinaryInstalled
+                        vm.onNeedsResize?()
+                    }
+                }
+                .disabled(store.isInstallingRocVAD)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .onChange(of: installFailed) { _, _ in vm.onNeedsResize?() }
+    }
+
+    /// Le driver n'est chargé qu'après redémarrage. On l'annonce — on ne redémarre pas le
+    /// Mac à la place de l'utilisateur : un redémarrage forcé ne laisse pas les autres
+    /// applications enregistrer leur travail.
+    private var restartRequiredSection: some View {
+        Section(L("settings.mac_audio")) {
+            Label(L("settings.rocvad.restart_required"), systemImage: "arrow.clockwise.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

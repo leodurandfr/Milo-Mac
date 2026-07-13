@@ -4,7 +4,7 @@
 */
 
 // MARK: - Menu Sections
-"menu.volume.title" = "Milō Volume";
+"menu.title" = "Milō";
 "menu.audio_sources.title" = "Output";
 "menu.features.title" = "Features";
 
@@ -55,28 +55,7 @@
 "status.disconnected" = "Milō is not powered on";
 
 // MARK: - Setup/Installation - Main Titles
-"setup.main.title" = "Milō Mac Configuration";
 "setup.installation.title" = "Milō Mac Installation";
-"setup.installation.completed" = "Installation complete";
-"setup.installation.error" = "Installation error";
-"setup.initialization.title" = "Initialization in progress";
-
-// MARK: - Setup/Installation - Messages
-"setup.main.message" = "Milō can receive audio from your Mac as an audio source.\nYou will be able to select Milō in your Mac's sound outputs.";
-"setup.main.install_button" = "Continue installation";
-"setup.main.cancel_button" = "Cancel installation";
-
-"setup.installation.completed.message" = "Milō Mac installation completed successfully!\n\nFor the \"Milō\" audio output to be available, your Mac must restart.\n\nWould you like Milō Mac to launch automatically at startup to configure the audio device?";
-"setup.installation.completed.restart_auto" = "Restart now";
-"setup.installation.completed.restart_later" = "Restart later";
-
-"setup.installation.error.message" = "Milō Mac installation failed. Would you like to try again?";
-"setup.installation.error.retry" = "Retry";
-"setup.installation.error.cancel" = "Cancel";
-
-"setup.driver.timeout.message" = "The Milō audio driver is taking longer than expected to initialize.\n\nYou can continue without the Mac audio feature or restart to try again.";
-"setup.driver.timeout.continue" = "Continue without Mac audio";
-"setup.driver.timeout.restart" = "Restart now";
 
 // MARK: - Installation Progress Messages
 "progress.preparing" = "Preparing installation...";
@@ -106,3 +85,11 @@
 "config.rocvad.preset.high_quality" = "High Quality";
 "config.rocvad.preset.custom" = "Custom";
 "progress.applying_settings" = "Applying audio settings...";
+
+// MARK: - Mac audio (roc-vad)
+"settings.rocvad.description" = "The “Mac” source sends your Mac’s audio to Milō. It requires the roc-vad audio driver.";
+"settings.rocvad.install" = "Install driver";
+"settings.rocvad.installing" = "Installing…";
+"settings.rocvad.restart_required" = "Restart your Mac to enable the Milō audio output.";
+"settings.rocvad.install_failed" = "Installation failed. Please try again.";
+"source.mac.needs_setup" = "Driver required";
