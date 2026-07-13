@@ -38,7 +38,16 @@ enum MenuRowMetrics {
     static let contentInset: CGFloat = 14
 
     /// Retrait au-dessus du titre, sous le bord du panneau.
-    static let titleTopInset: CGFloat = 16.5
+    ///
+    /// Réglé par comparaison d'ENCRE à ENCRE avec « Son », seule comparaison valable : entre
+    /// le haut d'une vue `Text` et le haut des capitales il y a l'interligne interne de la
+    /// police, qu'aucun padding déclaré ne dit.
+    ///
+    /// Mesuré : le haut des capitales de « Son » est à 16,5 pt du bord du panneau ; le nôtre
+    /// tombait à 20,0 — d'où 16,5 − 3,5 = 13. (Ne pas comparer le haut de l'encre des deux
+    /// chaînes : « Milō » a une hampe (`l`) et un macron qui montent plus haut qu'une
+    /// capitale. On compare la capitale, ou la ligne de base — les deux donnent 3,5.)
+    static let titleTopInset: CGFloat = 13
 
     /// Retrait vertical d'une ligne. Le pas entre deux lignes vaut `iconSize + 2 ×` cette
     /// valeur : 26 + 6,5 = 32,5 pt, le pas mesuré sur Bluetooth.
@@ -47,8 +56,30 @@ enum MenuRowMetrics {
     /// Retrait de la surbrillance au survol par rapport au bord de la ligne.
     static let highlightInset: CGFloat = 5
 
+    /// Rayon des coins de la surbrillance au survol.
+    ///
+    /// Relevé sur « Son » en profilant le coin haut-gauche du masque de survol (obtenu par
+    /// différence entre deux captures, pointeur garé / pointeur sur la ligne) : son bord
+    /// gauche n'est atteint qu'à 9,0 pt du haut de la boîte, contre 3,5 pour notre rayon de 5.
+    ///
+    /// Attention, ces 9,0 ne SONT pas le rayon : en `.continuous` (squircle), la courbe
+    /// s'étire au-delà du rayon nominal, et le rapport entre les deux n'est PAS constant
+    /// (mesuré sur notre propre rendu : 5 → 3,5, mais 13 → 12,0). On calibre donc sur ces
+    /// deux points — L(0) ≈ 1,0625·r − 1,81 — d'où 10 pour viser 9,0.
+    ///
+    /// Vérifié ensuite profil contre profil, ligne par ligne, et non sur un seul chiffre.
+    static let rowHoverCornerRadius: CGFloat = 10
+
     /// Écart entre la pastille et le libellé.
-    static let iconTextGap: CGFloat = 4
+    ///
+    /// Mesuré sur « Son » : l'encre du libellé commence à 49,0 pt du bord du panneau. La
+    /// pastille finissant à 40 (14 + 26), il reste 9,0 pt — dont ~0,5 de chasse à gauche du
+    /// glyphe, d'où 8,5.
+    ///
+    /// Valait 4, ce qui collait le texte à la pastille (encre à 44,5). L'ancien commentaire
+    /// de ce fichier faisait son calcul avec une pastille à 19 pt (49 = 19 + 26 + 4), alors
+    /// que `contentInset` vaut 14 : c'est de là que venait l'erreur.
+    static let iconTextGap: CGFloat = 8.5
 
     static let iconSize: CGFloat = 26
 
@@ -64,11 +95,39 @@ enum MenuRowMetrics {
     static let activeCircleColor = Color.accentColor
         .mix(with: Color(red: 0.2, green: 1, blue: 1), by: 0.18)
 
+    /// Fond d'une ligne survolée.
+    ///
+    /// Et non `.selection`, qui est teinté d'accent (bleu) : ce n'est pas ce que font Son ni
+    /// Bluetooth. Relevé en différenciant deux captures du MÊME panneau, l'une pointeur garé
+    /// au loin, l'autre pointeur sur la ligne. La surbrillance étant une couche translucide,
+    /// `sortie = (1−a)·fond + a·C`, on retrouve `a` et `C` en régressant l'une sur l'autre :
+    /// pente 0,9195 et ordonnée 20,43, identiques sur les trois canaux (R² = 0,994 sur des
+    /// fonds allant de 8 à 231) — soit du BLANC à 8 %.
+    ///
+    /// C'est exactement `secondarySystemFill` (blanc à 7,84 % en sombre). On prend la couleur
+    /// sémantique plutôt que le littéral : en apparence claire elle bascule toute seule sur du
+    /// NOIR à 7,84 %, là où un blanc codé en dur serait invisible.
+    static let rowHoverFill = Color(nsColor: .secondarySystemFill)
+
     /// Taille des deux icônes de haut-parleur qui encadrent le slider.
-    static let sliderIconSize: CGFloat = 13
+    ///
+    /// Cette fois-ci mesurée, et non réglée à l'œil (l'ancienne mesure était cassée). « Son »
+    /// utilise les mêmes symboles que nous (`speaker.fill`, `speaker.wave.3.fill`) : l'encre
+    /// est donc proportionnelle au corps, et le rapport se lit directement.
+    ///
+    ///                        Son          nous à 13      rapport
+    ///   speaker.fill        9,0 × 13,5    7,5 × 11,0     1,20 / 1,23
+    ///   speaker.wave.3.fill 20,5 × 15,0   17,0 × 12,5    1,21 / 1,20
+    ///
+    /// Quatre mesures concordantes → 13 × 1,21 ≈ 15,7.
+    static let sliderIconSize: CGFloat = 15.5
 
     /// Écart entre une icône et le rail.
-    static let sliderIconGap: CGFloat = 6
+    ///
+    /// Ce n'est pas l'écart qu'on VOIT : le `Slider` ajoute ~4,5 pt de marge interne avant
+    /// le début du rail. Mesuré, l'écart encre → rail vaut donc `sliderIconGap + 4,5`.
+    /// À 4, on lit 8,5 pt à l'écran.
+    static let sliderIconGap: CGFloat = 4
 }
 
 /// Géométrie du panneau lui-même, relevée sur « Son » (captures 2x, sur fonds unis).
@@ -78,8 +137,42 @@ enum PanelMetrics {
     static let cornerRadius: CGFloat = 18
 
     /// Écart entre le bas de la barre des menus et le haut du panneau. Mesuré sur « Son » :
-    /// 0,5 pt — le panneau est quasiment collé sous la barre.
+    /// 0,5 pt — le panneau est quasiment collé sous la barre. (Barre des menus : 34 pt ;
+    /// haut du panneau « Son » : 34,5 pt.)
     static let topGap: CGFloat = 0.5
+
+    /// Décalage du bord gauche du panneau par rapport à l'ENCRE de l'icône de la barre des
+    /// menus.
+    ///
+    /// Mesuré sur « Son » : encre du glyphe à 1407,5 pt, bord gauche de son panneau à
+    /// 1396,0 — soit 11,5 pt à gauche.
+    ///
+    /// Le système, lui, s'ancre sur le CADRE du bouton (bord du panneau = bord du cadre
+    /// − 10 pt ; vérifié sur Son ET sur Bluetooth, dont les cadres n'ont pourtant pas la
+    /// même largeur). On ne peut pas reprendre cette règle telle quelle : les boutons
+    /// système sont ajustés à leur glyphe, le nôtre non (40 pt de cadre pour 14 pt d'encre).
+    /// S'ancrer sur l'encre donne le même résultat À L'ŒIL, qui est ce qu'on cherche.
+    static let panelLeftFromIconInk: CGFloat = 11.5
+
+    /// Retrait sous la dernière ligne, au-dessus du bord bas du panneau.
+    ///
+    /// Mesuré sur « Son » : 5 pt entre le bas de la BOÎTE de la dernière ligne (celle que
+    /// dessine la surbrillance) et le bord du panneau.
+    ///
+    /// Ne vaut que pour une dernière ligne de TEXTE — c'est le seul cas qu'on puisse relever,
+    /// Son et Bluetooth finissant tous deux sur un « Réglages… ». Chez nous, c'est le cas
+    /// à l'option-clic, quand le pied (Paramètres / Quitter) est affiché.
+    static let bottomInset: CGFloat = 5
+
+    /// Retrait sous la dernière ligne quand celle-ci porte une PASTILLE (Égaliseur, sans le
+    /// pied) plutôt que du texte.
+    ///
+    /// Une ligne à pastille est plus haute (32,5 pt contre ~22) et son disque s'arrête à
+    /// 3,25 pt du bas de sa boîte : à retrait égal, le panneau paraît se refermer sur le
+    /// disque. Aucun module système ne finit sur une telle ligne — il n'y a donc rien à
+    /// mesurer, et cette valeur est un réglage à l'œil assumé.
+    /// (Réglée avec Léo : 8 → 10, soit 13 pt sous le disque d'Égaliseur.)
+    static let bottomInsetIconRow: CGFloat = 10
 
     /// Fondus d'apparition et de disparition, comme « Son » : vif à l'ouverture, plus lent
     /// à la fermeture.
@@ -131,7 +224,9 @@ struct MenuTitle: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, MenuRowMetrics.textInset)
             .padding(.top, MenuRowMetrics.titleTopInset)
-            .padding(.bottom, 2)
+            // Réglé avec Léo : 2 → 4, soit 13 pt entre la ligne de base du titre et le haut
+            // de l'encre du haut-parleur (contre 11).
+            .padding(.bottom, 4)
             .frame(width: MenuRowMetrics.width, alignment: .leading)
     }
 }
@@ -240,17 +335,27 @@ struct SourceRow: View {
     }
 }
 
-// MARK: - Fonctionnalité (interrupteur)
+// MARK: - Fonctionnalité
 
+/// Multiroom, Égaliseur.
+///
+/// Même ligne qu'une source, et non un interrupteur : c'est la pastille qui porte l'état,
+/// bleue quand la fonctionnalité est active, grise sinon — exactement le langage de la
+/// section « Sortie » de « Son », où le périphérique en cours est une pastille bleue.
+///
+/// Un `Toggle` posait en plus deux cibles de clic concurrentes dans une ligne déjà
+/// cliquable : cliquer le libellé ne faisait rien, cliquer l'interrupteur agissait.
 struct FeatureRow: View {
     @Bindable var store: MiloStore
     let feature: FeatureDescriptor
+
+    @State private var isHovering = false
 
     private var isLoading: Bool { store.loadingStates[feature.id] == true }
     private var isOn: Bool { store.displayedToggleState(feature.id) }
 
     var body: some View {
-        HStack(spacing: MenuRowMetrics.iconTextGap) {
+        MenuRowContainer(isHovering: $isHovering, action: toggle) {
             RowIcon(icon: feature.icon, isActive: isOn)
 
             Text(feature.title)
@@ -263,21 +368,15 @@ struct FeatureRow: View {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.7)
-                    .padding(.trailing, 4)
             }
-
-            Toggle("", isOn: Binding(
-                get: { isOn },
-                set: { _ in store.toggleFeature(feature.id) }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .disabled(isLoading)
         }
-        .padding(.horizontal, MenuRowMetrics.contentInset)
-        .padding(.vertical, MenuRowMetrics.rowVerticalPadding)
-        .frame(width: MenuRowMetrics.width)
+    }
+
+    /// Le clic est ignoré pendant la bascule — c'est ce que faisait le `.disabled(isLoading)`
+    /// de l'interrupteur, qu'une ligne cliquable ne donne plus gratuitement.
+    private func toggle() {
+        guard !isLoading else { return }
+        store.toggleFeature(feature.id)
     }
 }
 
@@ -374,8 +473,10 @@ private struct MenuRowContainer<Content: View>: View {
             .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
                    alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isHovering ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear))
+                RoundedRectangle(cornerRadius: MenuRowMetrics.rowHoverCornerRadius,
+                                 style: .continuous)
+                    .fill(isHovering ? AnyShapeStyle(MenuRowMetrics.rowHoverFill)
+                                     : AnyShapeStyle(.clear))
             )
             .contentShape(Rectangle())
         }
@@ -450,8 +551,10 @@ struct FooterRow: View {
             .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
                    alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isHovering ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear))
+                RoundedRectangle(cornerRadius: MenuRowMetrics.rowHoverCornerRadius,
+                                 style: .continuous)
+                    .fill(isHovering ? AnyShapeStyle(MenuRowMetrics.rowHoverFill)
+                                     : AnyShapeStyle(.clear))
             )
             .contentShape(Rectangle())
         }

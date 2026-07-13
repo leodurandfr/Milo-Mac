@@ -6,6 +6,21 @@ import Observation
 /// slider ne répondrait pas et le matériau se rendrait en état « inactif » (plus clair).
 private final class PanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    /// Sans ça, le panneau s'ouvre 60 pt trop bas.
+    ///
+    /// AppKit « recale » d'office toute fenêtre dont le bord haut dépasse le bas de la barre
+    /// des menus. Or la nôtre est VOLONTAIREMENT plus haute que le panneau : elle l'entoure
+    /// d'une marge transparente de `shadowMargin` (60 pt) pour laisser l'ombre s'étaler. Son
+    /// bord haut passe donc au-dessus du haut de l'écran, et AppKit la redescendait d'autant.
+    ///
+    /// Mesuré, avant correction : bord haut du verre à 94,5 pt, contre 34,5 pt pour « Son » —
+    /// soit exactement les 60 pt de la marge. C'est le même symptôme que le piège des
+    /// contraintes documenté dans `setupPanel()`, mais une cause toute différente : ici ce
+    /// n'est pas la disposition interne, c'est la fenêtre elle-même qu'on déplaçait.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 }
 
 /// Conteneur transparent qui entoure le verre d'une marge, afin que l'ombre portée ait la
@@ -248,7 +263,58 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         })
     }
 
-    /// Place le panneau sous l'icône, centré dessus, sans déborder de l'écran.
+    /// Marge transparente à gauche de l'encre, DANS l'image de l'icône. Mesurée une fois
+    /// plutôt que codée en dur : si l'asset change, l'alignement du panneau suit.
+    private var cachedIconInkInset: CGFloat?
+
+    /// Abscisse du premier pixel VISIBLE de l'icône, dans le repère de l'écran.
+    ///
+    /// Le bouton d'un NSStatusItem centre son image, et l'image elle-même a du vide autour
+    /// de son dessin. Les deux s'additionnent : notre bouton fait 40 pt, l'image 22, l'encre
+    /// 14 — l'encre commence donc à 13 pt du bord du bouton. Celui de « Son » est ajusté à
+    /// son glyphe (encre à 1,5 pt du bord). S'ancrer sur le CADRE du bouton, comme le fait le
+    /// système, nous décalerait de 11,5 pt : on s'ancre donc sur l'encre.
+    private func iconInkMinX(button: NSStatusBarButton, buttonRect: NSRect) -> CGFloat {
+        guard let image = button.image else { return buttonRect.minX }
+
+        let inkInset: CGFloat
+        if let cachedIconInkInset {
+            inkInset = cachedIconInkInset
+        } else {
+            inkInset = Self.leftInkInset(of: image)
+            cachedIconInkInset = inkInset
+        }
+
+        // L'image est centrée dans le bouton.
+        let imageMinX = buttonRect.minX + (buttonRect.width - image.size.width) / 2
+        return imageMinX + inkInset
+    }
+
+    /// Première colonne non transparente de l'image.
+    private static func leftInkInset(of image: NSImage) -> CGFloat {
+        let w = Int(image.size.width.rounded())
+        let h = Int(image.size.height.rounded())
+        guard w > 0, h > 0,
+              let rep = NSBitmapImageRep(
+                  bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h,
+                  bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        else { return 0 }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: CGFloat(w), height: CGFloat(h)))
+        NSGraphicsContext.restoreGraphicsState()
+
+        for x in 0..<w {
+            for y in 0..<h where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                return CGFloat(x)
+            }
+        }
+        return 0
+    }
+
+    /// Place le panneau sous l'icône, aligné à gauche sur elle, sans déborder de l'écran.
     private func positionPanel() {
         guard let button = statusItem.button,
               let buttonWindow = button.window,
@@ -268,7 +334,12 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
 
         // On positionne le PANNEAU, puis on décale la fenêtre de la marge.
-        var x = buttonRect.midX - size.width / 2
+        //
+        // Aligné à GAUCHE sur l'icône, et non centré dessous : c'est ce que font les modules
+        // système. Mesuré sur « Son » : son panneau commence 11,5 pt à gauche de l'encre de
+        // son glyphe — ses pastilles (à 14 pt du bord) tombent alors 2,5 pt à droite de
+        // l'encre, l'alignement optique que l'œil lit comme « aligné ».
+        var x = iconInkMinX(button: button, buttonRect: buttonRect) - PanelMetrics.panelLeftFromIconInk
         let visible = screen.visibleFrame
         x = min(max(x, visible.minX + PanelMetrics.screenEdgeMargin),
                 visible.maxX - size.width - PanelMetrics.screenEdgeMargin)

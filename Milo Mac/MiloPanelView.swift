@@ -29,7 +29,10 @@ struct MiloPanelView: View {
             }
         }
         .frame(width: MenuRowMetrics.width)
-        .padding(.bottom, 8)
+        // Le pied (option-clic) finit sur du texte, comme « Son » ; sans lui, la dernière
+        // ligne est Égaliseur — une ligne à pastille, qui demande un peu plus d'air.
+        .padding(.bottom, store.showsPreferences ? PanelMetrics.bottomInset
+                                                 : PanelMetrics.bottomInsetIconRow)
         // Aucun fond ici : c'est le NSGlassEffectView de MenuBarShell qui peint le verre et
         // découpe les coins. En ajouter un ici le doublerait et masquerait le verre.
         // La fenêtre est simplement masquée (orderOut), pas détruite : `onDisappear` ne se
