@@ -50,8 +50,18 @@ enum MenuRowMetrics {
     static let titleTopInset: CGFloat = 13
 
     /// Retrait vertical d'une ligne. Le pas entre deux lignes vaut `iconSize + 2 ×` cette
-    /// valeur : 26 + 6,5 = 32,5 pt, le pas mesuré sur Bluetooth.
-    static let rowVerticalPadding: CGFloat = 3.25
+    /// valeur : 26 + 6 = 32 pt.
+    ///
+    /// Valait 3,25 (soit un pas de 32,5), sur la foi d'un commentaire qui disait l'avoir
+    /// relevé sur Bluetooth. Re-mesuré depuis, par l'écart entre centres de pastilles — une
+    /// mesure qui ne dépend ni du survol ni d'un seuil, et qui retrouve bien les 32,0 déjà
+    /// connus de Son quand on la lui applique :
+    ///
+    ///   Son        32,0 · 32,0
+    ///   Bluetooth  32,0 × 8 d'affilée
+    ///
+    /// Les lignes sont jointives (les boîtes de survol se touchent) : pas = hauteur de boîte.
+    static let rowVerticalPadding: CGFloat = 3
 
     /// Retrait de la surbrillance au survol par rapport au bord de la ligne.
     static let highlightInset: CGFloat = 5
@@ -193,8 +203,15 @@ enum PanelMetrics {
     static let shadowOffsetY: CGFloat = 3
 
     /// Marge transparente autour du panneau, pour que l'ombre ait la place de s'étaler.
-    /// Doit dépasser `shadowRadius + shadowOffsetY`.
-    static let shadowMargin: CGFloat = 60
+    /// Doit dépasser `shadowRadius + shadowOffsetY` (26).
+    ///
+    /// Le demi-point n'est pas décoratif : c'est lui qui rend le calage sous-pixel possible.
+    /// AppKit arrondit au point entier l'origine ET la taille des fenêtres ; les bords du
+    /// panneau valant `origine + marge`, une marge entière les condamne à tomber sur des
+    /// entiers — or les deux cibles mesurées sur « Son » sont des demi-entiers (haut 34,5 ;
+    /// bord gauche à 11,5 de l'encre de l'icône, soit 1360,5 chez nous). Avec 60,5 et une
+    /// hauteur de contenu entière (voir `positionPanel`), les deux tombent juste.
+    static let shadowMargin: CGFloat = 60.5
 }
 
 // MARK: - Titres

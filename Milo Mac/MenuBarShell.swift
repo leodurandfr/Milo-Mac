@@ -323,7 +323,16 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         // La taille vient du contenu SwiftUI : elle change selon que le pied est visible,
         // que Milō est connecté, ou qu'on est dans la liste des stations radio.
         hostingController.view.layoutSubtreeIfNeeded()
-        let size = hostingController.view.fittingSize
+        var size = hostingController.view.fittingSize
+
+        // Hauteur ENTIÈRE, indispensable au calage sous-pixel : voir `shadowMargin`, dont les
+        // 60,5 pt ne tombent juste que si la hauteur du contenu est entière.
+        //
+        // Sans ce calage, le panneau glissait d'un pixel selon la parité du contenu — vérifié :
+        // à 420,5 pt de contenu il s'ouvrait à 34,5, à 416,0 il tombait à 35,0. Or le contenu
+        // change tout le temps (connexion, pied, liste radio).
+        size.height = size.height.rounded(.up)
+
         hostingController.view.frame = NSRect(origin: .zero, size: size)
 
         // La fenêtre est plus grande que le panneau : la marge accueille l'ombre. Le verre y
