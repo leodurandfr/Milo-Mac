@@ -66,6 +66,11 @@ enum MenuRowMetrics {
     /// Retrait de la surbrillance au survol par rapport au bord de la ligne.
     static let highlightInset: CGFloat = 5
 
+    /// Retrait vertical d'une ligne de TEXTE — le pied (Paramètres, Quitter) et le retour
+    /// depuis la liste radio. Ces lignes n'ont pas de pastille : leur boîte de survol se cale
+    /// sur le texte seul, et non sur `iconSize` comme celle d'une ligne à pastille.
+    static let textRowVerticalPadding: CGFloat = 5
+
     /// Rayon des coins de la surbrillance au survol.
     ///
     /// Relevé sur « Son » en profilant le coin haut-gauche du masque de survol (obtenu par
@@ -547,6 +552,17 @@ private struct RowIcon: View {
 
 // MARK: - Retour depuis la liste radio
 
+/// Ligne de TITRE, mais cliquable : elle se cale sur `textInset` / `titleTopInset` et pèse le
+/// même semibold qu'un `MenuTitle` — pas de pastille, donc pas de `MenuRowContainer`, dont les
+/// retraits partent de `contentInset`.
+///
+/// Elle s'allume au survol comme toutes les autres lignes cliquables du panneau. Sa boîte est
+/// bâtie à la main, exactement comme celle de `FooterRow` : même remplissage, même rayon, mêmes
+/// retraits — la seule différence est qu'elle s'aligne sur le texte des titres (15 pt) et non
+/// sur les pastilles (14 pt).
+///
+/// Le texte, lui, ne bouge pas : la boîte s'étend de `textRowVerticalPadding` au-dessus de lui,
+/// qu'on retranche donc du retrait haut.
 struct RadioBackRow: View {
     let onBack: () -> Void
     @State private var isHovering = false
@@ -560,12 +576,21 @@ struct RadioBackRow: View {
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
             }
+            .padding(.horizontal, MenuRowMetrics.textInset - MenuRowMetrics.highlightInset)
+            .padding(.vertical, MenuRowMetrics.textRowVerticalPadding)
+            .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
+                   alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: MenuRowMetrics.rowHoverCornerRadius,
+                                 style: .continuous)
+                    .fill(isHovering ? AnyShapeStyle(MenuRowMetrics.rowHoverFill)
+                                     : AnyShapeStyle(.clear))
+            )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, MenuRowMetrics.textInset)
-        .padding(.top, MenuRowMetrics.titleTopInset)
-        .frame(width: MenuRowMetrics.width, alignment: .leading)
+        .padding(.horizontal, MenuRowMetrics.highlightInset)
+        .padding(.top, MenuRowMetrics.titleTopInset - MenuRowMetrics.textRowVerticalPadding)
         .onHover { isHovering = $0 }
     }
 }
@@ -586,7 +611,7 @@ struct FooterRow: View {
                 Spacer()
             }
             .padding(.horizontal, MenuRowMetrics.contentInset - MenuRowMetrics.highlightInset)
-            .padding(.vertical, 5)
+            .padding(.vertical, MenuRowMetrics.textRowVerticalPadding)
             .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
                    alignment: .leading)
             .background(
