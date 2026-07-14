@@ -33,10 +33,16 @@ struct BulkSettingsBootstrapTests {
         store.connectionManager.injectAPIServiceForTesting(host: "127.0.0.1", port: backend.port)
         store.miloDidConnect()
 
-        try await waitUntil(timeout: 15) { store.enabledApps != nil }
+        // Attendre AUSSI le volume : les limites en dérivent (`volumeLimits` renvoie le repli
+        // tant que `volume` est nil), et il est chargé par un appel distinct du /bulk. N'attendre
+        // que `enabledApps` rendait ce test instable — il lisait parfois le repli avant que
+        // /api/volume/state ne soit revenu.
+        try await waitUntil(timeout: 15) { store.enabledApps != nil && store.volume != nil }
 
         #expect(store.enabledApps == StubMiloBackend.enabledApps)
         #expect(backend.bulkHits >= 3, "les deux échecs doivent avoir été retentés")
+        // Vraies limites quel que soit l'ordre d'arrivée : /bulk d'abord (le cache amorce
+        // getVolumeStatus), ou volume d'abord (refreshBulkSettings recale après coup).
         #expect(store.volumeLimits.minDb == StubMiloBackend.limitMinDb)
         #expect(store.volumeLimits.maxDb == StubMiloBackend.limitMaxDb)
     }
