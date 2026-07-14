@@ -15,7 +15,17 @@ private class ThinTextField: NSTextField {
     }
 }
 
-class VolumeHUD {
+/// HUD de volume du raccourci clavier.
+///
+/// Main-thread-only, et désormais vérifié : ses fenêtres, vues et couches sont de
+/// l'AppKit pur. Les rappels de `Timer` et des moniteurs `NSEvent` sont typés
+/// `@Sendable` par le SDK alors qu'ils sont posés sur la run loop principale et n'en
+/// sortent jamais — d'où les `MainActor.assumeIsolated` : ils affirment au compilateur
+/// ce que la run loop garantit déjà, sans différer l'exécution (un saut par `Task`
+/// décalerait d'un tour la boucle d'animation à 120 Hz, et empêcherait le moniteur de
+/// clic de rendre sa valeur de retour).
+@MainActor
+final class VolumeHUD {
     private var window: NSWindow?
     private var containerView: NSView?
     private var fillView: NSView?
@@ -90,17 +100,25 @@ class VolumeHUD {
 
         window.alphaValue = 0
 
+        // Le moniteur doit répondre SYNCHRONEMENT (sa valeur de retour décide si le clic
+        // est avalé) : `assumeIsolated`, et non un saut par Task.
+        //
+        // On ne fait traverser qu'un Bool : `assumeIsolated` exige un résultat Sendable,
+        // et NSEvent ne l'est pas. L'événement, lui, ne quitte jamais le main thread.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            guard let self = self, event.window == self.window else { return event }
-            // Block clicks while the HUD is hiding (fade-out animation)
-            guard !self.isHiding else { return event }
-            // Only respond to clicks in the visible HUD area
-            let y = event.locationInWindow.y
-            if y >= self.overshootMargin && y <= self.overshootMargin + self.windowHeight {
+            let swallowClick = MainActor.assumeIsolated { () -> Bool in
+                guard let self = self, event.window == self.window else { return false }
+                // Block clicks while the HUD is hiding (fade-out animation)
+                guard !self.isHiding else { return false }
+                // Only respond to clicks in the visible HUD area
+                let y = event.locationInWindow.y
+                guard y >= self.overshootMargin, y <= self.overshootMargin + self.windowHeight else {
+                    return false
+                }
                 self.hide()
-                return nil
+                return true
             }
-            return event
+            return swallowClick ? nil : event
         }
     }
 
@@ -352,7 +370,7 @@ class VolumeHUD {
             return
         }
         hideTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-            self?.hide()
+            MainActor.assumeIsolated { self?.hide() }
         }
     }
 
@@ -375,7 +393,10 @@ class VolumeHUD {
             startAnimation(from: currentOffset, to: slideOffset, duration: 0.3, easing: Self.easeInCubic, animateOpacity: (from: 1, to: 0)) { [weak self] in
                 guard let self = self, !self.isVisible else { return }
                 self.isHiding = false
-                window.orderOut(nil)
+                // `self.window`, et non le `window` local : la closure est @Sendable, elle
+                // ne peut capturer que du Sendable — ce que VolumeHUD est (main-isolée),
+                // mais pas NSWindow.
+                self.window?.orderOut(nil)
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 self.containerView?.layer?.transform = CATransform3DIdentity
@@ -396,11 +417,16 @@ class VolumeHUD {
 
     // MARK: - Animation curves
 
-    private static let springCurveValues: [CGFloat] = [
+    // `nonisolated` : maths pures, sans état. Sans ça elles héritent du @MainActor de la
+    // classe et ne peuvent plus être passées comme fonction @Sendable au timer.
+    private nonisolated static let springCurveValues: [CGFloat] = [
         0, 0.0121, 0.0454, 0.0961, 0.1602, 0.2342, 0.3149, 0.3993, 0.4848, 0.5694, 0.6511, 0.7285, 0.8004, 0.866, 0.9247, 0.9761, 1.0203, 1.0572, 1.0871, 1.1105, 1.1276, 1.1391, 1.1456, 1.1477, 1.146, 1.1412, 1.1337, 1.1243, 1.1134, 1.1015, 1.089, 1.0764, 1.0639, 1.0518, 1.0404, 1.0297, 1.02, 1.0113, 1.0037, 0.9971, 0.9917, 0.9872, 0.9838, 0.9812, 0.9795, 0.9785, 0.9782, 0.9784, 0.9791, 0.9802, 0.9816, 0.9832, 0.985, 0.9868, 0.9887, 0.9905, 0.9923, 0.994, 0.9956, 0.997, 0.9983, 0.9994, 1.0004, 1.0012, 1.0019, 1.0024, 1.0028, 1.003, 1.0032, 1.0032, 1.0032, 1.0031, 1.0029, 1.0027, 1.0025, 1.0022, 1.002, 1.0017, 1.0014, 1.0011, 1.0009, 1.0007, 1.0004, 1.0003, 1.0001, 0.9999, 0.9998, 0.9997, 0.9996, 0.9996, 0.9996, 0.9995, 0.9995, 0.9995, 0.9995, 0.9996, 0.9996, 0.9996, 0.9997, 0.9997, 1
     ]
 
-    private static func springEasing(_ t: CGFloat) -> CGFloat {
+    // Des closures `@Sendable`, et non des méthodes statiques : une *référence* de méthode
+    // ne se convertit pas en fonction @Sendable, or c'est sous cette forme que la boucle
+    // d'animation (une closure @Sendable de Timer) les reçoit. Elles ne capturent rien.
+    private nonisolated static let springEasing: @Sendable (CGFloat) -> CGFloat = { t in
         let maxIndex = CGFloat(springCurveValues.count - 1)
         let scaledIndex = t * maxIndex
         let lower = max(0, Int(floor(scaledIndex)))
@@ -409,58 +435,84 @@ class VolumeHUD {
         return springCurveValues[lower] + (springCurveValues[upper] - springCurveValues[lower]) * fraction
     }
 
-    private static func easeInCubic(_ t: CGFloat) -> CGFloat {
-        t * t * t
-    }
+    private nonisolated static let easeInCubic: @Sendable (CGFloat) -> CGFloat = { $0 * $0 * $0 }
 
     // Animates containerView via CALayer.transform for sub-pixel smooth positioning.
     // No snap threshold needed — Core Animation handles fractional pixels natively,
     // unlike NSWindow.setFrame which rounds to integer pixels.
-    private func startAnimation(from: CGFloat, to: CGFloat, duration: CFTimeInterval, easing: @escaping (CGFloat) -> CGFloat, animateOpacity: (from: CGFloat, to: CGFloat)? = nil, completion: (() -> Void)? = nil) {
+    private func startAnimation(from: CGFloat,
+                                to: CGFloat,
+                                duration: CFTimeInterval,
+                                easing: @escaping @Sendable (CGFloat) -> CGFloat,
+                                animateOpacity: (from: CGFloat, to: CGFloat)? = nil,
+                                completion: (@MainActor @Sendable () -> Void)? = nil) {
         animationTimer?.invalidate()
         let startTime = CACurrentMediaTime()
 
+        // Le timer est invalidé DEPUIS la closure @Sendable, à l'extérieur de
+        // `assumeIsolated` : celle-ci n'accepte de faire traverser que du Sendable, et
+        // Timer ne l'est pas. Seul un Bool « l'animation continue-t-elle ? » traverse.
         animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
-            guard let self = self, let window = self.window, let layer = self.containerView?.layer else {
-                timer.invalidate()
-                return
+            let isRunning = MainActor.assumeIsolated { () -> Bool in
+                self?.advanceAnimation(startTime: startTime,
+                                       from: from,
+                                       to: to,
+                                       duration: duration,
+                                       easing: easing,
+                                       animateOpacity: animateOpacity,
+                                       completion: completion) ?? false
             }
-
-            let elapsed = CACurrentMediaTime() - startTime
-            let progress = min(CGFloat(elapsed / duration), 1.0)
-            let easedProgress = easing(progress)
-
-            self.currentOffset = from + (to - from) * easedProgress
-
-            // Sub-pixel smooth positioning via Core Animation layer transform
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            layer.transform = CATransform3DMakeTranslation(0, self.currentOffset, 0)
-            CATransaction.commit()
-
-            // Drive opacity from the same easing curve.
-            // Clamp to [0, 1] since the spring curve overshoots beyond 1.0.
-            if let opacity = animateOpacity {
-                let rawAlpha = opacity.from + (opacity.to - opacity.from) * easedProgress
-                window.alphaValue = min(1.0, max(0.0, rawAlpha))
-            }
-
-            if progress >= 1.0 {
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                layer.transform = CATransform3DMakeTranslation(0, to, 0)
-                CATransaction.commit()
-                if let opacity = animateOpacity {
-                    window.alphaValue = min(1.0, max(0.0, opacity.to))
-                }
-                timer.invalidate()
-                self.animationTimer = nil
-                completion?()
-            }
+            if !isRunning { timer.invalidate() }
         }
     }
 
-    deinit {
+    /// Un pas de la boucle d'animation. Renvoie `false` quand elle est terminée — ou que
+    /// la fenêtre a disparu — auquel cas l'appelant invalide le timer.
+    private func advanceAnimation(startTime: CFTimeInterval,
+                                  from: CGFloat,
+                                  to: CGFloat,
+                                  duration: CFTimeInterval,
+                                  easing: @Sendable (CGFloat) -> CGFloat,
+                                  animateOpacity: (from: CGFloat, to: CGFloat)?,
+                                  completion: (@MainActor @Sendable () -> Void)?) -> Bool {
+        guard let window, let layer = containerView?.layer else { return false }
+
+        let elapsed = CACurrentMediaTime() - startTime
+        let progress = min(CGFloat(elapsed / duration), 1.0)
+        let easedProgress = easing(progress)
+
+        currentOffset = from + (to - from) * easedProgress
+
+        // Sub-pixel smooth positioning via Core Animation layer transform
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DMakeTranslation(0, currentOffset, 0)
+        CATransaction.commit()
+
+        // Drive opacity from the same easing curve.
+        // Clamp to [0, 1] since the spring curve overshoots beyond 1.0.
+        if let animateOpacity {
+            let rawAlpha = animateOpacity.from + (animateOpacity.to - animateOpacity.from) * easedProgress
+            window.alphaValue = min(1.0, max(0.0, rawAlpha))
+        }
+
+        guard progress >= 1.0 else { return true }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = CATransform3DMakeTranslation(0, to, 0)
+        CATransaction.commit()
+        if let animateOpacity {
+            window.alphaValue = min(1.0, max(0.0, animateOpacity.to))
+        }
+        animationTimer = nil
+        completion?()
+        return false
+    }
+
+    /// `isolated deinit` : la classe est main-only, et ce nettoyage touche fenêtre,
+    /// timers et moniteur d'événements — tous main-only eux aussi.
+    isolated deinit {
         if let clickMonitor = clickMonitor {
             NSEvent.removeMonitor(clickMonitor)
         }

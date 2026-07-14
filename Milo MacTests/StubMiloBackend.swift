@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Synchronization
 
 /// Backend Milō minimal, servi en local sur un port éphémère, dont on peut faire échouer
 /// `/api/settings/bulk` à volonté.
@@ -7,7 +8,11 @@ import Network
 /// C'est un vrai serveur HTTP, pas un mock d'URLSession : les tests exercent ainsi la
 /// pile réseau réelle de l'app (URLSession, codes d'erreur, parsing, retries) plutôt
 /// qu'une réimplémentation de celle-ci.
-final class StubMiloBackend {
+///
+/// `Sendable` vérifié : il est piloté depuis les tests (main actor) et sert ses requêtes
+/// sur sa propre queue — tout son état mutable est donc sous `Mutex`, comme celui de
+/// `MiloAPIService`.
+final class StubMiloBackend: Sendable {
 
     /// Limites servies par le stub — volontairement différentes des valeurs de repli
     /// (-80/-21) pour qu'un test puisse distinguer « limites chargées » de « repli ».
@@ -15,24 +20,29 @@ final class StubMiloBackend {
     static let limitMaxDb = -15.0
     static let enabledApps = ["radio", "spotify"]
 
-    /// Nombre d'appels `/api/settings/bulk` encore à faire échouer (503).
-    /// `.max` = échoue toujours ; 0 = répond normalement.
-    var bulkFailuresRemaining: Int {
-        get { lock.withLock { _bulkFailuresRemaining } }
-        set { lock.withLock { _bulkFailuresRemaining = newValue } }
+    private struct State {
+        /// Nombre d'appels `/api/settings/bulk` encore à faire échouer (503).
+        /// `.max` = échoue toujours ; 0 = répond normalement.
+        var bulkFailuresRemaining = 0
+        /// Nombre total d'appels reçus sur `/api/settings/bulk`, échecs compris.
+        var bulkHits = 0
+        /// Port éphémère attribué par le noyau au démarrage.
+        var port = 0
     }
 
-    /// Nombre total d'appels reçus sur `/api/settings/bulk`, échecs compris.
-    var bulkHits: Int { lock.withLock { _bulkHits } }
+    private let state = Mutex(State())
 
-    /// Port éphémère attribué par le noyau au démarrage.
-    private(set) var port: Int = 0
+    var bulkFailuresRemaining: Int {
+        get { state.withLock { $0.bulkFailuresRemaining } }
+        set { state.withLock { $0.bulkFailuresRemaining = newValue } }
+    }
+
+    var bulkHits: Int { state.withLock { $0.bulkHits } }
+
+    var port: Int { state.withLock { $0.port } }
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "stub.milo.backend")
-    private let lock = NSLock()
-    private var _bulkFailuresRemaining = 0
-    private var _bulkHits = 0
 
     // MARK: - Cycle de vie
 
@@ -67,7 +77,7 @@ final class StubMiloBackend {
               let assigned = listener.port?.rawValue else {
             throw StubError.didNotStart
         }
-        port = Int(assigned)
+        state.withLock { $0.port = Int(assigned) }
     }
 
     func stop() {
@@ -96,10 +106,10 @@ final class StubMiloBackend {
     private func response(for path: String) -> Data {
         switch path {
         case "/api/settings/bulk":
-            let shouldFail: Bool = lock.withLock {
-                _bulkHits += 1
-                guard _bulkFailuresRemaining > 0 else { return false }
-                if _bulkFailuresRemaining != .max { _bulkFailuresRemaining -= 1 }
+            let shouldFail: Bool = state.withLock { state in
+                state.bulkHits += 1
+                guard state.bulkFailuresRemaining > 0 else { return false }
+                if state.bulkFailuresRemaining != .max { state.bulkFailuresRemaining -= 1 }
                 return true
             }
             if shouldFail {

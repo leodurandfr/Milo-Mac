@@ -1,12 +1,45 @@
 import Foundation
+import Synchronization
 
-struct MiloState {
+/// Convertit le `[String: Any]` de `JSONSerialization` en dictionnaire réellement
+/// **Sendable**.
+///
+/// `MiloState` franchit une frontière d'isolation — il est décodé hors du main actor
+/// (queue déléguée d'URLSession pour le WebSocket, pool Swift-concurrency pour le HTTP)
+/// puis remis au main actor, qui le possède. Sa `metadata` doit donc être Sendable pour
+/// de vrai.
+///
+/// Et non par un `as? [String: any Sendable]` : `Sendable` est un protocole *marqueur*,
+/// sans représentation à l'exécution — ce cast « réussit toujours » sans rien vérifier.
+/// Ce serait un `@unchecked` déguisé. On reconstruit donc explicitement, à partir des
+/// seuls types que `JSONSerialization` produit.
+///
+/// Les `NSNumber` sont conservés tels quels (ils *sont* Sendable) : les lectures
+/// `as? Int` / `as? Bool` du reste de l'app gardent exactement le même comportement de
+/// pont Objective-C qu'avec un `[String: Any]`.
+enum JSONSendable {
+    static func dictionary(_ raw: [String: Any]) -> [String: any Sendable] {
+        raw.compactMapValues(value)
+    }
+
+    private static func value(_ any: Any) -> (any Sendable)? {
+        switch any {
+        case let number as NSNumber:      return number   // Int, Double et Bool
+        case let string as String:        return string
+        case let array as [Any]:          return array.compactMap(value)
+        case let object as [String: Any]: return dictionary(object)
+        default:                          return nil      // NSNull et inconnus
+        }
+    }
+}
+
+struct MiloState: Sendable {
     let activeSource: String
     let sourceState: String       // "starting", "waiting", "active", "error"
     let transitioning: Bool       // true pendant un changement de source
     let multiroomEnabled: Bool
     let equalizerEnabled: Bool
-    let metadata: [String: Any]
+    let metadata: [String: any Sendable]
 
     /// Décodage unique du payload backend — partagé entre le fetch HTTP
     /// (/api/audio/state) et le `full_state` des événements WebSocket,
@@ -17,7 +50,7 @@ struct MiloState {
         transitioning = json["transitioning"] as? Bool ?? false
         multiroomEnabled = json["multiroom_enabled"] as? Bool ?? false
         equalizerEnabled = json["equalizer_effects_enabled"] as? Bool ?? true
-        metadata = json["metadata"] as? [String: Any] ?? [:]
+        metadata = JSONSendable.dictionary(json["metadata"] as? [String: Any] ?? [:])
     }
 }
 
@@ -84,7 +117,9 @@ enum IPv4Resolver {
                                &hostname,
                                socklen_t(hostname.count),
                                nil, 0, NI_NUMERICHOST) == 0 {
-                    let ipAddress = String(cString: hostname)
+                    // Tronquer au NUL terminal puis décoder : `String(cString:)` est déprécié.
+                    let bytes = hostname.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                    let ipAddress = String(decoding: bytes, as: UTF8.self)
                     // Ne garder que les IPv4 (pas d'IPv6 avec ":")
                     if !ipAddress.contains(":") {
                         results.append(ipAddress)
@@ -96,32 +131,44 @@ enum IPv4Resolver {
     }
 }
 
-class MiloAPIService {
+/// Client HTTP du backend Milō.
+///
+/// Contrairement au reste de l'app, ce service n'est **pas** main-thread-only : il est
+/// appelé depuis le pool Swift-concurrency (toutes ses méthodes `async`) et depuis une
+/// queue utilitaire de résolution DNS. Son traitement correct est donc `Sendable`, pas
+/// `@MainActor`.
+///
+/// Et un Sendable **vérifié** : tout l'état mutable est enfermé dans un `Mutex`, et les
+/// autres propriétés sont des `let`. Là où un `NSLock` + `@unchecked Sendable` demandait
+/// au compilateur de nous croire sur parole, ici il vérifie.
+final class MiloAPIService: Sendable {
     private let host: String
     private let port: Int
 
-    // L'état mutable est accédé depuis le main thread, le pool Swift-concurrency
-    // et la queue utilitaire de résolution DNS — tout passe par ce verrou.
-    private let stateLock = NSLock()
-    private var session: URLSession
-    // Session dédiée aux endpoints où le backend garde la connexion HTTP ouverte
-    // pendant toute une opération lente (ex. toggle multiroom : snapserver start
-    // + restart source + push volume, jusqu'à ~20 s). Les timeouts 3 s/5 s de la
-    // session rapide tomberaient en pleine transition.
-    private var longSession: URLSession
-    private var resolvedIPv4: String?
+    /// L'état mutable, accédé depuis plusieurs threads — donc rassemblé sous un seul
+    /// verrou plutôt qu'éparpillé en propriétés `var`.
+    private struct State {
+        var session: URLSession
+        // Session dédiée aux endpoints où le backend garde la connexion HTTP ouverte
+        // pendant toute une opération lente (ex. toggle multiroom : snapserver start
+        // + restart source + push volume, jusqu'à ~20 s). Les timeouts 3 s/5 s de la
+        // session rapide tomberaient en pleine transition.
+        var longSession: URLSession
+        var resolvedIPv4: String?
+        // Limites de volume : config statique du device servie par /api/settings/bulk.
+        // Mises en cache une fois à la connexion (via fetchBulkSettings) pour que le
+        // HUD volume ne tire pas tout le payload /bulk à chaque getVolumeStatus() —
+        // c'est ce que fait le frontend Milō via son settingsStore.
+        var cachedLimitMinDb: Double = VolumeDefaults.limitMinDb
+        var cachedLimitMaxDb: Double = VolumeDefaults.limitMaxDb
+    }
 
-    // Limites de volume : config statique du device servie par /api/settings/bulk.
-    // Mises en cache une fois à la connexion (via fetchBulkSettings) pour que le
-    // HUD volume ne tire pas tout le payload /bulk à chaque getVolumeStatus() —
-    // c'est ce que fait le frontend Milō via son settingsStore.
-    private var cachedLimitMinDb: Double = VolumeDefaults.limitMinDb
-    private var cachedLimitMaxDb: Double = VolumeDefaults.limitMaxDb
+    private let state: Mutex<State>
 
     /// Bornes en cache (amorcées par fetchBulkSettings, rafraîchies par le
     /// WebSocket settings/volume_limits_changed via updateCachedLimits).
     var cachedLimits: (minDb: Double, maxDb: Double) {
-        stateLock.withLock { (cachedLimitMinDb, cachedLimitMaxDb) }
+        state.withLock { ($0.cachedLimitMinDb, $0.cachedLimitMaxDb) }
     }
 
     /// - Parameter resolvedIPv4: IP déjà validée par l'appelant (le connection
@@ -131,9 +178,9 @@ class MiloAPIService {
     init(host: String, port: Int = 80, resolvedIPv4: String? = nil) {
         self.host = host
         self.port = port
-        self.resolvedIPv4 = resolvedIPv4
-        self.session = Self.makeFastSession()
-        self.longSession = Self.makeLongSession()
+        self.state = Mutex(State(session: Self.makeFastSession(),
+                                 longSession: Self.makeLongSession(),
+                                 resolvedIPv4: resolvedIPv4))
 
         if resolvedIPv4 == nil {
             resolveIPv4InBackground()
@@ -143,8 +190,9 @@ class MiloAPIService {
     deinit {
         // Une URLSession n'est libérée qu'une fois invalidée — indispensable pour
         // les instances jetables (sonde de readiness du connection manager).
-        session.invalidateAndCancel()
-        longSession.invalidateAndCancel()
+        let sessions = state.withLock { ($0.session, $0.longSession) }
+        sessions.0.invalidateAndCancel()
+        sessions.1.invalidateAndCancel()
     }
 
     private static func makeFastSession() -> URLSession {
@@ -169,15 +217,15 @@ class MiloAPIService {
 
     /// Recréer les sessions pour éviter les connexions TCP stales
     func resetSession() {
-        stateLock.lock()
-        let oldSession = session
-        let oldLongSession = longSession
-        session = Self.makeFastSession()
-        longSession = Self.makeLongSession()
-        stateLock.unlock()
+        let old = state.withLock { state -> (URLSession, URLSession) in
+            let previous = (state.session, state.longSession)
+            state.session = Self.makeFastSession()
+            state.longSession = Self.makeLongSession()
+            return previous
+        }
 
-        oldSession.invalidateAndCancel()
-        oldLongSession.invalidateAndCancel()
+        old.0.invalidateAndCancel()
+        old.1.invalidateAndCancel()
 
         // Re-résoudre l'IP : si la session est stale, l'adresse peut l'être aussi.
         resolveIPv4InBackground()
@@ -185,18 +233,17 @@ class MiloAPIService {
 
     /// Résout le hostname en IPv4 en arrière-plan et met l'adresse en cache.
     private func resolveIPv4InBackground() {
+        let host = self.host
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            if let ip = IPv4Resolver.resolveAll(host: self.host).first {
-                self.stateLock.withLock { self.resolvedIPv4 = ip }
-                NSLog("✅ Resolved %@ to IPv4: %@", self.host, ip)
-            }
+            guard let ip = IPv4Resolver.resolveAll(host: host).first else { return }
+            self?.state.withLock { $0.resolvedIPv4 = ip }
+            NSLog("✅ Resolved %@ to IPv4: %@", host, ip)
         }
     }
 
     /// Construit l'URL en utilisant l'IP IPv4 si disponible
     private func buildURL(path: String) -> URL? {
-        let hostToUse = stateLock.withLock { resolvedIPv4 } ?? host
+        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
         return URL(string: "http://\(hostToUse):\(port)\(path)")
     }
 
@@ -219,7 +266,7 @@ class MiloAPIService {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
 
-        let session = stateLock.withLock { long ? longSession : self.session }
+        let session = state.withLock { long ? $0.longSession : $0.session }
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -335,9 +382,9 @@ class MiloAPIService {
     /// (les limites ont changé côté device). getVolumeStatus() lira ces nouvelles valeurs
     /// — évite de re-tirer /bulk à chaque séquence du raccourci clavier.
     func updateCachedLimits(minDb: Double, maxDb: Double) {
-        stateLock.withLock {
-            cachedLimitMinDb = minDb
-            cachedLimitMaxDb = maxDb
+        state.withLock {
+            $0.cachedLimitMinDb = minDb
+            $0.cachedLimitMaxDb = maxDb
         }
     }
 

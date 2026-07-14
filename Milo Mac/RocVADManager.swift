@@ -1,50 +1,60 @@
 import Foundation
-import SwiftUI
 import AppKit
 
-class RocVADManager {
+// MARK: - Progression
 
-    static let binaryPath = "/usr/local/bin/roc-vad"
+/// Ce que le pilote demande d'afficher pendant une opération. Le panneau, lui, est
+/// dessiné par `RocVADManager`, sur le main thread.
+enum RocVADProgress: Sendable {
+    case show(String)
+    case update(String)
+    case hide
+}
 
-    /// Le binaire est présent sur le disque (ne dit pas si le driver est chargé —
-    /// pour ça, voir checkInstallation).
-    static var isBinaryInstalled: Bool {
-        FileManager.default.fileExists(atPath: binaryPath)
-    }
+// MARK: - Pilote
+
+/// Appels au binaire roc-vad, **sérialisés**.
+///
+/// La sérialisation n'est pas un détail de confort : chaque opération liste, supprime,
+/// recrée puis configure le device « Milō ». Deux qui s'entrelacent laissent des doublons
+/// ou un device à moitié configuré. Elle était portée par une `DispatchQueue` série et par
+/// la discipline des appelants ; elle l'est maintenant par le compilateur.
+///
+/// L'exécuteur de cet acteur **est** cette même queue série (`DispatchSerialQueue` est
+/// conforme à `SerialExecutor`). Ce n'est pas une coquetterie : les appels roc-vad sont
+/// synchrones et bloquants (`Process.waitUntilExit`, plusieurs secondes quand le driver
+/// répond mal). Sur l'exécuteur par défaut, ils bloqueraient un thread du pool coopératif
+/// de Swift, dont la largeur est bornée par le nombre de cœurs. Ici ils bloquent un thread
+/// de queue — exactement comme avant.
+///
+/// ⚠️ Aucune méthode de cet acteur ne doit contenir d'`await` : un point de suspension
+/// rouvrirait la réentrance, donc l'entrelacement que la queue série interdisait. C'est
+/// pourquoi la progression est **postée sans être attendue** — comme le faisait le
+/// `DispatchQueue.main.async` d'origine.
+actor RocVADDevice {
+    private let queue = DispatchSerialQueue(label: "com.milo.rocvad.device")
+    nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private let deviceName = "Milō"
-    private var miloHost = "milo.local"  // Muté uniquement sur deviceQueue
     private let sourcePort = 10001
     private let repairPort = 10002
     private let controlPort = 10003
 
-    // Paramètres ROC VAD pour la configuration du sender
-    private(set) var settings: RocVADSettings
+    private var miloHost = "milo.local"
+    private var settings: RocVADSettings
 
-    // Queue série pour éviter les opérations concurrentes sur les devices (race condition entre configureDeviceOnly et updateMiloHost)
-    private let deviceQueue = DispatchQueue(label: "com.milo.rocvad.device")
-
-    // Window de progression (style NSAlert natif)
-    private var progressPanel: NSWindow?
-    private var progressLabel: NSTextField?
-    private var progressIndicator: NSProgressIndicator?
-
-    // MARK: - Initialization
-
-    init() {
-        self.settings = RocVADSettings.loadFromUserDefaults()
-        NSLog("📦 RocVADManager initialized with settings: buffer=%dms, fec=%@, resampler=%@", settings.deviceBuffer, settings.fecEncoding.rawValue, settings.resamplerProfile.rawValue)
+    init(settings: RocVADSettings) {
+        self.settings = settings
     }
 
-    // MARK: - roc-vad subprocess helper
+    // MARK: - Sous-processus roc-vad
 
-    /// Lance roc-vad avec les arguments donnés et attend la fin. Synchrone —
-    /// à appeler hors du main thread (deviceQueue ou queue globale).
-    /// Renvoie nil si le binaire n'a pas pu être lancé (désinstallé en cours
-    /// de session, par ex.) — contrairement à launch(), run() est rattrapable.
-    private static func runRocVAD(_ arguments: [String]) -> (status: Int32, output: String)? {
+    /// Lance roc-vad et attend la fin. Synchrone et bloquant — d'où l'exécuteur ci-dessus.
+    /// Renvoie nil si le binaire n'a pas pu être lancé (désinstallé en cours de session,
+    /// par ex.) — contrairement à launch(), run() est rattrapable.
+    private nonisolated static func runRocVAD(_ arguments: [String]) -> (status: Int32, output: String)? {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: binaryPath)
+        task.executableURL = URL(fileURLWithPath: RocVADManager.binaryPath)
         task.arguments = arguments
 
         let outputPipe = Pipe()
@@ -65,318 +75,28 @@ class RocVADManager {
         return (task.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
-    // MARK: - Public Interface
+    // MARK: - Interface
 
-    /// Vérifie que le binaire est présent ET que le driver répond (`roc-vad info`
-    /// passe par gRPC et peut prendre plusieurs secondes quand le driver est
-    /// à moitié chargé) — d'où l'exécution hors main thread.
-    /// Le completion est appelé sur le main thread.
-    func checkInstallation(completion: @escaping (Bool) -> Void) {
-        deviceQueue.async {
-            let isWorking = Self.isBinaryInstalled && Self.runRocVAD(["info"])?.status == 0
-            NSLog(isWorking ? "✅ roc-vad is functional" : "⚠️ roc-vad missing or driver not loaded")
-            DispatchQueue.main.async { completion(isWorking) }
-        }
+    /// Le binaire est présent ET le driver répond. `roc-vad info` passe par gRPC et peut
+    /// prendre plusieurs secondes quand le driver est à moitié chargé.
+    func isFunctional() -> Bool {
+        let working = RocVADManager.isBinaryInstalled && Self.runRocVAD(["info"])?.status == 0
+        NSLog(working ? "✅ roc-vad is functional" : "⚠️ roc-vad missing or driver not loaded")
+        return working
     }
 
-    func performInstallation(completion: @escaping (Bool) -> Void) {
-        NSLog("🔧 Starting roc-vad installation...")
-
-        // Créer panel de progression (style NSAlert)
-        showProgressPanel(message: L("progress.preparing"))
-
-        // Installation en background
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let installSuccess = self?.installRocVAD() ?? false
-
-            DispatchQueue.main.async {
-                self?.hideProgressPanel()
-                completion(installSuccess)
-            }
-        }
-    }
-
-    func configureDeviceOnly(completion: @escaping (Bool) -> Void) {
-        NSLog("🔧 Checking Milō audio device configuration...")
-
-        // Queue série pour éviter les race conditions avec updateMiloHost
-        deviceQueue.async { [weak self] in
-            guard let self = self else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
-            // Supprimer les éventuels doublons, ne garder qu'un seul device
-            let deviceInfo = self.getRocVADDeviceInfo()
-            let existingDevices = deviceInfo.filter { $0.name == self.deviceName }
-
-            // S'il y a des doublons, tout supprimer et recréer proprement
-            if existingDevices.count > 1 {
-                NSLog("⚠️ Found %d Milō devices - cleaning up duplicates", existingDevices.count)
-                self.deleteAllMiloDevices()
-            } else if let existingDevice = existingDevices.first {
-                NSLog("✅ Found existing Milō device (index: %d)", existingDevice.index)
-
-                let isConfigured = self.checkDeviceConfiguration(deviceIndex: existingDevice.index)
-
-                if isConfigured {
-                    NSLog("✅ Device already properly configured - no UI needed")
-                    DispatchQueue.main.async { completion(true) }
-                    return
-                } else {
-                    NSLog("🔧 Device needs reconfiguration - showing progress")
-                    DispatchQueue.main.async {
-                        self.showProgressPanel(message: L("progress.reconfiguring_device"))
-                    }
-
-                    let success = self.configureDevice(deviceIndex: existingDevice.index)
-                    DispatchQueue.main.async {
-                        self.hideProgressPanel()
-                        completion(success)
-                    }
-                    return
-                }
-            }
-
-            // Aucun device ou doublons nettoyés → créer un nouveau
-            NSLog("❌ No Milō device found - showing progress and creating new one")
-            DispatchQueue.main.async {
-                self.showProgressPanel(message: L("progress.creating_device"))
-            }
-
-            let deviceIndex = self.createMiloDevice()
-
-            guard deviceIndex > 0 else {
-                NSLog("❌ Failed to create Milō device")
-                DispatchQueue.main.async {
-                    self.hideProgressPanel()
-                    completion(false)
-                }
-                return
-            }
-
-            NSLog("✅ Created new Milō device with index: %d", deviceIndex)
-            let success = self.configureDevice(deviceIndex: deviceIndex)
-
-            DispatchQueue.main.async {
-                self.hideProgressPanel()
-                completion(success)
-            }
-        }
-    }
-
-    /// Met à jour l'adresse de Milo avec l'IP résolue et reconfigure le device roc-vad
-    /// - Parameter newHost: L'adresse IP résolue (ex: "192.168.1.73")
-    func updateMiloHost(_ newHost: String) {
-        // Supprimer et recréer le device avec la nouvelle adresse
-        // (roc-vad ne permet pas de modifier les endpoints d'un device existant).
-        // La comparaison ET la mutation de miloHost se font sur deviceQueue :
-        // une lecture hors queue racerait avec l'écriture sérialisée.
-        deviceQueue.async { [weak self] in
-            guard let self = self else { return }
-
-            guard newHost != self.miloHost else {
-                NSLog("🔄 roc-vad: Host unchanged (%@)", newHost)
-                return
-            }
-
-            NSLog("🔄 Updating roc-vad endpoint from %@ to %@", self.miloHost, newHost)
-            self.miloHost = newHost
-
-            self.deleteAllMiloDevices()
-
-            // Créer un nouveau device
-            let newDeviceIndex = self.createMiloDevice()
-            guard newDeviceIndex > 0 else {
-                NSLog("❌ Failed to create new Milō device")
-                return
-            }
-
-            NSLog("🔧 Configuring new device #%d with IP: %@", newDeviceIndex, newHost)
-            let success = self.configureDevice(deviceIndex: newDeviceIndex)
-            NSLog(success ? "✅ Device reconfigured with IP: %@" : "❌ Failed to configure device with IP: %@", newHost)
-        }
-    }
-
-    // MARK: - Settings Management
-
-    /// Met à jour les paramètres ROC VAD et recrée le device avec la nouvelle configuration
-    /// - Parameters:
-    ///   - newSettings: Les nouveaux paramètres à appliquer
-    ///   - completion: Callback avec le statut de succès
-    func updateSettings(_ newSettings: RocVADSettings, completion: @escaping (Bool) -> Void) {
-        NSLog("🔧 Updating ROC VAD settings...")
-
-        // Sauvegarder ici (thread appelant = main) : `settings` est lu sur le
-        // main thread par SettingsViewModel — l'écrire depuis deviceQueue
-        // racerait avec ces lectures. createMiloDevice (sur deviceQueue) verra
-        // la nouvelle valeur via le happens-before du dispatch ci-dessous.
-        self.settings = newSettings
-        newSettings.saveToUserDefaults()
-        NSLog("💾 Settings saved: buffer=%dms, fec=%@, resampler=%@", newSettings.deviceBuffer, newSettings.fecEncoding.rawValue, newSettings.resamplerProfile.rawValue)
-
-        // Afficher le panel de progression
-        showProgressPanel(message: L("progress.applying_settings"))
-
-        deviceQueue.async { [weak self] in
-            guard let self = self else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
-            // Supprimer tous les devices Milō existants
-            let deleted = self.deleteAllMiloDevices()
-            if deleted > 0 {
-                // Court délai pour s'assurer que les devices sont bien supprimés
-                Thread.sleep(forTimeInterval: 0.5)
-            }
-
-            // Créer un nouveau device avec les paramètres mis à jour
-            DispatchQueue.main.async {
-                self.updateProgressMessage(L("progress.creating_device"))
-            }
-
-            let newDeviceIndex = self.createMiloDevice()
-            guard newDeviceIndex > 0 else {
-                NSLog("❌ Failed to create new device with updated settings")
-                DispatchQueue.main.async {
-                    self.hideProgressPanel()
-                    completion(false)
-                }
-                return
-            }
-
-            NSLog("✅ Created new device #%d with updated settings", newDeviceIndex)
-
-            // Configurer les endpoints
-            DispatchQueue.main.async {
-                self.updateProgressMessage(L("progress.reconfiguring_device"))
-            }
-
-            let success = self.configureDevice(deviceIndex: newDeviceIndex)
-
-            DispatchQueue.main.async {
-                self.hideProgressPanel()
-                NSLog(success ? "✅ Device reconfigured with new settings" : "❌ Failed to configure device endpoints")
-                completion(success)
-            }
-        }
-    }
-
-    /// Supprime un device roc-vad par son index
-    private func deleteDevice(deviceIndex: Int) {
-        let success = Self.runRocVAD(["device", "del", "\(deviceIndex)"])?.status == 0
-        NSLog(success ? "✅ Device #%d deleted" : "⚠️ Failed to delete device #%d", deviceIndex)
-    }
-
-    // MARK: - Progress Window Management (Style NSAlert natif avec Hidden Title Bar)
-
-    private func showProgressPanel(message: String) {
-        // Créer une NSWindow avec Hidden Title Bar et effet visuel NSAlert
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 260, height: 190),
-            styleMask: [.titled, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.level = .floating
-        window.center()
-        window.isReleasedWhenClosed = false
-
-        // Ajouter l'effet visuel NSAlert (transparence + flou comme les vrais NSAlert)
-        let visualEffectView = NSVisualEffectView()
-        visualEffectView.frame = window.contentView!.bounds
-        visualEffectView.autoresizingMask = [.width, .height]
-        visualEffectView.material = .popover  // Material identique aux NSAlert
-        visualEffectView.state = .active
-        visualEffectView.wantsLayer = true
-        visualEffectView.layer?.cornerRadius = 8
-
-        window.contentView = visualEffectView
-
-        // Container pour le contenu
-        let contentView = NSView(frame: visualEffectView.bounds)
-        contentView.autoresizingMask = [.width, .height]
-        visualEffectView.addSubview(contentView)
-
-        // Icône de l'app (comme dans NSAlert) - 64x64 centré
-        let iconImageView = NSImageView()
-        iconImageView.frame = NSRect(x: (260 - 64) / 2, y: 106, width: 64, height: 64)
-        iconImageView.image = NSApp.applicationIconImage
-        iconImageView.imageScaling = .scaleProportionallyDown
-        contentView.addSubview(iconImageView)
-
-        // Titre principal (comme messageText dans NSAlert) - 12px de marge supplémentaire sous l'icône
-        let titleLabel = NSTextField(labelWithString: L("setup.installation.title"))
-        titleLabel.font = .boldSystemFont(ofSize: 13)
-        titleLabel.alignment = .center
-        titleLabel.backgroundColor = .clear
-        titleLabel.isBezeled = false
-        titleLabel.isEditable = false
-        titleLabel.textColor = .labelColor
-        titleLabel.frame = NSRect(x: 20, y: 66, width: 220, height: 20)
-        contentView.addSubview(titleLabel)
-
-        // Message de progression (comme informativeText dans NSAlert)
-        let messageLabel = NSTextField(labelWithString: message)
-        messageLabel.font = .systemFont(ofSize: 11)
-        messageLabel.alignment = .center
-        messageLabel.backgroundColor = .clear
-        messageLabel.isBezeled = false
-        messageLabel.isEditable = false
-        messageLabel.textColor = .secondaryLabelColor
-        messageLabel.lineBreakMode = .byWordWrapping
-        messageLabel.maximumNumberOfLines = 2
-        messageLabel.frame = NSRect(x: 20, y: 33, width: 220, height: 30)
-        contentView.addSubview(messageLabel)
-        progressLabel = messageLabel
-
-        // Barre de progression (comme accessoryView dans NSAlert)
-        let progress = NSProgressIndicator()
-        progress.style = .bar
-        progress.isIndeterminate = true
-        progress.frame = NSRect(x: 30, y: 7, width: 200, height: 28)
-        progress.startAnimation(nil)
-        contentView.addSubview(progress)
-        progressIndicator = progress
-
-        window.makeKeyAndOrderFront(nil)
-
-        progressPanel = window
-    }
-
-    private func updateProgressMessage(_ message: String) {
-        DispatchQueue.main.async { [weak self] in
-            self?.progressLabel?.stringValue = message
-        }
-    }
-
-    private func hideProgressPanel() {
-        progressIndicator?.stopAnimation(nil)
-        progressPanel?.close()
-        progressPanel = nil
-        progressLabel = nil
-        progressIndicator = nil
-    }
-
-    // MARK: - Installation Process
-
-    private func installRocVAD() -> Bool {
+    /// Installe roc-vad via osascript (qui affiche lui-même le dialogue d'autorisation
+    /// administrateur). Bloquant : auth + curl + install.
+    ///
+    /// En sous-processus, et non via un `NSAppleScript` synchrone sur le main thread —
+    /// celui-ci gelait le panneau de progression pendant toute l'installation.
+    func runInstaller() -> Bool {
         NSLog("📦 Installing roc-vad...")
-
-        updateProgressMessage(L("progress.downloading"))
 
         let script = """
         do shell script "sudo /bin/bash -c \\"$(curl -fsSL https://raw.githubusercontent.com/roc-streaming/roc-vad/HEAD/install.sh)\\"" with administrator privileges
         """
 
-        // Exécuter via osascript en subprocess sur CETTE queue (background) :
-        // un NSAppleScript synchrone sur le main thread gelait le panel de
-        // progression pendant toute la durée auth + curl + install. osascript
-        // affiche lui-même le dialogue d'autorisation administrateur.
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = ["-e", script]
@@ -390,34 +110,107 @@ class RocVADManager {
             return false
         }
         task.waitUntilExit()
+        return true
+    }
 
-        // Attendre un peu pour que l'installation se termine
-        Thread.sleep(forTimeInterval: 3.0)
+    /// Vérifie le device et ne le (re)crée que si nécessaire — le cas courant (device déjà
+    /// bon) ne montre aucun panneau.
+    func configureIfNeeded(progress: @Sendable (RocVADProgress) -> Void) -> Bool {
+        NSLog("🔧 Checking Milō audio device configuration...")
 
-        updateProgressMessage(L("progress.verifying"))
-        Thread.sleep(forTimeInterval: 1.0)
+        let existing = deviceInfo().filter { $0.name == deviceName }
 
-        // Vérifier que l'installation a réussi
-        let success = Self.isBinaryInstalled
+        // Doublons : tout supprimer et repartir proprement.
+        if existing.count > 1 {
+            NSLog("⚠️ Found %d Milō devices - cleaning up duplicates", existing.count)
+            deleteAllMiloDevices()
+        } else if let device = existing.first {
+            NSLog("✅ Found existing Milō device (index: %d)", device.index)
 
-        if success {
-            updateProgressMessage(L("progress.installation_complete"))
-            Thread.sleep(forTimeInterval: 1.0)
-            NSLog("✅ roc-vad installation completed")
-        } else {
-            NSLog("❌ roc-vad installation failed")
+            if isDeviceConfigured(deviceIndex: device.index) {
+                NSLog("✅ Device already properly configured - no UI needed")
+                return true
+            }
+
+            NSLog("🔧 Device needs reconfiguration - showing progress")
+            progress(.show(L("progress.reconfiguring_device")))
+            defer { progress(.hide) }
+            return configureDevice(deviceIndex: device.index)
         }
 
+        NSLog("❌ No Milō device found - showing progress and creating new one")
+        progress(.show(L("progress.creating_device")))
+        defer { progress(.hide) }
+
+        let index = createMiloDevice()
+        guard index > 0 else {
+            NSLog("❌ Failed to create Milō device")
+            return false
+        }
+
+        NSLog("✅ Created new Milō device with index: %d", index)
+        return configureDevice(deviceIndex: index)
+    }
+
+    /// Repointe le device sur l'IP résolue. roc-vad ne permet pas de modifier les endpoints
+    /// d'un device existant : il faut le supprimer et le recréer.
+    func updateHost(_ newHost: String) {
+        guard newHost != miloHost else {
+            NSLog("🔄 roc-vad: Host unchanged (%@)", newHost)
+            return
+        }
+
+        NSLog("🔄 Updating roc-vad endpoint from %@ to %@", miloHost, newHost)
+        miloHost = newHost
+
+        deleteAllMiloDevices()
+
+        let index = createMiloDevice()
+        guard index > 0 else {
+            NSLog("❌ Failed to create new Milō device")
+            return
+        }
+
+        NSLog("🔧 Configuring new device #%d with IP: %@", index, newHost)
+        let success = configureDevice(deviceIndex: index)
+        NSLog(success ? "✅ Device reconfigured with IP: %@" : "❌ Failed to configure device with IP: %@", newHost)
+    }
+
+    /// Applique de nouveaux réglages : le device est recréé avec les nouveaux arguments.
+    func apply(_ newSettings: RocVADSettings, progress: @Sendable (RocVADProgress) -> Void) -> Bool {
+        settings = newSettings
+
+        if deleteAllMiloDevices() > 0 {
+            // Court délai pour s'assurer que les devices sont bien supprimés.
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        progress(.update(L("progress.creating_device")))
+
+        let index = createMiloDevice()
+        guard index > 0 else {
+            NSLog("❌ Failed to create new device with updated settings")
+            return false
+        }
+        NSLog("✅ Created new device #%d with updated settings", index)
+
+        progress(.update(L("progress.reconfiguring_device")))
+
+        let success = configureDevice(deviceIndex: index)
+        NSLog(success ? "✅ Device reconfigured with new settings" : "❌ Failed to configure device endpoints")
         return success
     }
 
-    /// Supprime tous les devices roc-vad nommés "Milō" et retourne le nombre supprimé
+    // MARK: - Primitives roc-vad
+
+    /// Supprime tous les devices « Milō » et retourne le nombre supprimé.
     @discardableResult
     private func deleteAllMiloDevices() -> Int {
-        let existing = getRocVADDeviceInfo().filter { $0.name == deviceName }
+        let existing = deviceInfo().filter { $0.name == deviceName }
         for device in existing {
             NSLog("🗑️ Deleting device #%d", device.index)
-            deleteDevice(deviceIndex: device.index)
+            let deleted = Self.runRocVAD(["device", "del", "\(device.index)"])?.status == 0
+            NSLog(deleted ? "✅ Device #%d deleted" : "⚠️ Failed to delete device #%d", device.index)
         }
         return existing.count
     }
@@ -445,26 +238,244 @@ class RocVADManager {
         return success
     }
 
-    private func checkDeviceConfiguration(deviceIndex: Int) -> Bool {
+    /// Le device a-t-il déjà ses endpoints ? On cherche les ports ROC caractéristiques,
+    /// sans présumer de l'hôte (l'IP résolue peut différer de `miloHost`).
+    private func isDeviceConfigured(deviceIndex: Int) -> Bool {
         guard let result = Self.runRocVAD(["device", "show", "\(deviceIndex)"]) else { return false }
 
-        // Vérifier si le device a des endpoints configurés (soit avec miloHost actuel, soit avec une IP)
-        // On vérifie la présence des ports ROC caractéristiques
         let output = result.output
         return output.contains(":\(sourcePort)")
             && output.contains(":\(repairPort)")
             && output.contains(":\(controlPort)")
     }
 
-    private func getRocVADDeviceInfo() -> [RocVADDeviceInfo] {
+    private func deviceInfo() -> [RocVADDeviceInfo] {
         guard let result = Self.runRocVAD(["device", "list"]) else { return [] }
         return parseDeviceList(from: result.output)
     }
 }
 
+// MARK: - Manager
+
+/// Façade du driver roc-vad : l'état côté UI (réglages, panneau de progression) et la
+/// porte d'entrée du pilote.
+///
+/// roc-vad est un **état**, jamais un péage au démarrage : l'app tourne très bien sans
+/// lui — seule la source « Mac » en dépend, et elle apparaît simplement désactivée.
+@MainActor
+final class RocVADManager {
+
+    /// `nonisolated` : simple constante, lue depuis le pilote (hors main actor) comme
+    /// depuis l'UI.
+    nonisolated static let binaryPath = "/usr/local/bin/roc-vad"
+
+    /// Le binaire est présent sur le disque (ne dit pas si le driver est chargé — pour ça,
+    /// voir `checkInstallation()`).
+    nonisolated static var isBinaryInstalled: Bool {
+        FileManager.default.fileExists(atPath: binaryPath)
+    }
+
+    /// Copie main-isolée des réglages, lue par SettingsViewModel. Le pilote garde la sienne
+    /// (il en a besoin pour construire les arguments, sur sa propre queue).
+    private(set) var settings: RocVADSettings
+
+    private let device: RocVADDevice
+
+    // Panneau de progression (style NSAlert natif)
+    private var progressPanel: NSWindow?
+    private var progressLabel: NSTextField?
+    private var progressIndicator: NSProgressIndicator?
+
+    init() {
+        let settings = RocVADSettings.loadFromUserDefaults()
+        self.settings = settings
+        self.device = RocVADDevice(settings: settings)
+        NSLog("📦 RocVADManager initialized with settings: buffer=%dms, fec=%@, resampler=%@",
+              settings.deviceBuffer, settings.fecEncoding.rawValue, settings.resamplerProfile.rawValue)
+    }
+
+    // MARK: - Interface
+
+    func checkInstallation() async -> Bool {
+        await device.isFunctional()
+    }
+
+    /// Vérifie le device et ne le (re)crée qu'au besoin. Le panneau de progression
+    /// n'apparaît que si du travail est nécessaire.
+    @discardableResult
+    func configureDeviceOnly() async -> Bool {
+        await device.configureIfNeeded(progress: progressSink())
+    }
+
+    /// Repointe roc-vad sur l'IP résolue. Sans attente : l'appelant (le connection manager)
+    /// n'a rien à en faire.
+    nonisolated func updateMiloHost(_ newHost: String) {
+        Task { await device.updateHost(newHost) }
+    }
+
+    func performInstallation() async -> Bool {
+        NSLog("🔧 Starting roc-vad installation...")
+
+        showProgressPanel(message: L("progress.preparing"))
+        defer { hideProgressPanel() }
+
+        updateProgressMessage(L("progress.downloading"))
+        guard await device.runInstaller() else { return false }
+
+        // Laisser l'installation se poser, puis vérifier. `Task.sleep` et non
+        // `Thread.sleep` : on est sur le main actor, et le panneau doit rester animé.
+        try? await Task.sleep(for: .seconds(3))
+
+        updateProgressMessage(L("progress.verifying"))
+        try? await Task.sleep(for: .seconds(1))
+
+        guard Self.isBinaryInstalled else {
+            NSLog("❌ roc-vad installation failed")
+            return false
+        }
+
+        updateProgressMessage(L("progress.installation_complete"))
+        try? await Task.sleep(for: .seconds(1))
+        NSLog("✅ roc-vad installation completed")
+        return true
+    }
+
+    /// Applique de nouveaux réglages et recrée le device.
+    func updateSettings(_ newSettings: RocVADSettings) async -> Bool {
+        NSLog("🔧 Updating ROC VAD settings...")
+
+        // Poser la copie main-isolée AVANT le travail : c'est elle que lit
+        // SettingsViewModel (`hasChanges`), et elle doit refléter ce qu'on est en train
+        // d'appliquer dès le clic sur « Appliquer ».
+        settings = newSettings
+        newSettings.saveToUserDefaults()
+        NSLog("💾 Settings saved: buffer=%dms, fec=%@, resampler=%@",
+              newSettings.deviceBuffer, newSettings.fecEncoding.rawValue, newSettings.resamplerProfile.rawValue)
+
+        showProgressPanel(message: L("progress.applying_settings"))
+        defer { hideProgressPanel() }
+
+        return await device.apply(newSettings, progress: progressSink())
+    }
+
+    // MARK: - Panneau de progression
+
+    /// Le pilote poste ses étapes **sans les attendre** : un `await` vers le main actor
+    /// depuis l'acteur le suspendrait, et rouvrirait l'entrelacement que sa queue série
+    /// interdit. C'est exactement ce que faisait le `DispatchQueue.main.async` d'origine.
+    private nonisolated func progressSink() -> @Sendable (RocVADProgress) -> Void {
+        { [weak self] step in
+            Task { @MainActor in self?.applyProgress(step) }
+        }
+    }
+
+    private func applyProgress(_ step: RocVADProgress) {
+        switch step {
+        case .show(let message):   showProgressPanel(message: message)
+        case .update(let message): updateProgressMessage(message)
+        case .hide:                hideProgressPanel()
+        }
+    }
+
+    // Fenêtre sans barre de titre, au matériau des NSAlert.
+    private func showProgressPanel(message: String) {
+        // Une opération peut en enchaîner une autre (updateSettings ouvre le panneau, puis
+        // le pilote demande .show) : ne pas empiler deux fenêtres.
+        guard progressPanel == nil else {
+            updateProgressMessage(message)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 260, height: 190),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.level = .floating
+        window.center()
+        window.isReleasedWhenClosed = false
+
+        // Transparence + flou, comme les vrais NSAlert.
+        let visualEffectView = NSVisualEffectView()
+        visualEffectView.frame = window.contentView!.bounds
+        visualEffectView.autoresizingMask = [.width, .height]
+        visualEffectView.material = .popover
+        visualEffectView.state = .active
+        visualEffectView.wantsLayer = true
+        visualEffectView.layer?.cornerRadius = 8
+
+        window.contentView = visualEffectView
+
+        let contentView = NSView(frame: visualEffectView.bounds)
+        contentView.autoresizingMask = [.width, .height]
+        visualEffectView.addSubview(contentView)
+
+        // Icône de l'app, 64×64 centrée — comme dans un NSAlert.
+        let iconImageView = NSImageView()
+        iconImageView.frame = NSRect(x: (260 - 64) / 2, y: 106, width: 64, height: 64)
+        iconImageView.image = NSApp.applicationIconImage
+        iconImageView.imageScaling = .scaleProportionallyDown
+        contentView.addSubview(iconImageView)
+
+        // Titre principal (messageText).
+        let titleLabel = NSTextField(labelWithString: L("setup.installation.title"))
+        titleLabel.font = .boldSystemFont(ofSize: 13)
+        titleLabel.alignment = .center
+        titleLabel.backgroundColor = .clear
+        titleLabel.isBezeled = false
+        titleLabel.isEditable = false
+        titleLabel.textColor = .labelColor
+        titleLabel.frame = NSRect(x: 20, y: 66, width: 220, height: 20)
+        contentView.addSubview(titleLabel)
+
+        // Message de progression (informativeText).
+        let messageLabel = NSTextField(labelWithString: message)
+        messageLabel.font = .systemFont(ofSize: 11)
+        messageLabel.alignment = .center
+        messageLabel.backgroundColor = .clear
+        messageLabel.isBezeled = false
+        messageLabel.isEditable = false
+        messageLabel.textColor = .secondaryLabelColor
+        messageLabel.lineBreakMode = .byWordWrapping
+        messageLabel.maximumNumberOfLines = 2
+        messageLabel.frame = NSRect(x: 20, y: 33, width: 220, height: 30)
+        contentView.addSubview(messageLabel)
+        progressLabel = messageLabel
+
+        // Barre de progression (accessoryView).
+        let progress = NSProgressIndicator()
+        progress.style = .bar
+        progress.isIndeterminate = true
+        progress.frame = NSRect(x: 30, y: 7, width: 200, height: 28)
+        progress.startAnimation(nil)
+        contentView.addSubview(progress)
+        progressIndicator = progress
+
+        window.makeKeyAndOrderFront(nil)
+
+        progressPanel = window
+    }
+
+    private func updateProgressMessage(_ message: String) {
+        progressLabel?.stringValue = message
+    }
+
+    private func hideProgressPanel() {
+        progressIndicator?.stopAnimation(nil)
+        progressPanel?.close()
+        progressPanel = nil
+        progressLabel = nil
+        progressIndicator = nil
+    }
+}
+
 // MARK: - Supporting Types
 
-struct RocVADDeviceInfo {
+struct RocVADDeviceInfo: Sendable {
     let index: Int
     let name: String
 }

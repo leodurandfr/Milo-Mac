@@ -7,6 +7,7 @@ import SwiftUI
 /// La scène `Settings` de SwiftUI n'est pas utilisable ici : `SettingsLink` ne s'ouvre
 /// que depuis l'arbre de scènes de l'App, or notre panneau vit dans une NSPanel présentée
 /// par un NSStatusItem — hors de cet arbre.
+@MainActor
 enum SettingsWindowPresenter {
     private static var controller: SettingsWindowController?
 
@@ -23,6 +24,7 @@ enum SettingsWindowPresenter {
     }
 }
 
+@MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private let store: MiloStore
     private var window: NSWindow?

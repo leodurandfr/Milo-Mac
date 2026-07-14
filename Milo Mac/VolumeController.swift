@@ -7,8 +7,11 @@ import Foundation
 /// `isUserInteracting`, qui sert à ne pas écraser la valeur que l'utilisateur est en
 /// train de manipuler avec l'écho (retardé) du serveur.
 ///
-/// Comme le reste de l'app, cette classe s'utilise exclusivement depuis le main thread.
-class VolumeController {
+/// Comme le reste de l'app, cette classe s'utilise exclusivement depuis le main thread —
+/// et `@MainActor` le fait désormais vérifier par le compilateur, au lieu de le promettre
+/// en commentaire.
+@MainActor
+final class VolumeController {
     weak var apiService: MiloAPIService?
 
     private var pendingVolumeDb: Double?
@@ -53,10 +56,12 @@ class VolumeController {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + userInteractionTimeout) { [weak self] in
-            guard let self, let lastInteraction = self.lastUserInteraction else { return }
+            MainActor.assumeIsolated {
+                guard let self, let lastInteraction = self.lastUserInteraction else { return }
 
-            if Date().timeIntervalSince(lastInteraction) >= self.userInteractionTimeout {
-                self.isUserInteracting = false
+                if Date().timeIntervalSince(lastInteraction) >= self.userInteractionTimeout {
+                    self.isUserInteracting = false
+                }
             }
         }
     }
@@ -77,20 +82,16 @@ class VolumeController {
         referenceVolumeDb = volumeDb
         lastVolumeAPICall = Date()
 
+        // La classe est main-isolée : cette Task hérite du main actor, et `pendingVolumeDb`
+        // se relit donc sur le main thread après l'await, sans MainActor.run explicite.
         Task {
-            // pendingVolumeDb est manipulé sur le main thread partout ailleurs
-            // (drag du slider, debounce) — repasser par MainActor après l'await.
             do {
                 try await apiService.adjustVolumeDb(delta)
-                await MainActor.run {
-                    if self.pendingVolumeDb == volumeDb {
-                        self.pendingVolumeDb = nil
-                    }
+                if pendingVolumeDb == volumeDb {
+                    pendingVolumeDb = nil
                 }
             } catch {
-                await MainActor.run {
-                    self.pendingVolumeDb = volumeDb
-                }
+                pendingVolumeDb = volumeDb
             }
         }
     }
@@ -99,8 +100,10 @@ class VolumeController {
         volumeDebounceWorkItem?.cancel()
 
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, let volumeDb = self.pendingVolumeDb else { return }
-            self.sendVolumeUpdate(volumeDb)
+            MainActor.assumeIsolated {
+                guard let self, let volumeDb = self.pendingVolumeDb else { return }
+                self.sendVolumeUpdate(volumeDb)
+            }
         }
 
         volumeDebounceWorkItem = workItem

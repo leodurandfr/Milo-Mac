@@ -1,5 +1,9 @@
 import Foundation
+import Synchronization
 
+/// Comme MiloConnectionManagerDelegate : les rappels sont resynchronisés sur le main
+/// thread avant d'être émis (voir `parseMessage`).
+@MainActor
 protocol WebSocketServiceDelegate: AnyObject {
     func webSocketDidConnect()
     func webSocketDidDisconnect()
@@ -15,7 +19,21 @@ protocol WebSocketServiceDelegate: AnyObject {
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
 
-class WebSocketService: NSObject {
+/// Transport WebSocket : les mises à jour poussées par le backend.
+///
+/// L'état de connexion (`webSocketTask`, `isOpen`, `isConnecting`, le timer de ping)
+/// appartient au **main actor** — d'où `@MainActor` sur la classe. Mais URLSession livre
+/// ses rappels sur SA queue déléguée : la boucle de réception, les rappels de ping et les
+/// méthodes de `URLSessionWebSocketDelegate` sont donc `nonisolated`, et se resynchronisent
+/// explicitement sur le main thread. C'est délibéré, et c'est ce que faisait déjà le code.
+///
+/// La **génération** est la seule donnée qui franchisse cette frontière : elle est lue
+/// depuis la queue déléguée pour écarter les rappels d'une connexion périmée (un ping ou
+/// une erreur de l'ancienne socket, arrivant après une reconnexion sleep/wake, ne doit pas
+/// détruire la nouvelle). D'où le `Mutex` — là où un `NSLock` demandait au compilateur de
+/// nous croire, il vérifie.
+@MainActor
+final class WebSocketService: NSObject {
     weak var delegate: WebSocketServiceDelegate?
 
     // WebSocket
@@ -25,12 +43,11 @@ class WebSocketService: NSObject {
     // true entre connect() et didOpen — permet de signaler un échec de handshake.
     private var isConnecting = false
 
-    // Generation tracking (thread-safe via NSLock for background receive callbacks)
-    private let generationLock = NSLock()
-    private var _currentGeneration: Int = 0
-    private var currentGeneration: Int {
-        get { generationLock.withLock { _currentGeneration } }
-        set { generationLock.withLock { _currentGeneration = newValue } }
+    /// Voir l'en-tête de classe : franchit la frontière d'isolation, donc sous verrou.
+    private nonisolated let generation = Mutex(0)
+
+    private nonisolated var currentGeneration: Int {
+        generation.withLock { $0 }
     }
 
     // Ping
@@ -51,14 +68,14 @@ class WebSocketService: NSObject {
 
     // MARK: - Public API
 
-    func connect(to urlString: String, generation: Int) {
-        NSLog("🔌 WebSocket connecting to %@ (gen %d)", urlString, generation)
+    func connect(to urlString: String, generation newGeneration: Int) {
+        NSLog("🔌 WebSocket connecting to %@ (gen %d)", urlString, newGeneration)
 
         cleanupCurrentConnection()
         // Ne pas dépendre de l'ordre d'appel du caller (resetSession avant
         // connect) : l'état "ouvert" appartient au cycle de vie de la connexion.
         isOpen = false
-        currentGeneration = generation
+        generation.withLock { $0 = newGeneration }
 
         guard let url = URL(string: urlString) else {
             NSLog("❌ Invalid WebSocket URL: %@", urlString)
@@ -69,7 +86,7 @@ class WebSocketService: NSObject {
         let task = urlSession!.webSocketTask(with: url)
         webSocketTask = task
         task.resume()
-        startListening(task: task, generation: generation)
+        startListening(task: task, generation: newGeneration)
     }
 
     /// Closes the connection without notifying the delegate.
@@ -101,7 +118,10 @@ class WebSocketService: NSObject {
     /// La boucle de réception capture sa propre task : le callback (queue
     /// déléguée URLSession) ne relit jamais self.webSocketTask, qui est écrit
     /// sur le main thread — pas de lecture croisée non synchronisée.
-    private func startListening(task: URLSessionWebSocketTask, generation: Int) {
+    ///
+    /// `nonisolated` : elle tourne sur la queue déléguée d'URLSession, et se rappelle
+    /// elle-même depuis ce même rappel.
+    private nonisolated func startListening(task: URLSessionWebSocketTask, generation: Int) {
         task.receive { [weak self] result in
             guard let self = self, self.currentGeneration == generation else { return }
 
@@ -115,11 +135,13 @@ class WebSocketService: NSObject {
             case .failure(let error):
                 NSLog("❌ WebSocket receive error (gen %d): %@", generation, error.localizedDescription)
                 DispatchQueue.main.async { [weak self] in
-                    guard let self = self, self.currentGeneration == generation else {
-                        NSLog("💔 Stale WebSocket error (gen %d), ignoring", generation)
-                        return
+                    MainActor.assumeIsolated {
+                        guard let self = self, self.currentGeneration == generation else {
+                            NSLog("💔 Stale WebSocket error (gen %d), ignoring", generation)
+                            return
+                        }
+                        self.handleSocketError()
                     }
-                    self.handleSocketError()
                 }
             }
         }
@@ -143,7 +165,7 @@ class WebSocketService: NSObject {
 
     // MARK: - Message Handling
 
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
+    private nonisolated func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         switch message {
         case .string(let text):
             parseMessage(text)
@@ -156,19 +178,24 @@ class WebSocketService: NSObject {
         }
     }
 
-    /// Événements WebSocket réellement consommés par milo-mac.
-    private enum HandledEvent {
-        /// Toute mise à jour d'état portant full_state (catégories "source" et
-        /// "system", _FULL_STATE_CATEGORIES côté backend). L'état EQ arrive via
-        /// le system/state_changed compagnon, pas via equalizer/enabled_changed.
-        case systemState
-        case volumeChanged
-        case multiroomError
-        case volumeLimitsChanged
-        case dockAppsChanged
+    /// Un événement **décodé**, prêt à être livré au delegate.
+    ///
+    /// Sendable, et c'est tout l'intérêt : le décodage a lieu sur la queue déléguée
+    /// d'URLSession, la livraison sur le main actor. Faire traverser le `[String: Any]`
+    /// brut (non-Sendable) obligerait à mentir au compilateur ; on fait donc traverser le
+    /// résultat typé, ce qui déplace au passage tout le parsing hors du main thread.
+    private enum DecodedEvent: Sendable {
+        /// Toute mise à jour d'état portant full_state (catégories "source" et "system",
+        /// _FULL_STATE_CATEGORIES côté backend). L'état EQ arrive via le system/state_changed
+        /// compagnon, pas via equalizer/enabled_changed.
+        case state(MiloState, multiroomChanged: Bool)
+        case volume(VolumeStatus)
+        case multiroomFailed
+        case volumeLimits(minDb: Double, maxDb: Double)
+        case dockApps([String])
     }
 
-    private func parseMessage(_ text: String) {
+    private nonisolated func parseMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let category = json["category"] as? String,
@@ -183,56 +210,72 @@ class WebSocketService: NSObject {
         // settings/mac_roc_changed, routing/multiroom_ready, equalizer/levels,
         // system/ping…) qu'il ne consomme pas. On ne logge et ne traite QUE les
         // events utiles — le reste est ignoré silencieusement, sans hop main-thread.
-        let handled: HandledEvent
+        let decoded: DecodedEvent?
         switch (category, eventType) {
         case ("system", "state_changed"),
              ("system", "transition_complete"),
              ("system", "transition_start"),
              ("source", "state_changed"):
-            handled = .systemState
+            decoded = Self.decodeState(eventData)
         case ("volume", "volume_changed"):
-            handled = .volumeChanged
+            decoded = Self.decodeVolume(eventData)
         case ("routing", "multiroom_error"):
-            handled = .multiroomError
+            decoded = .multiroomFailed
         case ("settings", "volume_limits_changed"):
-            handled = .volumeLimitsChanged
+            decoded = Self.decodeVolumeLimits(eventData)
         case ("settings", "dock_apps_changed"):
-            handled = .dockAppsChanged
+            decoded = Self.decodeDockApps(eventData)
         default:
             return
         }
 
         NSLog("📨 WebSocket event: %@/%@ (gen %d)", category, eventType, currentGeneration)
 
+        guard let decoded else { return }
+
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            switch handled {
-            case .systemState:        self.handleSystemStateChange(eventData)
-            case .volumeChanged:      self.handleVolumeChange(eventData)
-            case .multiroomError:     self.delegate?.didReceiveMultiroomTransitionComplete(success: false)
-            case .volumeLimitsChanged: self.handleVolumeLimitsChange(eventData)
-            case .dockAppsChanged:    self.handleDockAppsChange(eventData)
+            MainActor.assumeIsolated { self?.deliver(decoded) }
+        }
+    }
+
+    private func deliver(_ event: DecodedEvent) {
+        switch event {
+        case .state(let state, let multiroomChanged):
+            delegate?.didReceiveStateUpdate(state)
+
+            // The backend silently pre-sets multiroom_enabled at the start of a
+            // routing transition, then broadcasts many intermediate source state
+            // changes that all carry the new multiroom_enabled in full_state.
+            // Only the final update_multiroom_state broadcast carries the
+            // multiroom_changed discriminator — treat it as the authoritative
+            // completion signal for the multiroom loading spinner.
+            if multiroomChanged {
+                delegate?.didReceiveMultiroomTransitionComplete(success: true)
             }
+
+        case .volume(let volume):
+            delegate?.didReceiveVolumeUpdate(volume)
+
+        case .multiroomFailed:
+            delegate?.didReceiveMultiroomTransitionComplete(success: false)
+
+        case .volumeLimits(let minDb, let maxDb):
+            delegate?.didReceiveVolumeLimitsUpdate(minDb: minDb, maxDb: maxDb)
+
+        case .dockApps(let apps):
+            delegate?.didReceiveDockAppsUpdate(apps)
         }
     }
 
-    private func handleSystemStateChange(_ data: [String: Any]) {
-        guard let fullState = data["full_state"] as? [String: Any] else { return }
+    // MARK: - Décodage (hors main thread)
 
-        delegate?.didReceiveStateUpdate(MiloState(json: fullState))
-
-        // The backend silently pre-sets multiroom_enabled at the start of a
-        // routing transition, then broadcasts many intermediate source state
-        // changes that all carry the new multiroom_enabled in full_state.
-        // Only the final update_multiroom_state broadcast carries the
-        // multiroom_changed discriminator — treat it as the authoritative
-        // completion signal for the multiroom loading spinner.
-        if data["multiroom_changed"] as? Bool == true {
-            delegate?.didReceiveMultiroomTransitionComplete(success: true)
-        }
+    private nonisolated static func decodeState(_ data: [String: Any]) -> DecodedEvent? {
+        guard let fullState = data["full_state"] as? [String: Any] else { return nil }
+        return .state(MiloState(json: fullState),
+                      multiroomChanged: data["multiroom_changed"] as? Bool == true)
     }
 
-    private func handleVolumeChange(_ data: [String: Any]) {
+    private nonisolated static func decodeVolume(_ data: [String: Any]) -> DecodedEvent? {
         let volumeDb: Double
         let state = data["state"] as? [String: Any]
 
@@ -247,7 +290,7 @@ class WebSocketService: NSObject {
         } else if let db = data["volume_db"] as? Int {
             volumeDb = Double(db)
         } else {
-            return
+            return nil
         }
 
         let mode = state?["mode"] as? String
@@ -255,34 +298,32 @@ class WebSocketService: NSObject {
 
         // Les limites ne sont pas dans les événements WebSocket ; elles sont préservées
         // depuis le cache API par `MiloStore.didReceiveVolumeUpdate`.
-        let volumeStatus = VolumeStatus(
+        return .volume(VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: multiroomEnabled,
             dspAvailable: true,
             limitMinDb: 0,
             limitMaxDb: 0
-        )
-
-        delegate?.didReceiveVolumeUpdate(volumeStatus)
+        ))
     }
 
     // settings/volume_limits_changed → data.limits.{min_db,max_db}
     // (même enveloppe "limits" que l'ancienne route /api/settings/volume-limits)
-    private func handleVolumeLimitsChange(_ data: [String: Any]) {
+    private nonisolated static func decodeVolumeLimits(_ data: [String: Any]) -> DecodedEvent? {
         guard let limits = data["limits"] as? [String: Any],
               let minDb = (limits["min_db"] as? Double) ?? (limits["min_db"] as? Int).map(Double.init),
               let maxDb = (limits["max_db"] as? Double) ?? (limits["max_db"] as? Int).map(Double.init),
-              minDb < maxDb else { return }  // garde-fou : jamais de 0/0 ni de plage inversée
+              minDb < maxDb else { return nil }  // garde-fou : jamais de 0/0 ni de plage inversée
 
-        delegate?.didReceiveVolumeLimitsUpdate(minDb: minDb, maxDb: maxDb)
+        return .volumeLimits(minDb: minDb, maxDb: maxDb)
     }
 
     // settings/dock_apps_changed → data.config.enabled_apps
-    private func handleDockAppsChange(_ data: [String: Any]) {
+    private nonisolated static func decodeDockApps(_ data: [String: Any]) -> DecodedEvent? {
         guard let config = data["config"] as? [String: Any],
-              let enabledApps = config["enabled_apps"] as? [String] else { return }
+              let enabledApps = config["enabled_apps"] as? [String] else { return nil }
 
-        delegate?.didReceiveDockAppsUpdate(enabledApps)
+        return .dockApps(enabledApps)
     }
 
     // MARK: - Ping
@@ -293,7 +334,7 @@ class WebSocketService: NSObject {
         // ou faire défiler la liste des stations bascule la run loop en `.eventTracking`, où
         // un timer posé dans le seul mode par défaut ne se déclencherait plus.
         let timer = Timer(timeInterval: pingInterval, repeats: true) { [weak self] _ in
-            self?.sendPing()
+            MainActor.assumeIsolated { self?.sendPing() }
         }
         RunLoop.main.add(timer, forMode: .common)
         pingTimer = timer
@@ -305,50 +346,60 @@ class WebSocketService: NSObject {
         // Capturer la génération : un ping de l'ancienne connexion dont le
         // callback d'erreur arrive après une reconnexion (sleep/wake) ne doit
         // pas détruire la nouvelle connexion, déjà ouverte.
-        let generation = currentGeneration
+        let pingGeneration = currentGeneration
         webSocketTask?.sendPing { [weak self] error in
+            // Rappel livré sur la queue déléguée d'URLSession.
             if let error = error {
                 NSLog("❌ Ping failed: %@", error.localizedDescription)
                 DispatchQueue.main.async {
-                    guard let self = self, self.currentGeneration == generation else { return }
-                    self.handleSocketError()
+                    MainActor.assumeIsolated {
+                        guard let self = self, self.currentGeneration == pingGeneration else { return }
+                        self.handleSocketError()
+                    }
                 }
             }
         }
     }
 
-    deinit {
+    isolated deinit {
         cleanupCurrentConnection()
     }
 }
 
 // MARK: - URLSessionWebSocketDelegate
+
+/// Livrées sur la queue déléguée d'URLSession, d'où `nonisolated` : chacune se
+/// resynchronise sur le main thread, où vit l'état de connexion.
 extension WebSocketService: URLSessionWebSocketDelegate {
-    func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+    nonisolated func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         NSLog("✅ WebSocket connected (gen %d)", currentGeneration)
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.webSocketTask === task else {
-                NSLog("💔 Stale WebSocket didOpen callback, ignoring")
-                return
+            MainActor.assumeIsolated {
+                guard let self = self, self.webSocketTask === task else {
+                    NSLog("💔 Stale WebSocket didOpen callback, ignoring")
+                    return
+                }
+                self.isOpen = true
+                self.isConnecting = false
+                self.startPingTimer()
+                self.delegate?.webSocketDidConnect()
             }
-            self.isOpen = true
-            self.isConnecting = false
-            self.startPingTimer()
-            self.delegate?.webSocketDidConnect()
         }
     }
 
-    func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    nonisolated func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "Unknown"
         NSLog("🔌 WebSocket closed (gen %d): %d - %@", currentGeneration, closeCode.rawValue, reasonString)
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.webSocketTask === task else {
-                NSLog("💔 Stale WebSocket didClose callback, ignoring")
-                return
+            MainActor.assumeIsolated {
+                guard let self = self, self.webSocketTask === task else {
+                    NSLog("💔 Stale WebSocket didClose callback, ignoring")
+                    return
+                }
+                self.handleSocketError()
             }
-            self.handleSocketError()
         }
     }
 }

@@ -3,8 +3,9 @@ import ServiceManagement
 
 // MARK: - ViewModel
 
+@MainActor
 @Observable
-class SettingsViewModel {
+final class SettingsViewModel {
     // Dependencies
     weak var hotkeyManager: GlobalHotkeyManager?
     weak var rocVADManager: RocVADManager?
@@ -106,8 +107,12 @@ class SettingsViewModel {
         self.rocVADInstalled = RocVADManager.isBinaryInstalled
         self.pendingSettings = rocVADManager?.settings ?? RocVADSettings()
 
-        rocVADManager?.checkInstallation { [weak self] isWorking in
-            self?.rocVADInstalled = isWorking
+        // Le vrai statut du driver, en arrière-plan : `roc-vad info` passe par gRPC.
+        if let rocVADManager {
+            Task { [weak self] in
+                let isWorking = await rocVADManager.checkInstallation()
+                self?.rocVADInstalled = isWorking
+            }
         }
     }
 
@@ -148,16 +153,10 @@ class SettingsViewModel {
         guard let rocVADManager else { return }
         isApplying = true
 
-        rocVADManager.updateSettings(pendingSettings) { [weak self] success in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.isApplying = false
-                if success {
-                    NSLog("Settings applied successfully")
-                } else {
-                    NSLog("Failed to apply settings")
-                }
-            }
+        Task {
+            let success = await rocVADManager.updateSettings(pendingSettings)
+            isApplying = false
+            NSLog(success ? "Settings applied successfully" : "Failed to apply settings")
         }
     }
 

@@ -1,17 +1,18 @@
 import Foundation
 import Observation
 
-/// Source de vérité de l'UI. Remplace l'ancien MenuBarController : là où celui-ci
-/// reconstruisait un NSMenu à chaque événement, les vues SwiftUI observent
-/// directement ces propriétés et se re-rendent seules.
+/// Source de vérité de l'UI : les vues SwiftUI observent ces propriétés et se re-rendent
+/// seules. Rien ne reconstruit de menu à chaque événement.
 ///
-/// La machine à états de chargement (spinners) est portée à l'identique depuis
-/// MenuBarController — c'est la partie subtile de cette classe, voir les commentaires
-/// en regard de `syncLoadingStatesWithBackend`.
+/// La machine à états de chargement (les spinners) est la partie subtile de cette classe —
+/// voir les commentaires en regard de `syncLoadingStatesWithBackend`.
 ///
-/// Comme MenuBarController avant elle, cette classe s'utilise **exclusivement depuis le
-/// main thread** : MiloConnectionManager et WebSocketService dispatchent déjà tous leurs
-/// appels delegate sur la main queue, et les Timers/asyncAfter d'ici y tournent aussi.
+/// Cette classe s'utilise **exclusivement depuis le main thread**, et `@MainActor` le fait
+/// vérifier par le compilateur au lieu de le confier à ce commentaire : MiloConnectionManager
+/// et WebSocketService livrent déjà tous leurs appels delegate sur le main actor, et les
+/// Timers/asyncAfter d'ici y tournent aussi. Les `Task` créées ici en héritent — d'où
+/// l'absence de `MainActor.run` : après un `await` réseau, on est déjà revenu sur le main.
+@MainActor
 @Observable
 final class MiloStore {
 
@@ -77,41 +78,35 @@ final class MiloStore {
             return
         }
 
-        // `roc-vad info` interroge le driver via gRPC et peut prendre plusieurs secondes.
-        rocVADManager.checkInstallation { [weak self] driverLoaded in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.isRocVADReady = driverLoaded
+        Task {
+            // `roc-vad info` interroge le driver via gRPC et peut prendre plusieurs
+            // secondes — d'où l'await, qui n'immobilise pas le main thread.
+            let driverLoaded = await rocVADManager.checkInstallation()
+            isRocVADReady = driverLoaded
 
-                guard driverLoaded else {
-                    NSLog("⚠️ roc-vad installed but driver not loaded — restart pending")
-                    self.rocVADNeedsRestart = true
-                    return
-                }
-
-                // configureDeviceOnly doit tourner sur la deviceQueue sérielle du
-                // manager : deux appels roc-vad concurrents se marchent dessus.
-                rocVADManager.configureDeviceOnly { success in
-                    NSLog(success ? "✅ roc-vad device configured" : "⚠️ roc-vad device configuration failed")
-                }
+            guard driverLoaded else {
+                NSLog("⚠️ roc-vad installed but driver not loaded — restart pending")
+                rocVADNeedsRestart = true
+                return
             }
+
+            let success = await rocVADManager.configureDeviceOnly()
+            NSLog(success ? "✅ roc-vad device configured" : "⚠️ roc-vad device configuration failed")
         }
     }
 
     /// Installe roc-vad à la demande, depuis les Réglages.
-    func installRocVAD(completion: @escaping (Bool) -> Void) {
+    func installRocVAD(completion: @escaping @MainActor (Bool) -> Void) {
         guard let rocVADManager, !isInstallingRocVAD else { return }
         isInstallingRocVAD = true
 
-        rocVADManager.performInstallation { [weak self] success in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.isInstallingRocVAD = false
-                // Le driver n'est chargé qu'après redémarrage : on ne prétend pas être
-                // prêt, on annonce ce qui reste à faire.
-                self.rocVADNeedsRestart = success
-                completion(success)
-            }
+        Task {
+            let success = await rocVADManager.performInstallation()
+            isInstallingRocVAD = false
+            // Le driver n'est chargé qu'après redémarrage : on ne prétend pas être
+            // prêt, on annonce ce qui reste à faire.
+            rocVADNeedsRestart = success
+            completion(success)
         }
     }
 
@@ -200,7 +195,7 @@ final class MiloStore {
                 // Échec HTTP ou {"status": "error"} in-band : pas de transition
                 // à attendre, on arrête le spinner tout de suite.
                 NSLog("❌ Source change to %@ failed: %@", sourceId, error.localizedDescription)
-                await MainActor.run { self.stopLoading(for: sourceId) }
+                stopLoading(for: sourceId)
             }
         }
     }
@@ -220,7 +215,7 @@ final class MiloStore {
                 case "equalizer":
                     try await apiService.setEqualizer(newState)
                 default:
-                    await MainActor.run { self.stopFunctionalityLoading(for: toggleId) }
+                    stopFunctionalityLoading(for: toggleId)
                     return
                 }
             } catch {
@@ -229,7 +224,7 @@ final class MiloStore {
                 // résolu par multiroom_changed / multiroom_error via WebSocket, ou par
                 // le timeout de sécurité. Pour les autres toggles, on arrête tout de suite.
                 if toggleId != "multiroom" {
-                    await MainActor.run { self.stopFunctionalityLoading(for: toggleId) }
+                    stopFunctionalityLoading(for: toggleId)
                 } else {
                     NSLog("⚠️ setMultiroom HTTP error (spinner kept until WS signal): %@", error.localizedDescription)
                 }
@@ -349,7 +344,7 @@ final class MiloStore {
                 }
             } catch {
                 NSLog("❌ Error playing radio: %@", error.localizedDescription)
-                await MainActor.run { self.endRadioStationLoading() }
+                endRadioStationLoading()
             }
         }
     }
@@ -410,13 +405,11 @@ final class MiloStore {
         Task {
             do {
                 let favorites = try await apiService.getRadioFavorites()
-                await MainActor.run {
-                    self.radioFavorites = favorites
-                    NSLog("✅ Radio favorites loaded: %d stations", favorites.count)
-                }
+                radioFavorites = favorites
+                NSLog("✅ Radio favorites loaded: %d stations", favorites.count)
             } catch {
                 NSLog("❌ Failed to load radio favorites: %@", error.localizedDescription)
-                await MainActor.run { self.radioFavorites = nil }
+                radioFavorites = nil
             }
         }
     }
@@ -450,7 +443,7 @@ final class MiloStore {
             if elapsed < minimumFunctionalityLoadingDuration {
                 let remaining = minimumFunctionalityLoadingDuration - elapsed
                 DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
-                    self?.stopFunctionalityLoading(for: identifier)
+                    MainActor.assumeIsolated { self?.stopFunctionalityLoading(for: identifier) }
                 }
                 return
             }
@@ -557,11 +550,13 @@ final class MiloStore {
     /// effacer une transition finalement prise en charge).
     private func scheduleGraceWindowSourceLoadingClear(_ identifier: String, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, self.loadingStates[identifier] == true, let state = self.state else { return }
-            let stillTransitioning = (state.sourceState.lowercased() == "starting" || state.transitioning)
-                && identifier == state.activeSource
-            if !stillTransitioning {
-                self.stopLoading(for: identifier)
+            MainActor.assumeIsolated {
+                guard let self, self.loadingStates[identifier] == true, let state = self.state else { return }
+                let stillTransitioning = (state.sourceState.lowercased() == "starting" || state.transitioning)
+                    && identifier == state.activeSource
+                if !stillTransitioning {
+                    self.stopLoading(for: identifier)
+                }
             }
         }
     }
@@ -574,48 +569,48 @@ final class MiloStore {
         refreshPausedUntil = nil
 
         backgroundRefreshTimer = Timer.scheduledTimer(withTimeInterval: backgroundRefreshInterval, repeats: true) { [weak self] _ in
-            guard let self, self.isConnected, !self.isPanelOpen else { return }
+            MainActor.assumeIsolated { self?.runBackgroundRefreshTick() }
+        }
+    }
 
-            // Pause auto-récupérante : après trop d'échecs consécutifs on attend
-            // refreshPauseDuration puis on retente, au lieu de s'arrêter jusqu'à la
-            // prochaine reconnexion.
-            if let pausedUntil = self.refreshPausedUntil {
-                guard Date() >= pausedUntil else { return }
-                self.refreshPausedUntil = nil
-                self.consecutiveRefreshFailures = 0
+    private func runBackgroundRefreshTick() {
+        guard isConnected, !isPanelOpen else { return }
+
+        // Pause auto-récupérante : après trop d'échecs consécutifs on attend
+        // refreshPauseDuration puis on retente, au lieu de s'arrêter jusqu'à la
+        // prochaine reconnexion.
+        if let pausedUntil = refreshPausedUntil {
+            guard Date() >= pausedUntil else { return }
+            refreshPausedUntil = nil
+            consecutiveRefreshFailures = 0
+        }
+
+        // La propriété est possédée par le main thread et nillée à la déconnexion.
+        guard let apiService = connectionManager.apiService else { return }
+
+        // `enabledApps` encore nil = l'amorçage /bulk a échoué à la connexion. Sans
+        // ce rattrapage il ne serait retenté qu'à la reconnexion suivante, et toute
+        // la session tournerait sans filtre de sources ni vraies limites de volume.
+        let needsBulkSettings = enabledApps == nil
+
+        Task {
+            // Le volume est poussé par WebSocket en temps réel, pas besoin de le
+            // poll ici. Les réglages statiques (dock apps + limites) sont chargés
+            // une fois à la connexion puis poussés par WebSocket — on ne les
+            // retente donc que tant que cet amorçage n'a pas abouti.
+            if needsBulkSettings {
+                await refreshBulkSettings(using: apiService)
             }
 
-            // Capturer le service sur le main thread : la propriété est possédée par
-            // lui et nillée à la déconnexion.
-            guard let apiService = self.connectionManager.apiService else { return }
+            let stateSuccess = await refreshState(using: apiService)
 
-            // Idem pour l'état : lu ici, sur le main thread qui le possède.
-            // `enabledApps` encore nil = l'amorçage /bulk a échoué à la connexion. Sans
-            // ce rattrapage il ne serait retenté qu'à la reconnexion suivante, et toute
-            // la session tournerait sans filtre de sources ni vraies limites de volume.
-            let needsBulkSettings = self.enabledApps == nil
-
-            Task {
-                // Le volume est poussé par WebSocket en temps réel, pas besoin de le
-                // poll ici. Les réglages statiques (dock apps + limites) sont chargés
-                // une fois à la connexion puis poussés par WebSocket — on ne les
-                // retente donc que tant que cet amorçage n'a pas abouti.
-                if needsBulkSettings {
-                    await self.refreshBulkSettings(using: apiService)
-                }
-
-                let stateSuccess = await self.refreshState(using: apiService)
-
-                await MainActor.run {
-                    if stateSuccess {
-                        self.consecutiveRefreshFailures = 0
-                    } else {
-                        self.consecutiveRefreshFailures += 1
-                        if self.consecutiveRefreshFailures >= self.maxConsecutiveFailures {
-                            NSLog("⚠️ Background refresh paused after %d failures", self.consecutiveRefreshFailures)
-                            self.refreshPausedUntil = Date().addingTimeInterval(self.refreshPauseDuration)
-                        }
-                    }
+            if stateSuccess {
+                consecutiveRefreshFailures = 0
+            } else {
+                consecutiveRefreshFailures += 1
+                if consecutiveRefreshFailures >= maxConsecutiveFailures {
+                    NSLog("⚠️ Background refresh paused after %d failures", consecutiveRefreshFailures)
+                    refreshPausedUntil = Date().addingTimeInterval(refreshPauseDuration)
                 }
             }
         }
@@ -644,7 +639,7 @@ final class MiloStore {
 
         Task {
             if needsBulkSettings {
-                await self.refreshBulkSettings(using: apiService)
+                await refreshBulkSettings(using: apiService)
             }
 
             var attempts = 0
@@ -658,7 +653,7 @@ final class MiloStore {
                 let volumeSuccess = await volumeResult
 
                 if stateSuccess || volumeSuccess {
-                    await MainActor.run { self.consecutiveRefreshFailures = 0 }
+                    consecutiveRefreshFailures = 0
                     return
                 }
 
@@ -668,10 +663,8 @@ final class MiloStore {
                 }
             }
 
-            await MainActor.run {
-                self.consecutiveRefreshFailures += 1
-                NSLog("⚠️ Panel refresh failed after %d attempts", maxAttempts)
-            }
+            consecutiveRefreshFailures += 1
+            NSLog("⚠️ Panel refresh failed after %d attempts", maxAttempts)
         }
     }
 
@@ -679,11 +672,9 @@ final class MiloStore {
     private func refreshState(using apiService: MiloAPIService) async -> Bool {
         do {
             let newState = try await apiService.fetchState()
-            await MainActor.run {
-                self.state = newState
-                if newState.activeSource == "radio" && self.radioFavorites == nil {
-                    self.loadRadioFavoritesInBackground()
-                }
+            state = newState
+            if newState.activeSource == "radio" && radioFavorites == nil {
+                loadRadioFavoritesInBackground()
             }
             return true
         } catch {
@@ -698,19 +689,17 @@ final class MiloStore {
     private func refreshBulkSettings(using apiService: MiloAPIService) async -> Bool {
         do {
             let settings = try await apiService.fetchBulkSettings()
-            await MainActor.run {
-                self.enabledApps = settings.enabledApps
+            enabledApps = settings.enabledApps
 
-                // Amorçage tardif (rattrapage après un /bulk raté) : `volume` a pu être
-                // lu entre-temps avec les limites de repli. Les recaler, sinon le slider
-                // et le HUD resteraient mal bornés jusqu'au prochain volume_limits_changed.
-                // Au premier amorçage `volume` est nil : ce bloc ne fait rien.
-                if let existing = self.volume,
-                   existing.limitMinDb != settings.limitMinDb || existing.limitMaxDb != settings.limitMaxDb {
-                    let updated = existing.withLimits(minDb: settings.limitMinDb, maxDb: settings.limitMaxDb)
-                    self.volume = updated
-                    self.volumeController.setCurrentVolume(updated)
-                }
+            // Amorçage tardif (rattrapage après un /bulk raté) : `volume` a pu être
+            // lu entre-temps avec les limites de repli. Les recaler, sinon le slider
+            // et le HUD resteraient mal bornés jusqu'au prochain volume_limits_changed.
+            // Au premier amorçage `volume` est nil : ce bloc ne fait rien.
+            if let existing = volume,
+               existing.limitMinDb != settings.limitMinDb || existing.limitMaxDb != settings.limitMaxDb {
+                let updated = existing.withLimits(minDb: settings.limitMinDb, maxDb: settings.limitMaxDb)
+                volume = updated
+                volumeController.setCurrentVolume(updated)
             }
             return true
         } catch {
@@ -740,7 +729,7 @@ final class MiloStore {
     private func refreshVolumeStatus(using apiService: MiloAPIService) async -> Bool {
         do {
             let volumeStatus = try await apiService.getVolumeStatus()
-            await MainActor.run { self.updateVolumeStatus(volumeStatus) }
+            updateVolumeStatus(volumeStatus)
             return true
         } catch {
             return false
@@ -789,7 +778,7 @@ extension MiloStore: MiloConnectionManagerDelegate {
         Task { [weak self] in
             guard let self else { return }
             await self.bootstrapBulkSettings(using: apiService)
-            await MainActor.run { self.refreshPanelData() }
+            self.refreshPanelData()
         }
     }
 

@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import AppKit
+import Synchronization
 
 // MARK: - Connection Phase State Machine
 enum ConnectionPhase: Equatable, CustomStringConvertible {
@@ -31,7 +32,14 @@ enum ConnectionPhase: Equatable, CustomStringConvertible {
     }
 }
 
-protocol MiloConnectionManagerDelegate: AnyObject {
+/// Tous les rappels sont livrés sur le main thread — c'était déjà le cas, ce n'est
+/// maintenant plus une convention mais une signature.
+///
+/// `Sendable` : le delegate est parfois extrait puis relâché sur la main queue (voir
+/// `stop()`, appelé depuis `deinit`). Ses conformants sont des classes `@MainActor`, donc
+/// Sendable de plein droit.
+@MainActor
+protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func miloDidConnect()
     func miloDidDisconnect()
     func didReceiveStateUpdate(_ state: MiloState)
@@ -41,7 +49,14 @@ protocol MiloConnectionManagerDelegate: AnyObject {
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
 
-class MiloConnectionManager: NSObject {
+/// Découverte et connexion à Milō : mDNS → tests de readiness de l'API → WebSocket.
+///
+/// Main-thread-only, désormais vérifié. La machine à phases, l'état de découverte et les
+/// timers appartiennent au main actor ; seuls les travaux réellement bloquants (résolution
+/// CFHost, sondes TCP de latence) partent hors du main thread — et le font par `await`,
+/// donc en revenant tout seuls.
+@MainActor
+final class MiloConnectionManager: NSObject {
     weak var delegate: MiloConnectionManagerDelegate?
 
     // Référence vers RocVADManager pour mettre à jour l'endpoint avec l'IP résolue
@@ -94,153 +109,113 @@ class MiloConnectionManager: NSObject {
         NSLog("💤 Wake notification registered")
     }
 
-    @objc private func systemDidWake() {
+    /// Livré par NSWorkspace sur le main thread.
+    @objc private nonisolated func systemDidWake() {
         NSLog("☀️ System woke up - forcing reconnection...")
 
-        DispatchQueue.global(qos: .default).async { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor [weak self] in
+            // Laisser la pile réseau se stabiliser après le réveil.
+            try? await Task.sleep(for: .seconds(1))
 
-            // Give the network stack a moment to stabilize after wake
-            Thread.sleep(forTimeInterval: 1.0)
+            guard let self, self.phase != .idle else { return }
 
-            DispatchQueue.main.async {
-                guard self.phase != .idle else { return }
+            let wasConnected = self.phase.isConnected
 
-                let wasConnected = self.phase.isConnected
+            self.webSocketService.disconnect()
+            self.webSocketService.resetSession()
+            self.stopRetry()
+            self.stopDiscovery()
+            self.apiService = nil
 
-                self.webSocketService.disconnect()
-                self.webSocketService.resetSession()
-                self.stopRetry()
-                self.stopDiscovery()
-                self.apiService = nil
-
-                if wasConnected {
-                    self.delegate?.miloDidDisconnect()
-                }
-
-                self.phase = .discovering
-                NSLog("🔄 Network stabilized - starting fresh mDNS discovery...")
-                self.startDiscovery()
+            if wasConnected {
+                self.delegate?.miloDidDisconnect()
             }
+
+            self.phase = .discovering
+            NSLog("🔄 Network stabilized - starting fresh mDNS discovery...")
+            self.startDiscovery()
         }
     }
 
-    /// Résout le hostname en IPv4, teste la latence de toutes les IPs et sélectionne la meilleure
-    private func resolveIPv4Address() {
-        let allIPv4 = IPv4Resolver.resolveAll(host: host)
-        for ip in allIPv4 {
+    /// Résout le hostname en IPv4 et, s'il y a plusieurs candidats, retient le plus rapide.
+    ///
+    /// `nonisolated` : `IPv4Resolver.resolveAll` (CFHost) bloque, et les sondes TCP prennent
+    /// jusqu'à 500 ms chacune — rien de tout ça n'a sa place sur le main actor. L'appelant
+    /// n'a qu'à `await`, et récupère la main tout seul.
+    private nonisolated static func resolveBestIPv4(host: String, port: Int) async -> String? {
+        let candidates = IPv4Resolver.resolveAll(host: host)
+        for ip in candidates {
             NSLog("📍 Found IPv4: %@", ip)
         }
 
-        // Si plusieurs IPs trouvées, sélectionner la meilleure par latence
-        if allIPv4.count > 1 {
-            selectBestIP(from: allIPv4)
-        } else if let firstIP = allIPv4.first {
-            resolvedIPv4 = firstIP
-            NSLog("✅ Resolved %@ to IPv4: %@", host, firstIP)
-            rocVADManager?.updateMiloHost(firstIP)
-        }
-    }
+        guard candidates.count > 1 else { return candidates.first }
 
-    /// Sélectionne la meilleure IP parmi plusieurs candidats en testant la latence
-    private func selectBestIP(from candidates: [String]) {
         NSLog("🔄 Testing latency for %d IP candidates...", candidates.count)
 
-        let group = DispatchGroup()
+        // Les sondes courent en parallèle et se bornent elles-mêmes à 500 ms : le
+        // `DispatchGroup.wait(timeout:)` global d'avant n'a plus lieu d'être.
         var results: [(ip: String, latency: TimeInterval)] = []
-        let resultsLock = NSLock()
-
-        for ip in candidates {
-            group.enter()
-            measureLatency(to: ip) { latency in
-                if let latency = latency {
-                    resultsLock.lock()
-                    results.append((ip, latency))
-                    resultsLock.unlock()
-                    NSLog("📊 Latency to %@: %.1fms", ip, latency * 1000)
-                } else {
+        await withTaskGroup(of: (String, TimeInterval?).self) { group in
+            for ip in candidates {
+                group.addTask { (ip, await measureLatency(to: ip, port: port)) }
+            }
+            for await (ip, latency) in group {
+                guard let latency else {
                     NSLog("⚠️ Failed to measure latency to %@", ip)
+                    continue
                 }
-                group.leave()
+                results.append((ip, latency))
+                NSLog("📊 Latency to %@: %.1fms", ip, latency * 1000)
             }
         }
 
-        // Attendre tous les résultats (max 2 secondes)
-        let waitResult = group.wait(timeout: .now() + 2.0)
-
-        if waitResult == .timedOut {
-            NSLog("⚠️ Latency test timed out, using first available IP")
-        }
-
-        // Lire sous verrou : en cas de timeout, des probes retardataires peuvent
-        // encore écrire dans `results` depuis leurs queues.
-        resultsLock.lock()
-        let snapshot = results
-        resultsLock.unlock()
-
-        // Sélectionner l'IP avec la meilleure latence
-        if let best = snapshot.min(by: { $0.latency < $1.latency }) {
-            resolvedIPv4 = best.ip
+        if let best = results.min(by: { $0.latency < $1.latency }) {
             NSLog("✅ Selected best IP: %@ (%.1fms)", best.ip, best.latency * 1000)
-            rocVADManager?.updateMiloHost(best.ip)
-        } else if let firstIP = candidates.first {
-            resolvedIPv4 = firstIP
-            NSLog("✅ Fallback to first IP: %@", firstIP)
-            rocVADManager?.updateMiloHost(firstIP)
+            return best.ip
         }
+
+        NSLog("⚠️ No latency measured, falling back to first IP")
+        return candidates.first
     }
 
-    /// Mesure la latence vers une IP via une connexion TCP rapide
-    private func measureLatency(to ip: String, completion: @escaping (TimeInterval?) -> Void) {
-        let start = Date()
+    /// Mesure la latence vers une IP via une connexion TCP rapide.
+    ///
+    /// La continuation ne doit être reprise **qu'une fois**, alors que le handler d'état et
+    /// le timeout de 500 ms courent en parallèle : d'où le drapeau sous verrou. C'était un
+    /// `var hasCompleted` + NSLock, que le compilateur ne pouvait pas suivre ; un `Mutex`
+    /// dit la même chose, et se prouve.
+    private nonisolated static func measureLatency(to ip: String, port: Int) async -> TimeInterval? {
+        await withCheckedContinuation { continuation in
+            let start = Date()
+            let connection = NWConnection(
+                host: NWEndpoint.Host(ip),
+                port: NWEndpoint.Port(integerLiteral: UInt16(port)),
+                using: .tcp
+            )
 
-        let connection = NWConnection(
-            host: NWEndpoint.Host(ip),
-            port: NWEndpoint.Port(integerLiteral: UInt16(httpPort)),
-            using: .tcp
-        )
-
-        var hasCompleted = false
-        let completionLock = NSLock()
-
-        connection.stateUpdateHandler = { state in
-            completionLock.lock()
-            guard !hasCompleted else {
-                completionLock.unlock()
-                return
-            }
-
-            switch state {
-            case .ready:
-                hasCompleted = true
-                completionLock.unlock()
-                let latency = Date().timeIntervalSince(start)
+            let hasCompleted = Mutex(false)
+            let finish: @Sendable (TimeInterval?) -> Void = { latency in
+                let alreadyDone = hasCompleted.withLock { done in
+                    defer { done = true }
+                    return done
+                }
+                guard !alreadyDone else { return }
                 connection.cancel()
-                completion(latency)
-
-            case .failed, .cancelled:
-                hasCompleted = true
-                completionLock.unlock()
-                completion(nil)
-
-            default:
-                completionLock.unlock()
+                continuation.resume(returning: latency)
             }
-        }
 
-        connection.start(queue: .global(qos: .userInitiated))
-
-        // Timeout de 500ms
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
-            completionLock.lock()
-            guard !hasCompleted else {
-                completionLock.unlock()
-                return
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:              finish(Date().timeIntervalSince(start))
+                case .failed, .cancelled: finish(nil)
+                default:                  break
+                }
             }
-            hasCompleted = true
-            completionLock.unlock()
-            connection.cancel()
-            completion(nil)
+
+            connection.start(queue: .global(qos: .userInitiated))
+
+            // Timeout de 500 ms
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { finish(nil) }
         }
     }
 
@@ -268,7 +243,7 @@ class MiloConnectionManager: NSObject {
             // désallocation fait crasher le runtime objc.
             let delegate = self.delegate
             DispatchQueue.main.async {
-                delegate?.miloDidDisconnect()
+                MainActor.assumeIsolated { delegate?.miloDidDisconnect() }
             }
         }
     }
@@ -319,7 +294,7 @@ class MiloConnectionManager: NSObject {
         // Mode .common : continuer les tests même si l'utilisateur garde le menu
         // ouvert (le mode par défaut suspend les timers pendant le tracking).
         let timer = Timer(timeInterval: retryInterval, repeats: true) { [weak self] _ in
-            self?.testAPIWithRetry()
+            MainActor.assumeIsolated { self?.testAPIWithRetry() }
         }
         RunLoop.main.add(timer, forMode: .common)
         retryTimer = timer
@@ -340,7 +315,7 @@ class MiloConnectionManager: NSObject {
         phase = .testingAPI(attempt: retryCount)
         NSLog("🔍 API test %d/%d...", retryCount, maxRetries)
 
-        Task { @MainActor [weak self] in
+        Task { [weak self] in
             guard let self = self else { return }
             guard case .testingAPI = self.phase else { return }
             guard let probe = self.probeAPIService else { return }
@@ -372,7 +347,6 @@ class MiloConnectionManager: NSObject {
 
     // MARK: - Connection
 
-    @MainActor
     private func connectToMilo() async {
         guard case .testingAPI = phase else { return }
 
@@ -385,12 +359,16 @@ class MiloConnectionManager: NSObject {
         phase = .connecting
 
         // Résoudre l'IP IPv4 AVANT de connecter
-        await Task.detached(priority: .medium) { [weak self] in
-            self?.resolveIPv4Address()
-        }.value
+        let best = await Self.resolveBestIPv4(host: host, port: httpPort)
 
         // Vérifier qu'on est toujours en phase connecting
         guard case .connecting = phase, connectionGeneration == myGeneration else { return }
+
+        if let best {
+            resolvedIPv4 = best
+            NSLog("✅ Resolved %@ to IPv4: %@", host, best)
+            rocVADManager?.updateMiloHost(best)
+        }
 
         let hostToUse = resolvedIPv4 ?? host
         let urlString = "ws://\(hostToUse):\(wsPort)/ws"
@@ -428,7 +406,7 @@ class MiloConnectionManager: NSObject {
         startDiscovery()
     }
 
-    deinit {
+    isolated deinit {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         stop()
     }
@@ -494,18 +472,31 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 }
 
 // MARK: - NetServiceBrowserDelegate
+
+/// `NetServiceBrowser` et `NetService` livrent leurs rappels sur la run loop où ils ont été
+/// programmés — ici la principale, puisque le browser est créé et les résolutions lancées
+/// depuis le main actor. Les protocoles, eux, ne sont pas annotés : leurs méthodes sont donc
+/// `nonisolated`, et rentrent explicitement sur le main actor.
 extension MiloConnectionManager: NetServiceBrowserDelegate {
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+    nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         NSLog("🔍 Found service: %@ (type: %@, domain: %@)", service.name, service.type, service.domain)
 
-        guard case .discovering = phase else { return }
+        // `NetService` est explicitement non-Sendable (Apple pousse vers Network.framework) :
+        // le confier au main actor est vu comme un transfert. Il n'en est rien — l'objet
+        // *arrive* du main thread et n'est jamais touché ailleurs. On le dit ici, sur cette
+        // liaison précise, plutôt que de déclarer tout le type Sendable.
+        nonisolated(unsafe) let service = service
 
-        service.delegate = self
-        resolvingServices.insert(service)
-        service.resolve(withTimeout: 5.0)
+        MainActor.assumeIsolated {
+            guard case .discovering = phase else { return }
+
+            service.delegate = self
+            resolvingServices.insert(service)
+            service.resolve(withTimeout: 5.0)
+        }
     }
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+    nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
         NSLog("📤 Service removed: %@", service.name)
 
         let serviceName = service.name.lowercased()
@@ -513,59 +504,69 @@ extension MiloConnectionManager: NetServiceBrowserDelegate {
 
         guard serviceName.contains("milo") || hostName.contains("milo") else { return }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            switch self.phase {
+        MainActor.assumeIsolated {
+            switch phase {
             case .testingAPI:
                 NSLog("📡 Milo service removed during retry - resuming discovery...")
-                self.stopRetry()
-                self.phase = .discovering
-                self.startDiscovery()
+                stopRetry()
+                phase = .discovering
+                startDiscovery()
             case .connecting, .connected:
-                self.handleDisconnection()
+                handleDisconnection()
             default:
                 break
             }
         }
     }
 
-    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
+    nonisolated func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
         NSLog("📡 mDNS browser will start searching...")
     }
 
-    func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
+    nonisolated func netServiceBrowserDidStopSearch(_ browser: NetServiceBrowser) {
         NSLog("🛑 mDNS browser stopped searching")
     }
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+    nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
         NSLog("❌ mDNS browser search failed: %@", String(describing: errorDict))
     }
 }
 
 // MARK: - NetServiceDelegate
 extension MiloConnectionManager: NetServiceDelegate {
-    func netServiceDidResolveAddress(_ sender: NetService) {
+    nonisolated func netServiceDidResolveAddress(_ sender: NetService) {
         let hostName = sender.hostName ?? ""
         NSLog("✅ Service resolved: %@ -> hostname: %@", sender.name, hostName)
 
-        resolvingServices.remove(sender)
+        // Voir netServiceBrowser(_:didFind:moreComing:).
+        nonisolated(unsafe) let sender = sender
 
-        guard case .discovering = phase else {
-            NSLog("⏭️  Skipping - not in discovering phase")
-            return
-        }
+        MainActor.assumeIsolated {
+            resolvingServices.remove(sender)
 
-        let cleanedHostname = hostName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        if cleanedHostname == "milo.local" {
-            NSLog("🎯 Confirmed Milo service (hostname: %@) - starting rapid API tests...", hostName)
-            startAPIRetry()
-        } else {
-            NSLog("⏭️  Skipping service %@ (hostname: %@) - not milo.local", sender.name, hostName)
+            guard case .discovering = phase else {
+                NSLog("⏭️  Skipping - not in discovering phase")
+                return
+            }
+
+            let cleanedHostname = hostName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            if cleanedHostname == "milo.local" {
+                NSLog("🎯 Confirmed Milo service (hostname: %@) - starting rapid API tests...", hostName)
+                startAPIRetry()
+            } else {
+                NSLog("⏭️  Skipping service %@ (hostname: %@) - not milo.local", sender.name, hostName)
+            }
         }
     }
 
-    func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+    nonisolated func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
         NSLog("⚠️ Failed to resolve service %@: %@", sender.name, String(describing: errorDict))
-        resolvingServices.remove(sender)
+
+        // Voir netServiceBrowser(_:didFind:moreComing:).
+        nonisolated(unsafe) let sender = sender
+
+        MainActor.assumeIsolated {
+            _ = resolvingServices.remove(sender)
+        }
     }
 }
