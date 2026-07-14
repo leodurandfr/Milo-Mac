@@ -221,7 +221,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     private func showPanel() {
         // Le HUD du raccourci clavier flotte au-dessus de tout : le masquer pour qu'il ne
         // recouvre pas le panneau qu'on vient d'ouvrir.
-        store.hotkeyManager?.volumeHUD?.hideWithCoreAnimation()
+        store.hotkeyManager?.volumeHUD?.hide()
 
         store.isPanelOpen = true
         store.refreshPanelData()

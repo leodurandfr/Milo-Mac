@@ -265,8 +265,6 @@ class VolumeHUD {
         isVisible = true
         isHiding = false
         animationTimer?.invalidate()
-        // Cancel any in-flight Core Animation hide (from hideWithCoreAnimation)
-        layer.removeAnimation(forKey: "hideMove")
 
         // Reposition window for current screen
         if let screen = NSScreen.main {
@@ -358,63 +356,23 @@ class VolumeHUD {
         }
     }
 
-    /// Hide using CABasicAnimation — works even when an NSMenu blocks the run loop
-    func hideWithCoreAnimation() {
-        guard let window = window, let layer = containerView?.layer else { return }
-        guard isVisible || isHiding else { return }
-
-        hideTimer?.invalidate()
-        hideTimer = nil
-        animationTimer?.invalidate()
-        animationTimer = nil
-        isVisible = false
-        isHiding = true
-
-        let duration: CFTimeInterval = 0.3
-
-        // Slide up
-        let moveAnim = CABasicAnimation(keyPath: "transform.translation.y")
-        moveAnim.fromValue = currentOffset
-        moveAnim.toValue = slideOffset
-        moveAnim.duration = duration
-        moveAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0, 0.67, 0)
-        moveAnim.fillMode = .forwards
-        moveAnim.isRemovedOnCompletion = false
-        layer.add(moveAnim, forKey: "hideMove")
-
-        // Fade out (on the window layer since alphaValue drives it)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0, 0.67, 0)
-            window.animator().alphaValue = 0
-        }
-
-        // Clean up after animation completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
-            guard let self = self, !self.isVisible else { return }
-            self.isHiding = false
-            self.window?.orderOut(nil)
-            self.containerView?.layer?.removeAnimation(forKey: "hideMove")
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            self.containerView?.layer?.transform = CATransform3DIdentity
-            CATransaction.commit()
-        }
-    }
-
     func hide(animated: Bool = true) {
         guard let window = window else { return }
         guard isVisible || isHiding else { return }
 
         hideTimer?.invalidate()
         hideTimer = nil
-        containerView?.layer?.removeAnimation(forKey: "hideMove")
         isVisible = false
 
         if animated {
             isHiding = true
-            // Slide up + fade out with easeInCubic (200ms) via layer transform
-            startAnimation(from: 0, to: slideOffset, duration: 0.3, easing: Self.easeInCubic, animateOpacity: (from: 1, to: 0)) { [weak self] in
+            // Slide up + fade out with easeInCubic (300ms) via layer transform.
+            //
+            // From `currentOffset`, NOT from 0: the entry spring runs for 1.2 s, so the HUD may
+            // still be in flight when it is dismissed — pressing the volume hotkey, then opening
+            // the panel right away (`MenuBarShell.showPanel` hides the HUD). Starting at 0 would
+            // snap it back down before sliding it up.
+            startAnimation(from: currentOffset, to: slideOffset, duration: 0.3, easing: Self.easeInCubic, animateOpacity: (from: 1, to: 0)) { [weak self] in
                 guard let self = self, !self.isVisible else { return }
                 self.isHiding = false
                 window.orderOut(nil)
