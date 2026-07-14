@@ -253,8 +253,8 @@ class WebSocketService: NSObject {
         let mode = state?["mode"] as? String
         let multiroomEnabled = (mode == "multiroom") || (data["multiroom_enabled"] as? Bool ?? false)
 
-        // Les limites ne sont pas dans les événements WebSocket ;
-        // elles sont préservées côté MenuBarController depuis le cache API.
+        // Les limites ne sont pas dans les événements WebSocket ; elles sont préservées
+        // depuis le cache API par `MiloStore.didReceiveVolumeUpdate`.
         let volumeStatus = VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: multiroomEnabled,
@@ -289,8 +289,9 @@ class WebSocketService: NSObject {
 
     private func startPingTimer() {
         pingTimer?.invalidate()
-        // Mode .common : le keepalive doit continuer pendant le tracking du menu
-        // (le mode par défaut suspend les timers tant qu'un NSMenu est ouvert).
+        // Mode .common : le keepalive doit survivre au suivi de la souris — glisser le slider
+        // ou faire défiler la liste des stations bascule la run loop en `.eventTracking`, où
+        // un timer posé dans le seul mode par défaut ne se déclencherait plus.
         let timer = Timer(timeInterval: pingInterval, repeats: true) { [weak self] _ in
             self?.sendPing()
         }

@@ -5,7 +5,7 @@ import SwiftUI
 ///
 /// Comme MenuBarShell, c'est une coquille AppKit minimale autour d'une vue 100 % SwiftUI.
 /// La scène `Settings` de SwiftUI n'est pas utilisable ici : `SettingsLink` ne s'ouvre
-/// que depuis l'arbre de scènes de l'App, or notre panneau vit dans un NSPopover présenté
+/// que depuis l'arbre de scènes de l'App, or notre panneau vit dans une NSPanel présentée
 /// par un NSStatusItem — hors de cet arbre.
 enum SettingsWindowPresenter {
     private static var controller: SettingsWindowController?

@@ -64,9 +64,6 @@
 "progress.installation_complete" = "安装成功完成";
 "progress.reconfiguring_device" = "正在重新配置 Milō 音频设备...";
 "progress.creating_device" = "正在创建 Milō 音频设备...";
-"progress.driver_waiting" = "正在等待音频驱动程序初始化...";
-"progress.driver_waiting_attempt" = "正在等待驱动程序初始化... (尝试 %d/%d)";
-"progress.driver_initialized" = "驱动程序初始化成功！";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "音量滑块";

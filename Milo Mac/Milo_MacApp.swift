@@ -22,7 +22,7 @@ struct Milo_MacApp: App {
 
     var body: some Scene {
         // L'app vit entièrement dans la barre de menus : aucune scène à présenter.
-        // Le panneau est un NSPopover (MenuBarShell) et les Réglages une NSWindow
+        // Le panneau est une NSPanel (MenuBarShell) et les Réglages une NSWindow
         // (SettingsWindowPresenter), tous deux hébergeant des vues SwiftUI.
         Settings { EmptyView() }
     }

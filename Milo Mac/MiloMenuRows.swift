@@ -1,17 +1,17 @@
 import SwiftUI
 
-/// Les lignes du menu, en SwiftUI.
+/// Les lignes du panneau, en SwiftUI.
 ///
-/// Chacune est hébergée dans son propre `NSMenuItem.view` (voir `MenuBarShell`). Le menu
-/// lui-même est un `NSMenu` natif : les séparateurs, le chrome, l'ombre et l'animation
-/// viennent du système. On ne dessine ici que ce que le natif ne sait pas faire dans un
-/// menu — un slider, des pastilles d'icône, des spinners, des interrupteurs, et les titres
-/// (voir `MenuTitle`, l'en-tête natif ne convenant pas).
+/// Le panneau n'est pas un NSMenu mais une NSPanel qu'on dessine soi-même (`MenuBarShell`
+/// dit pourquoi) : RIEN ne vient du système ici — ni les séparateurs, ni les titres, ni le
+/// chrome, ni la surbrillance au survol. Tout ce qui suit est donc dessiné à la main, y
+/// compris ce qu'un menu natif aurait donné gratuitement.
 ///
-/// Corollaire : une vue personnalisée n'hérite pas de la surbrillance du menu, elle doit
-/// donc gérer son survol elle-même (`MenuRowContainer`).
+/// Corollaire : chaque ligne gère son propre survol (`MenuRowContainer`). C'est le prix de
+/// la fenêtre — et sa raison d'être : un clic n'y referme rien, on peut donc afficher le
+/// spinner de transition sur place.
 ///
-/// Ces vues observent `MiloStore` : tant que le menu est ouvert, elles se re-rendent
+/// Ces vues observent `MiloStore` : tant que le panneau est ouvert, elles se re-rendent
 /// toutes seules quand le backend pousse un nouvel état.
 
 /// Géométrie des lignes, relevée au pixel sur le panneau **Bluetooth** natif (capture 2x,
@@ -20,9 +20,10 @@ import SwiftUI
 ///   titre             16 pt
 ///   pastille d'icône  19 pt
 ///   libellé           49 pt   ( = 19 + pastille de 26 + 4 d'écart )
-///
-/// NSMenu dimensionne le menu sur son item le plus large.
 enum MenuRowMetrics {
+    /// Largeur du panneau. Fixée, et non déduite du contenu : un NSMenu se dimensionnait sur
+    /// son item le plus large, une fenêtre qu'on dessine soi-même n'a pas cette règle — sans
+    /// cette valeur, le panneau se rétrécirait sur ses libellés, qui changent avec la langue.
     static let width: CGFloat = 264
 
     // Ces valeurs sont désormais les valeurs RÉELLES : le contenu vit dans une NSPanel
@@ -187,10 +188,10 @@ enum PanelMetrics {
     /// Retrait sous la dernière ligne quand celle-ci porte une PASTILLE (Égaliseur, sans le
     /// pied) plutôt que du texte.
     ///
-    /// Une ligne à pastille est plus haute (32,5 pt contre ~22) et son disque s'arrête à
-    /// 3,25 pt du bas de sa boîte : à retrait égal, le panneau paraît se refermer sur le
-    /// disque. Aucun module système ne finit sur une telle ligne — il n'y a donc rien à
-    /// mesurer, et cette valeur est un réglage à l'œil assumé.
+    /// Une ligne à pastille est plus haute (32 pt contre ~22) et son disque s'arrête à
+    /// `rowVerticalPadding` (3 pt) du bas de sa boîte : à retrait égal, le panneau paraît se
+    /// refermer sur le disque. Aucun module système ne finit sur une telle ligne — il n'y a
+    /// donc rien à mesurer, et cette valeur est un réglage à l'œil assumé.
     /// (Réglée avec Léo : 8 → 10, soit 13 pt sous le disque d'Égaliseur.)
     static let bottomInsetIconRow: CGFloat = 10
 
@@ -478,7 +479,7 @@ struct RadioStationRow: View {
 
     private func toggle() {
         if isPlaying {
-            store.stopRadioPlayback(station.id)
+            store.stopRadioPlayback()
         } else {
             store.playRadioStation(station.id)
         }
@@ -517,9 +518,8 @@ struct DisconnectedRow: View {
 
 /// Ligne cliquable avec sa surbrillance au survol.
 ///
-/// NSMenu ne met en surbrillance que ses propres items — une vue personnalisée doit gérer
-/// son survol elle-même. C'est le prix à payer pour qu'un clic ne referme PAS le menu, ce
-/// qui est indispensable ici : on veut afficher le spinner de transition sur place.
+/// Le panneau étant une fenêtre qu'on dessine soi-même, aucune surbrillance ne vient du
+/// système : chaque ligne peint la sienne, sur son propre survol.
 private struct MenuRowContainer<Content: View>: View {
     @Binding var isHovering: Bool
     let action: () -> Void

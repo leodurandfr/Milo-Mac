@@ -171,7 +171,9 @@ class GlobalHotkeyManager {
             return Unmanaged.passUnretained(event)
         }
 
-        // Handle flags changed via CGEvent tap (works even during NSMenu tracking)
+        // Handled by the CGEvent tap, whose run loop source is installed in .commonModes
+        // (see setup): the hotkey keeps working while the run loop is in tracking mode —
+        // e.g. while the user drags the panel's volume slider.
         if type == .flagsChanged {
             let rawFlags = UInt(event.flags.rawValue)
             let wasRightOptionPressed = isRightOptionPressed

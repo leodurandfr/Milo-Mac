@@ -64,9 +64,6 @@
 "progress.installation_complete" = "Installazione completata con successo";
 "progress.reconfiguring_device" = "Riconfigurazione del dispositivo audio Milō...";
 "progress.creating_device" = "Creazione del dispositivo audio Milō...";
-"progress.driver_waiting" = "In attesa dell'inizializzazione del driver audio...";
-"progress.driver_waiting_attempt" = "In attesa dell'inizializzazione del driver... (tentativo %d/%d)";
-"progress.driver_initialized" = "Driver inizializzato con successo!";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "Cursore del volume";

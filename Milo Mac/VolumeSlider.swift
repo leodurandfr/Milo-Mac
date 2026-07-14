@@ -12,11 +12,11 @@ struct VolumeSlider: View {
     let onChange: (Double) -> Void
 
     var body: some View {
-        // Les deux icônes encadrent le rail via `minimumValueLabel` / `maximumValueLabel`,
-        // l'API native du Slider — c'est exactement ce que fait le panneau « Son » : un
-        // haut-parleur nu à gauche, un haut-parleur avec ondes à droite. Elles sont
-        // **statiques** : elles bornent l'échelle, elles ne suivent pas le volume.
-        // Les icônes sont posées AUTOUR du slider, et non via `minimumValueLabel` /
+        // Deux icônes encadrent le rail, comme le panneau « Son » : un haut-parleur nu à
+        // gauche, un haut-parleur avec ondes à droite. Elles sont **statiques** — elles
+        // bornent l'échelle, elles ne suivent pas le volume.
+        //
+        // Posées AUTOUR du Slider, dans ce HStack, et non via `minimumValueLabel` /
         // `maximumValueLabel` : ces labels-là ignorent la police qu'on leur passe et se
         // dimensionnent eux-mêmes (vérifié — passer de 14 à 10,5 pt ne changeait rien au
         // rendu). En les sortant, on reprend la main sur leur taille, et le Slider reste

@@ -36,11 +36,6 @@ struct VolumeStatus {
     let limitMinDb: Double        // Limite min configurée
     let limitMaxDb: Double        // Limite max configurée
 
-    /// Volume arrondi pour affichage
-    var displayText: String {
-        return "\(Int(round(volumeDb))) dB"
-    }
-
     /// Copie avec de nouvelles bornes — sert à préserver les limites en cache
     /// quand un événement WebSocket n'en porte pas (voir CLAUDE.md).
     func withLimits(minDb: Double, maxDb: Double) -> VolumeStatus {

@@ -165,23 +165,6 @@ class RocVADManager {
         }
     }
 
-    func waitForDriverInitialization(completion: @escaping (Bool) -> Void) {
-        NSLog("⏳ Starting driver initialization wait...")
-
-        // Créer panel d'attente
-        showProgressPanel(message: L("progress.driver_waiting"))
-
-        // Démarrer les tentatives en background
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let success = self?.performDriverWaitRetries() ?? false
-
-            DispatchQueue.main.async {
-                self?.hideProgressPanel()
-                completion(success)
-            }
-        }
-    }
-
     /// Met à jour l'adresse de Milo avec l'IP résolue et reconfigure le device roc-vad
     /// - Parameter newHost: L'adresse IP résolue (ex: "192.168.1.73")
     func updateMiloHost(_ newHost: String) {
@@ -426,34 +409,6 @@ class RocVADManager {
         }
 
         return success
-    }
-
-    // MARK: - Driver Wait Process
-
-    private func performDriverWaitRetries() -> Bool {
-        let retryDelays = [2.0, 5.0, 8.0, 12.0, 15.0] // Total ~42 secondes
-        var attemptCount = 0
-
-        for delay in retryDelays {
-            attemptCount += 1
-
-            updateProgressMessage(L("progress.driver_waiting_attempt", attemptCount, retryDelays.count))
-            NSLog("🔄 Driver wait attempt %d/%d", attemptCount, retryDelays.count)
-
-            // Attendre avant de tester
-            Thread.sleep(forTimeInterval: delay)
-
-            // Tester si le driver est maintenant fonctionnel
-            if Self.runRocVAD(["info"])?.status == 0 {
-                NSLog("✅ Driver became available after %d attempts", attemptCount)
-                updateProgressMessage(L("progress.driver_initialized"))
-                Thread.sleep(forTimeInterval: 1.0)
-                return true
-            }
-        }
-
-        NSLog("❌ Driver still not available after %d attempts", attemptCount)
-        return false
     }
 
     /// Supprime tous les devices roc-vad nommés "Milō" et retourne le nombre supprimé

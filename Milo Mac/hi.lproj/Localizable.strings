@@ -64,9 +64,6 @@
 "progress.installation_complete" = "इंस्टॉलेशन सफलतापूर्वक पूर्ण";
 "progress.reconfiguring_device" = "Milō ऑडियो डिवाइस पुनः कॉन्फ़िगर हो रहा है...";
 "progress.creating_device" = "Milō ऑडियो डिवाइस बन रहा है...";
-"progress.driver_waiting" = "ऑडियो ड्राइवर इनिशियलाइज़ेशन की प्रतीक्षा...";
-"progress.driver_waiting_attempt" = "ड्राइवर इनिशियलाइज़ेशन की प्रतीक्षा... (प्रयास %d/%d)";
-"progress.driver_initialized" = "ड्राइवर सफलतापूर्वक इनिशियलाइज़ हुआ!";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "वॉल्यूम स्लाइडर";

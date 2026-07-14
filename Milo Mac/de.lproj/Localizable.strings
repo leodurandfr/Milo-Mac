@@ -64,9 +64,6 @@
 "progress.installation_complete" = "Installation erfolgreich abgeschlossen";
 "progress.reconfiguring_device" = "Milō-Audiogerät wird neu konfiguriert...";
 "progress.creating_device" = "Milō-Audiogerät wird erstellt...";
-"progress.driver_waiting" = "Warten auf Audiotreiber-Initialisierung...";
-"progress.driver_waiting_attempt" = "Warten auf Treiber-Initialisierung... (Versuch %d/%d)";
-"progress.driver_initialized" = "Treiber erfolgreich initialisiert!";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "Lautstärkeregler";

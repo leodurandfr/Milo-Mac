@@ -307,9 +307,11 @@ final class MiloStore {
         }
     }
 
-    func stopRadioPlayback(_ stationId: String) {
+    /// Arrête la lecture, sans dire laquelle : `/api/radio/stop` ne prend pas de station —
+    /// le backend n'en joue qu'une à la fois.
+    func stopRadioPlayback() {
         guard let apiService = connectionManager.apiService else { return }
-        NSLog("📻 stopRadioPlayback: %@", stationId)
+        NSLog("📻 stopRadioPlayback")
 
         Task {
             do {

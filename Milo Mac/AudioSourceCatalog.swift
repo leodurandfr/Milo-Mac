@@ -14,9 +14,6 @@ enum SourceIcon {
     case symbol(String)
     case asset(String)
 
-    /// Diamètre du cercle qui contient l'icône.
-    static let circleSize: CGFloat = 26
-
     @ViewBuilder
     var image: some View {
         switch self {
@@ -24,11 +21,13 @@ enum SourceIcon {
             Image(systemName: name)
                 .font(.system(size: 14, weight: .medium))
         case .asset(let name):
+            // Dimensionnée sur la pastille elle-même (`MenuRowMetrics.iconSize`) : l'asset
+            // porte sa propre marge et doit donc remplir tout le cercle.
             Image(name)
                 .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
-                .frame(width: Self.circleSize, height: Self.circleSize)
+                .frame(width: MenuRowMetrics.iconSize, height: MenuRowMetrics.iconSize)
         }
     }
 }
@@ -84,7 +83,7 @@ struct FeatureDescriptor: Identifiable {
 enum FeatureCatalog {
     static let all: [FeatureDescriptor] = [
         .init(id: "multiroom", titleKey: "feature.multiroom", icon: .asset("multiroom-icon")),
-        .init(id: "equalizer", titleKey: "feature.equalizer", icon: .symbol("slider.horizontal.3"))
+        .init(id: "equalizer", titleKey: "feature.equalizer", icon: .asset("equalizer-icon"))
     ]
 
     /// Multiroom est affiché par défaut (comportement historique : `?? true`),
