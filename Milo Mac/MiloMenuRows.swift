@@ -98,6 +98,11 @@ enum MenuRowMetrics {
 
     static let iconSize: CGFloat = 26
 
+    /// Pastille du caret « voir les stations », à droite de la ligne Radio. Franchement plus
+    /// petite que la pastille d'icône (26 pt) : c'est une commande secondaire, pas l'identité
+    /// de la ligne.
+    static let chevronCircleSize: CGFloat = 17
+
     /// Couleur de la pastille active.
     ///
     /// `Color.accentColor` seul rend trop foncé : mesuré à travers le verre sur fond blanc,
@@ -351,20 +356,36 @@ struct SourceRow: View {
                 }
             }
 
-            Spacer(minLength: 4)
-
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
-            } else if showsChevron {
+            if !isLoading, showsChevron {
+                // La ligne Radio porte DEUX commandes : activer la source (le corps de la
+                // ligne) et ouvrir les stations (la droite). La seconde ne se limite pas à sa
+                // pastille — elle prend tout ce qui reste à droite du libellé, jusqu'au bord.
+                // Une cible de 17 pt serait sinon bien trop chiche pour une commande qu'on
+                // utilise autant que la ligne elle-même.
+                //
+                // Le Spacer est DANS le bouton : c'est lui qui l'étire, et `contentShape` rend
+                // tout ce vide cliquable. Imbriquer un bouton dans un bouton fonctionne — le
+                // plus intérieur gagne dans sa propre zone.
                 Button { onChevron?() } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 4)
+                        ChevronCircle()
+                    }
+                    // Sans ça, le bouton se moule sur la pastille et sa zone ne fait que
+                    // 17 pt de haut — large mais plate. On l'étire sur la hauteur de la ligne,
+                    // que fixe la pastille de la source (26 pt). Mesuré : 159,5 × 26.
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+            } else {
+                Spacer(minLength: 4)
+
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.7)
+                }
             }
         }
         .opacity(needsSetup ? 0.55 : 1)
@@ -527,6 +548,27 @@ private struct MenuRowContainer<Content: View>: View {
         .buttonStyle(.plain)
         .padding(.horizontal, MenuRowMetrics.highlightInset)
         .onHover { isHovering = $0 }
+    }
+}
+
+/// Caret « voir les stations », dans sa pastille.
+///
+/// Une pastille, et non un caret nu : nu, il se lisait comme un ornement de la ligne — un
+/// simple « il y a une suite » — alors que c'est une commande à part, qui mène ailleurs que le
+/// clic sur la ligne. Le disque le dit. Il reprend le gris des pastilles inactives (`.tertiary`),
+/// pour ne pas se disputer la vedette avec la pastille de la source, deux fois plus grande.
+private struct ChevronCircle: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.tertiary)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: MenuRowMetrics.chevronCircleSize,
+               height: MenuRowMetrics.chevronCircleSize)
     }
 }
 
