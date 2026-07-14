@@ -540,10 +540,21 @@ final class MiloStore {
             // lui et nillée à la déconnexion.
             guard let apiService = self.connectionManager.apiService else { return }
 
+            // Idem pour l'état : lu ici, sur le main thread qui le possède.
+            // `enabledApps` encore nil = l'amorçage /bulk a échoué à la connexion. Sans
+            // ce rattrapage il ne serait retenté qu'à la reconnexion suivante, et toute
+            // la session tournerait sans filtre de sources ni vraies limites de volume.
+            let needsBulkSettings = self.enabledApps == nil
+
             Task {
                 // Le volume est poussé par WebSocket en temps réel, pas besoin de le
                 // poll ici. Les réglages statiques (dock apps + limites) sont chargés
-                // une fois à la connexion puis poussés par WebSocket.
+                // une fois à la connexion puis poussés par WebSocket — on ne les
+                // retente donc que tant que cet amorçage n'a pas abouti.
+                if needsBulkSettings {
+                    await self.refreshBulkSettings(using: apiService)
+                }
+
                 let stateSuccess = await self.refreshState(using: apiService)
 
                 await MainActor.run {
@@ -578,7 +589,15 @@ final class MiloStore {
             consecutiveRefreshFailures = 0
         }
 
+        // Amorçage /bulk resté en échec : le rattraper AVANT le refresh volume, car
+        // getVolumeStatus() lit les limites dans le cache que ce fetch amorce.
+        let needsBulkSettings = enabledApps == nil
+
         Task {
+            if needsBulkSettings {
+                await self.refreshBulkSettings(using: apiService)
+            }
+
             var attempts = 0
             let maxAttempts = 2
 
@@ -630,11 +649,42 @@ final class MiloStore {
     private func refreshBulkSettings(using apiService: MiloAPIService) async -> Bool {
         do {
             let settings = try await apiService.fetchBulkSettings()
-            await MainActor.run { self.enabledApps = settings.enabledApps }
+            await MainActor.run {
+                self.enabledApps = settings.enabledApps
+
+                // Amorçage tardif (rattrapage après un /bulk raté) : `volume` a pu être
+                // lu entre-temps avec les limites de repli. Les recaler, sinon le slider
+                // et le HUD resteraient mal bornés jusqu'au prochain volume_limits_changed.
+                // Au premier amorçage `volume` est nil : ce bloc ne fait rien.
+                if let existing = self.volume,
+                   existing.limitMinDb != settings.limitMinDb || existing.limitMaxDb != settings.limitMaxDb {
+                    let updated = existing.withLimits(minDb: settings.limitMinDb, maxDb: settings.limitMaxDb)
+                    self.volume = updated
+                    self.volumeController.setCurrentVolume(updated)
+                }
+            }
             return true
         } catch {
             return false
         }
+    }
+
+    /// Amorce les réglages statiques avec quelques essais espacés, comme le fait
+    /// refreshPanelData pour l'état. Un unique /bulk raté à la connexion laisserait
+    /// `enabledApps` nil — les sources s'afficheraient sans filtre ni ordre backend —
+    /// et le volume borné aux valeurs de repli, jusqu'à la reconnexion suivante.
+    private func bootstrapBulkSettings(using apiService: MiloAPIService) async {
+        let maxAttempts = 3
+
+        for attempt in 1...maxAttempts {
+            if await refreshBulkSettings(using: apiService) { return }
+            if attempt < maxAttempts {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+
+        // Dernier filet : le poll de fond retentera tant que `enabledApps` est nil.
+        NSLog("⚠️ Bulk settings bootstrap failed after %d attempts — background refresh will retry", maxAttempts)
     }
 
     @discardableResult
@@ -689,7 +739,7 @@ extension MiloStore: MiloConnectionManagerDelegate {
         guard let apiService else { return }
         Task { [weak self] in
             guard let self else { return }
-            await self.refreshBulkSettings(using: apiService)
+            await self.bootstrapBulkSettings(using: apiService)
             await MainActor.run { self.refreshPanelData() }
         }
     }

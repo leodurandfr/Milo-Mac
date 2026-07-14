@@ -263,8 +263,12 @@ class MiloConnectionManager: NSObject {
         apiService = nil
 
         if wasConnected {
-            DispatchQueue.main.async { [weak self] in
-                self?.delegate?.miloDidDisconnect()
+            // Capturer le delegate plutôt que `self` : stop() est aussi appelé depuis
+            // deinit, et former une référence faible sur un objet en cours de
+            // désallocation fait crasher le runtime objc.
+            let delegate = self.delegate
+            DispatchQueue.main.async {
+                delegate?.miloDidDisconnect()
             }
         }
     }
@@ -428,6 +432,20 @@ class MiloConnectionManager: NSObject {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         stop()
     }
+
+    // MARK: - Tests
+
+#if DEBUG
+    /// Installe le service HTTP d'une connexion établie en pointant sur un backend local,
+    /// sans mDNS ni WebSocket. Réservé aux tests : ils peuvent ainsi appeler les méthodes
+    /// de `MiloConnectionManagerDelegate` sur un vrai serveur (la pile URLSession, le
+    /// parsing et les retries sont exercés pour de bon), là où la découverte mDNS impose
+    /// un `milo.local` sur le réseau.
+    func injectAPIServiceForTesting(host: String, port: Int) {
+        phase = .connected
+        apiService = MiloAPIService(host: host, port: port, resolvedIPv4: host)
+    }
+#endif
 }
 
 // MARK: - WebSocketServiceDelegate
