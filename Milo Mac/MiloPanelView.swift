@@ -10,6 +10,10 @@ import SwiftUI
 struct MiloPanelView: View {
     @Bindable var store: MiloStore
 
+    /// Ce que l'écran peut afficher sous la barre des menus. Vient de `MenuBarShell`, qui seul
+    /// connaît l'écran où le panneau s'ouvre (voir `PanelMetrics.maxContentHeight`).
+    var maxContentHeight: CGFloat
+
     /// Vue courante : racine, ou liste des stations radio. Un panneau n'a pas de sous-menus
     /// natifs — Radio se déplie donc sur place.
     @State private var route: Route = .root
@@ -29,10 +33,24 @@ struct MiloPanelView: View {
             }
         }
         .frame(width: MenuRowMetrics.width)
-        // Le pied (option-clic) finit sur du texte, comme « Son » ; sans lui, la dernière
-        // ligne est Égaliseur — une ligne à pastille, qui demande un peu plus d'air.
-        .padding(.bottom, store.showsPreferences ? PanelMetrics.bottomInset
-                                                 : PanelMetrics.bottomInsetIconRow)
+        .padding(.bottom, bottomInset)
+        // Le panneau ne peut pas être plus haut que l'écran. La fenêtre suivant la taille
+        // intrinsèque du contenu, c'est ici — et non dans `positionPanel` — que la croissance
+        // doit être bornée : sinon elle sort par le bas.
+        //
+        // Le plafond porte sur le contenu ENTIER plutôt que sur la seule liste des stations,
+        // car c'est le total qui doit tenir. Il se répercute tout seul sur la ScrollView de
+        // `radioContent`, seul élément élastique du panneau : mesuré à 40 stations (880 pt de
+        // contenu, plafond 400), la ScrollView est bien RÉTRÉCIE à 357 pt — elle défile, elle
+        // ne déborde pas. Quand tout tient, le plafond ne prend pas la main et la hauteur reste
+        // celle du contenu, au point près (vérifié : 153 pt à 5 stations, avec ou sans plafond).
+        .frame(maxHeight: maxContentHeight, alignment: .top)
+        // Le contenu épouse la forme du panneau. Sans ça, une station à demi défilée serait
+        // coupée par le bord RECTANGLE de la ScrollView : au ras du bord bas c'est pareil, mais
+        // dans les coins arrondis son texte déborderait du verre. On ne s'en remet pas au verre
+        // pour masquer — sa couche est explicitement en `masksToBounds = false` pour laisser
+        // passer l'ombre (voir `MenuBarShell.setupPanel`).
+        .clipShape(RoundedRectangle(cornerRadius: PanelMetrics.cornerRadius, style: .continuous))
         // Aucun fond ici : c'est le NSGlassEffectView de MenuBarShell qui peint le verre et
         // découpe les coins. En ajouter un ici le doublerait et masquerait le verre.
         // La fenêtre est simplement masquée (orderOut), pas détruite : `onDisappear` ne se
@@ -43,6 +61,31 @@ struct MiloPanelView: View {
         }
         .onChange(of: store.canShowRadioStations) { _, canShow in
             if !canShow, route == .radioStations { route = .root }
+        }
+    }
+
+    /// Retrait sous la dernière ligne, au-dessus du bord bas du panneau.
+    ///
+    /// Le pied (option-clic) finit sur du texte, comme « Son » ; sans lui, la dernière ligne
+    /// est Égaliseur — une ligne à pastille, qui demande un peu plus d'air.
+    ///
+    /// NUL dans la liste des stations : c'est la ScrollView qui porte ce retrait, à l'intérieur
+    /// de son contenu défilant (voir `radioContent`). Posé ici, il aurait arrêté la ScrollView
+    /// avant le bord du panneau — et la station coupée par le défilement l'aurait été en
+    /// laissant du vide sous elle, au lieu de disparaître sous le bord.
+    private var bottomInset: CGFloat {
+        switch route {
+        case .root:
+            store.showsPreferences ? PanelMetrics.bottomInset : PanelMetrics.bottomInsetIconRow
+        case .radioStations:
+            stations.isEmpty ? PanelMetrics.bottomInset : 0
+        }
+    }
+
+    /// Les favoris radio, par ordre alphabétique.
+    private var stations: [RadioStation] {
+        (store.radioFavorites ?? []).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
     }
 
@@ -104,16 +147,30 @@ struct MiloPanelView: View {
 
         PanelDivider()
 
-        let stations = (store.radioFavorites ?? []).sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-
         if stations.isEmpty {
             RadioEmptyRow()
         } else {
-            ForEach(stations) { station in
-                RadioStationRow(store: store, station: station)
+            // La seule liste non bornée du panneau — elle vaut ce que Milō a de favoris. Elle
+            // défile donc dès qu'elle ne tient plus sous l'écran, et absorbe ainsi le plafond
+            // posé sur le body. En deçà, la ScrollView vaut exactement son contenu : le panneau
+            // garde sa hauteur naturelle, et la barre de défilement ne se montre pas.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(stations) { station in
+                        RadioStationRow(store: store, station: station)
+                    }
+                }
             }
+            // La ScrollView descend jusqu'au BORD du panneau (`bottomInset` est nul sur cette
+            // route) : le retrait bas est porté ici, DANS le contenu défilant. Une station à
+            // demi défilée est donc coupée par le bord du panneau, et non par une limite
+            // intérieure qui aurait laissé du vide sous le texte tronqué. Au repos, la dernière
+            // station retrouve exactement l'air qu'elle avait : mesuré, la marge compte dans la
+            // hauteur idéale de la ScrollView (153 → 163 pt pour 10 pt de marge).
+            .contentMargins(.bottom, PanelMetrics.bottomInset, for: .scrollContent)
+            // Pas d'élasticité quand tout tient : sans ça la liste rebondit sous la molette
+            // alors qu'il n'y a rien à faire défiler.
+            .scrollBounceBehavior(.basedOnSize)
         }
     }
 }

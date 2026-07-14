@@ -192,6 +192,28 @@ enum PanelMetrics {
     /// Marge minimale avec le bord de l'écran.
     static let screenEdgeMargin: CGFloat = 8
 
+    /// Hauteur maximale du CONTENU du panneau : tout ce que l'écran peut afficher entre le bas
+    /// de la barre des menus et le bord bas de la zone utile (Dock compris, `visibleFrame` le
+    /// déduisant déjà), en gardant la même marge qu'ailleurs.
+    ///
+    /// Sans ce plafond, rien ne bornait la croissance du panneau : la fenêtre suit la taille
+    /// intrinsèque du contenu SwiftUI, et au-delà d'une vingtaine de favoris radio elle sortait
+    /// par le bas de l'écran. C'est le contenu lui-même qui s'y plie (`MiloPanelView`), la liste
+    /// des stations étant son seul élément élastique — comme le fait Bluetooth quand les
+    /// appareils sont nombreux.
+    ///
+    /// ENTIÈRE, et arrondie vers le BAS : la hauteur du contenu doit rester entière pour que le
+    /// calage sous-pixel tombe juste (voir `shadowMargin`), et arrondir vers le haut ferait
+    /// dépasser le plafond de la fraction de point qu'on vient d'ajouter.
+    ///
+    /// La marge transparente de l'ombre, elle, n'entre pas dans le calcul : elle ne peint rien
+    /// et peut déborder de l'écran sans dommage (`constrainFrameRect` est neutralisé).
+    static func maxContentHeight(on screen: NSScreen?) -> CGFloat {
+        guard let screen else { return .greatestFiniteMagnitude }
+        let available = screen.visibleFrame.height - topGap - screenEdgeMargin
+        return max(0, available.rounded(.down))
+    }
+
     // MARK: Ombre portée
     //
     // Mesurée sur fond blanc : celle de « Son » porte à 48,5 pt en n'assombrissant le blanc

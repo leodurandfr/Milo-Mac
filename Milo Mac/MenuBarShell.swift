@@ -84,7 +84,14 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     init(store: MiloStore) {
         self.store = store
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        self.hostingController = NSHostingController(rootView: MiloPanelView(store: store))
+        // Le plafond de hauteur est réévalué à chaque ouverture (`positionPanel`), l'écran
+        // pouvant changer ; celui d'ici n'est qu'une valeur de départ.
+        self.hostingController = NSHostingController(
+            rootView: MiloPanelView(
+                store: store,
+                maxContentHeight: PanelMetrics.maxContentHeight(on: NSScreen.main)
+            )
+        )
 
         self.panel = PanelWindow(
             contentRect: .zero,
@@ -320,6 +327,14 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
               let buttonWindow = button.window,
               let screen = buttonWindow.screen ?? NSScreen.main else { return }
 
+        // Ce que l'écran peut afficher. Le contenu s'y plafonne lui-même (la liste des stations
+        // défile au-delà) : il faut donc le lui dire AVANT de le mesurer. On ne réécrit la vue
+        // que si la valeur a bougé — sinon on invaliderait la disposition à chaque ouverture.
+        let maxContentHeight = PanelMetrics.maxContentHeight(on: screen)
+        if hostingController.rootView.maxContentHeight != maxContentHeight {
+            hostingController.rootView.maxContentHeight = maxContentHeight
+        }
+
         // La taille vient du contenu SwiftUI : elle change selon que le pied est visible,
         // que Milō est connecté, ou qu'on est dans la liste des stations radio.
         hostingController.view.layoutSubtreeIfNeeded()
@@ -331,7 +346,12 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         // Sans ce calage, le panneau glissait d'un pixel selon la parité du contenu — vérifié :
         // à 420,5 pt de contenu il s'ouvrait à 34,5, à 416,0 il tombait à 35,0. Or le contenu
         // change tout le temps (connexion, pied, liste radio).
-        size.height = size.height.rounded(.up)
+        //
+        // Le plafond est appliqué APRÈS l'arrondi, et il est lui-même entier : la hauteur reste
+        // donc entière dans les deux cas. (Dans l'autre ordre, l'arrondi vers le haut pourrait
+        // faire repasser la hauteur au-dessus du plafond.) C'est une ceinture-bretelle : le
+        // contenu se borne déjà tout seul, `fittingSize` ne devrait jamais dépasser.
+        size.height = min(size.height.rounded(.up), maxContentHeight)
 
         hostingController.view.frame = NSRect(origin: .zero, size: size)
 
