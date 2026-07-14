@@ -16,8 +16,16 @@ class SettingsViewModel {
     var showVolumeHUDOnAllChanges: Bool
 
     // ROC VAD
+
     var rocVADInstalled: Bool
-    var macAudioExpanded: Bool
+
+    /// Dépliage de la section « Audio Mac ». État d'UI pur, volontairement **non
+    /// persisté** : la section est repliée à chaque ouverture des Réglages, ses options
+    /// étant des réglages d'expert qu'on ne veut pas imposer d'entrée. Ne surtout pas le
+    /// remettre dans RocVADSettings — son saveToUserDefaults() écraserait la valeur
+    /// courante par celle lue au lancement (le dépliage se perdait au clic sur Appliquer).
+    var macAudioExpanded = false
+
     var pendingSettings: RocVADSettings
     var isApplying: Bool = false
 
@@ -46,10 +54,7 @@ class SettingsViewModel {
         }
         set {
             guard newValue < RocVADPreset.allCases.count else { return }
-            let preset = RocVADPreset.allCases[newValue]
-            let showAdvanced = pendingSettings.showAdvancedOptions
-            pendingSettings = preset.toSettings()
-            pendingSettings.showAdvancedOptions = showAdvanced
+            pendingSettings = RocVADPreset.allCases[newValue].toSettings()
         }
     }
 
@@ -99,7 +104,6 @@ class SettingsViewModel {
         // la fenêtre — `roc-vad info` passe par gRPC et peut prendre plusieurs
         // secondes ; le vrai statut driver est rafraîchi en arrière-plan.
         self.rocVADInstalled = RocVADManager.isBinaryInstalled
-        self.macAudioExpanded = UserDefaults.standard.object(forKey: RocVADSettings.Keys.showAdvancedOptions) as? Bool ?? false
         self.pendingSettings = rocVADManager?.settings ?? RocVADSettings()
 
         rocVADManager?.checkInstallation { [weak self] isWorking in
@@ -158,9 +162,7 @@ class SettingsViewModel {
     }
 
     func reset() {
-        let showAdvanced = pendingSettings.showAdvancedOptions
         pendingSettings = RocVADSettings()
-        pendingSettings.showAdvancedOptions = showAdvanced
     }
 }
 
@@ -169,6 +171,42 @@ class SettingsViewModel {
 private struct PresetOption: Identifiable, Hashable {
     let id: Int
     let name: String
+}
+
+// MARK: - Slider Row
+
+/// Ligne « intitulé + curseur + valeur ».
+///
+/// Les largeurs sont fixes et partagées par toutes les lignes : `LabeledContent` donne à
+/// la partie droite la place que lui laisse l'intitulé, donc un curseur simplement
+/// `minWidth`é serait plus ou moins large selon la longueur du texte à sa gauche. Ici tous
+/// les curseurs font la même largeur et toutes les valeurs sont alignées à droite, quelle
+/// que soit la langue.
+private struct SliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let valueText: String
+
+    private static let sliderWidth: CGFloat = 120
+    private static let valueWidth: CGFloat = 50
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                // Absorbe la place restante pour que le bloc reste collé à droite,
+                // aligné avec les autres contrôles du formulaire.
+                Spacer(minLength: 0)
+
+                Slider(value: $value, in: range, step: 1)
+                    .frame(width: Self.sliderWidth)
+
+                Text(valueText)
+                    .monospacedDigit()
+                    .frame(width: Self.valueWidth, alignment: .trailing)
+            }
+        }
+    }
 }
 
 // MARK: - SettingsView
@@ -209,18 +247,13 @@ struct SettingsView: View {
                     }
 
                 if vm.hotkeysEnabled {
-                    LabeledContent(L("settings.volume_increment")) {
-                        HStack(spacing: 8) {
-                            Slider(value: $vm.volumeDelta, in: 1...6, step: 1)
-                                .frame(minWidth: 100)
-                            Text("\(Int(vm.volumeDelta)) dB")
-                                .monospacedDigit()
-                                .frame(width: 36, alignment: .trailing)
+                    SliderRow(title: L("settings.volume_increment"),
+                              value: $vm.volumeDelta,
+                              range: 1...6,
+                              valueText: "\(Int(vm.volumeDelta)) dB")
+                        .onChange(of: vm.volumeDelta) { _, _ in
+                            vm.updateVolumeDelta()
                         }
-                    }
-                    .onChange(of: vm.volumeDelta) { _, _ in
-                        vm.updateVolumeDelta()
-                    }
                 }
             }
 
@@ -239,17 +272,10 @@ struct SettingsView: View {
                     }
 
                     // Buffer
-                    LabeledContent(L("settings.buffer")) {
-                        HStack(spacing: 8) {
-                            Slider(value: $vm.deviceBuffer,
-                                   in: Double(RocVADSettings.deviceBufferRange.lowerBound)...Double(RocVADSettings.deviceBufferRange.upperBound),
-                                   step: 1)
-                                .frame(minWidth: 100)
-                            Text("\(vm.pendingSettings.deviceBuffer) ms")
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                    }
+                    SliderRow(title: L("settings.buffer"),
+                              value: $vm.deviceBuffer,
+                              range: Double(RocVADSettings.deviceBufferRange.lowerBound)...Double(RocVADSettings.deviceBufferRange.upperBound),
+                              valueText: "\(vm.pendingSettings.deviceBuffer) ms")
 
                     // Error Correction
                     Picker(L("settings.fec"), selection: $vm.pendingSettings.fecEncoding) {
@@ -266,43 +292,22 @@ struct SettingsView: View {
                     }
 
                     // Packet Length
-                    LabeledContent(L("settings.packet_length")) {
-                        HStack(spacing: 8) {
-                            Slider(value: $vm.packetLength,
-                                   in: Double(RocVADSettings.packetLengthRange.lowerBound)...Double(RocVADSettings.packetLengthRange.upperBound),
-                                   step: 1)
-                                .frame(minWidth: 100)
-                            Text("\(vm.pendingSettings.packetLength) ms")
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                    }
+                    SliderRow(title: L("settings.packet_length"),
+                              value: $vm.packetLength,
+                              range: Double(RocVADSettings.packetLengthRange.lowerBound)...Double(RocVADSettings.packetLengthRange.upperBound),
+                              valueText: "\(vm.pendingSettings.packetLength) ms")
 
                     // FEC Source Packets
-                    LabeledContent(L("settings.fec_source")) {
-                        HStack(spacing: 8) {
-                            Slider(value: $vm.fecBlockSource,
-                                   in: Double(RocVADSettings.fecBlockSourceRange.lowerBound)...Double(RocVADSettings.fecBlockSourceRange.upperBound),
-                                   step: 1)
-                                .frame(minWidth: 100)
-                            Text("\(vm.pendingSettings.fecBlockSource)")
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                    }
+                    SliderRow(title: L("settings.fec_source"),
+                              value: $vm.fecBlockSource,
+                              range: Double(RocVADSettings.fecBlockSourceRange.lowerBound)...Double(RocVADSettings.fecBlockSourceRange.upperBound),
+                              valueText: "\(vm.pendingSettings.fecBlockSource)")
 
                     // FEC Repair Packets
-                    LabeledContent(L("settings.fec_repair")) {
-                        HStack(spacing: 8) {
-                            Slider(value: $vm.fecBlockRepair,
-                                   in: Double(RocVADSettings.fecBlockRepairRange.lowerBound)...Double(RocVADSettings.fecBlockRepairRange.upperBound),
-                                   step: 1)
-                                .frame(minWidth: 100)
-                            Text("\(vm.pendingSettings.fecBlockRepair)")
-                                .monospacedDigit()
-                                .frame(width: 50, alignment: .trailing)
-                        }
-                    }
+                    SliderRow(title: L("settings.fec_repair"),
+                              value: $vm.fecBlockRepair,
+                              range: Double(RocVADSettings.fecBlockRepairRange.lowerBound)...Double(RocVADSettings.fecBlockRepairRange.upperBound),
+                              valueText: "\(vm.pendingSettings.fecBlockRepair)")
 
                     // Interleaving
                     Toggle(L("settings.interleaving"), isOn: $vm.pendingSettings.packetInterleaving)
@@ -336,8 +341,7 @@ struct SettingsView: View {
                             vm.macAudioExpanded.toggle()
                         }
                 }
-                .onChange(of: vm.macAudioExpanded) { _, newValue in
-                    UserDefaults.standard.set(newValue, forKey: RocVADSettings.Keys.showAdvancedOptions)
+                .onChange(of: vm.macAudioExpanded) { _, _ in
                     vm.onNeedsResize?()
                 }
                 .animation(nil, value: vm.macAudioExpanded)

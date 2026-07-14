@@ -103,8 +103,12 @@ enum ResamplerProfile: String, CaseIterable {
 
 // MARK: - Settings Struct
 
-/// Configuration settings for ROC VAD sender
-struct RocVADSettings {
+/// Configuration settings for ROC VAD sender.
+///
+/// Equatable est synthétisé : tous les champs sont de la config driver, donc tous
+/// comptent (`matchingPreset(for:)` en dépend). N'ajouter ici que ce qui pilote roc-vad —
+/// l'état d'UI va dans DefaultsKey.
+struct RocVADSettings: Equatable {
 
     // MARK: - Main Options
 
@@ -132,11 +136,6 @@ struct RocVADSettings {
     /// Enable packet interleaving for burst loss protection (default: false)
     var packetInterleaving: Bool
 
-    // MARK: - UI State
-
-    /// Whether to show advanced options in the UI
-    var showAdvancedOptions: Bool
-
     // MARK: - Default Values
 
     static let defaultDeviceBuffer = 60
@@ -146,7 +145,6 @@ struct RocVADSettings {
     static let defaultFECBlockSource = 18
     static let defaultFECBlockRepair = 10
     static let defaultPacketInterleaving = false
-    static let defaultShowAdvancedOptions = false
 
     // MARK: - Ranges
 
@@ -164,8 +162,7 @@ struct RocVADSettings {
         packetLength: Int = defaultPacketLength,
         fecBlockSource: Int = defaultFECBlockSource,
         fecBlockRepair: Int = defaultFECBlockRepair,
-        packetInterleaving: Bool = defaultPacketInterleaving,
-        showAdvancedOptions: Bool = defaultShowAdvancedOptions
+        packetInterleaving: Bool = defaultPacketInterleaving
     ) {
         self.deviceBuffer = deviceBuffer
         self.fecEncoding = fecEncoding
@@ -174,14 +171,14 @@ struct RocVADSettings {
         self.fecBlockSource = fecBlockSource
         self.fecBlockRepair = fecBlockRepair
         self.packetInterleaving = packetInterleaving
-        self.showAdvancedOptions = showAdvancedOptions
     }
 
     // MARK: - UserDefaults Keys
 
-    // Interne (pas private) : SettingsView lit Keys.showAdvancedOptions au lieu
-    // de re-taper le littéral — une faute de frappe scinderait l'état persisté.
-    enum Keys {
+    // Cette struct ne porte QUE de la configuration driver. L'état déplié de la section
+    // « Audio Mac » est de l'UI : il vit dans DefaultsKey.macAudioExpanded, sinon un
+    // saveToUserDefaults() réécrirait la valeur lue au lancement par-dessus l'actuelle.
+    private enum Keys {
         static let deviceBuffer = "RocVAD.DeviceBuffer"
         static let fecEncoding = "RocVAD.FECEncoding"
         static let resamplerProfile = "RocVAD.ResamplerProfile"
@@ -189,7 +186,6 @@ struct RocVADSettings {
         static let fecBlockSource = "RocVAD.FECBlockSource"
         static let fecBlockRepair = "RocVAD.FECBlockRepair"
         static let packetInterleaving = "RocVAD.PacketInterleaving"
-        static let showAdvancedOptions = "RocVAD.ShowAdvancedOptions"
     }
 
     // MARK: - Persistence
@@ -205,8 +201,7 @@ struct RocVADSettings {
             packetLength: defaults.object(forKey: Keys.packetLength) as? Int ?? defaultPacketLength,
             fecBlockSource: defaults.object(forKey: Keys.fecBlockSource) as? Int ?? defaultFECBlockSource,
             fecBlockRepair: defaults.object(forKey: Keys.fecBlockRepair) as? Int ?? defaultFECBlockRepair,
-            packetInterleaving: defaults.object(forKey: Keys.packetInterleaving) as? Bool ?? defaultPacketInterleaving,
-            showAdvancedOptions: defaults.object(forKey: Keys.showAdvancedOptions) as? Bool ?? defaultShowAdvancedOptions
+            packetInterleaving: defaults.object(forKey: Keys.packetInterleaving) as? Bool ?? defaultPacketInterleaving
         )
     }
 
@@ -221,7 +216,6 @@ struct RocVADSettings {
         defaults.set(fecBlockSource, forKey: Keys.fecBlockSource)
         defaults.set(fecBlockRepair, forKey: Keys.fecBlockRepair)
         defaults.set(packetInterleaving, forKey: Keys.packetInterleaving)
-        defaults.set(showAdvancedOptions, forKey: Keys.showAdvancedOptions)
     }
 
     // MARK: - Command Line Arguments
@@ -267,18 +261,4 @@ struct RocVADSettings {
                packetInterleaving != Self.defaultPacketInterleaving
     }
 
-}
-
-// MARK: - Equatable
-
-extension RocVADSettings: Equatable {
-    static func == (lhs: RocVADSettings, rhs: RocVADSettings) -> Bool {
-        return lhs.deviceBuffer == rhs.deviceBuffer &&
-               lhs.fecEncoding == rhs.fecEncoding &&
-               lhs.resamplerProfile == rhs.resamplerProfile &&
-               lhs.packetLength == rhs.packetLength &&
-               lhs.fecBlockSource == rhs.fecBlockSource &&
-               lhs.fecBlockRepair == rhs.fecBlockRepair &&
-               lhs.packetInterleaving == rhs.packetInterleaving
-    }
 }
