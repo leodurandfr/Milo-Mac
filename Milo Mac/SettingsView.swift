@@ -345,6 +345,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 400)
+        // La fenêtre n'est plus dimensionnée par AppKit (voir SettingsWindowPresenter) : ces
+        // deux drapeaux échangent la section « Audio Mac », donc changent la hauteur.
+        .onChange(of: vm.rocVADInstalled) { _, _ in vm.onNeedsResize?() }
+        .onChange(of: store.rocVADNeedsRestart) { _, _ in vm.onNeedsResize?() }
     }
 
     // MARK: - roc-vad absent
