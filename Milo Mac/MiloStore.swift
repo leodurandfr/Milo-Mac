@@ -266,11 +266,51 @@ final class MiloStore {
         applyServerVolume(volumeStatus.volumeDb)
     }
 
-    /// Applique la valeur serveur au slider — sauf si l'utilisateur est en train de
-    /// le manipuler, auquel cas l'écho (en retard) se disputerait le contrôle avec
-    /// la valeur locale.
+    /// Applique au slider une valeur venue du SERVEUR. Point de passage unique de tous les
+    /// chemins serveur : écho WebSocket, poll de fond, et le `GET /api/volume/state` que le
+    /// raccourci déclenche en début de séquence (`refreshVolumeLimitsInBackground`).
+    ///
+    /// Le slider a deux pilotes possibles, et il ne faut jamais laisser le second écraser le
+    /// premier : une valeur LOCALE (immédiate, exacte) et l'écho SERVEUR de cette même valeur
+    /// (qui arrive un aller-retour réseau plus tard). D'où les trois gardes ci-dessous — une
+    /// par pilote local, plus la fenêtre d'écoulement qui suit.
+    ///
+    /// - `isUserInteracting` : l'utilisateur fait glisser le slider à la souris.
+    /// - `isActivelyAdjusting` : le raccourci clavier tient sa prédiction locale. Sans cette
+    ///   garde, le `GET` de début de séquence renvoie le volume d'AVANT le delta (son `adjust`
+    ///   n'a pas encore atterri) et ramenait le thumb en arrière.
+    /// - `isHotkeySettling` : voir ci-dessous.
     private func applyServerVolume(_ db: Double) {
         guard !volumeController.isUserInteracting else { return }
+        guard hotkeyManager?.isActivelyAdjusting != true, !isHotkeySettling else { return }
+        setSliderVolume(db)
+    }
+
+    /// Fenêtre pendant laquelle les échos serveur restent ignorés APRÈS le dernier cran du
+    /// raccourci.
+    ///
+    /// `isActivelyAdjusting` retombe à faux dès le relâchement de la touche — au pire instant
+    /// possible. Un maintien tique toutes les 30 ms, bien plus vite que l'aller-retour vers le
+    /// Pi, et les `adjust` sont sérialisés : au relâchement, les échos des crans précédents
+    /// sont donc encore en vol. La garde s'ouvrant pile à ce moment, ils atterrissaient tous,
+    /// ramenaient le thumb sur une valeur périmée, et le dernier écho le rattrapait ensuite —
+    /// le petit saut au relâchement.
+    ///
+    /// On rend donc la main au serveur non pas au relâchement, mais une fois ses échos écoulés.
+    /// C'est exactement la parade (et la durée) que `VolumeController` applique déjà au
+    /// glissement souris, où les échos accusent le même retard : `userInteractionTimeout`.
+    /// Non observée : plomberie interne, et réécrite à chaque cran (30 Hz) — l'exposer au
+    /// graphe d'observation ferait tourner les vues pour rien.
+    @ObservationIgnored private var hotkeySettleUntil: Date?
+    private let hotkeySettleDuration: TimeInterval = 0.3
+
+    private var isHotkeySettling: Bool {
+        guard let hotkeySettleUntil else { return false }
+        return Date() < hotkeySettleUntil
+    }
+
+    /// Zone morte : sous 0,1 dB, réécrire ne ferait que déclencher un rendu pour rien.
+    private func setSliderVolume(_ db: Double) {
         guard abs(sliderVolumeDb - db) > 0.1 else { return }
         sliderVolumeDb = db
     }
@@ -280,7 +320,14 @@ final class MiloStore {
 
         volume = volumeStatus
         volumeController.setCurrentVolume(volumeStatus)
-        applyServerVolume(volumeStatus.volumeDb)
+
+        // Chaque cran repousse la fenêtre : elle court donc 0,3 s après le DERNIER, qu'il y ait
+        // eu maintien ou simple appui.
+        hotkeySettleUntil = Date().addingTimeInterval(hotkeySettleDuration)
+
+        // La prédiction LOCALE du raccourci, et non un écho serveur : elle court-circuite
+        // `applyServerVolume`, dont c'est justement elle qui arme les gardes.
+        setSliderVolume(volumeStatus.volumeDb)
     }
 
     // MARK: - Radio
@@ -820,9 +867,7 @@ extension MiloStore: MiloConnectionManagerDelegate {
             hotkeyManager?.volumeHUD?.show(volumeDb: updated.volumeDb)
         }
 
-        // Ne pas bouger le slider pendant l'usage du raccourci : la prédiction locale
-        // (exacte) se disputerait le contrôle avec l'état serveur (en retard).
-        guard hotkeyManager?.isActivelyAdjusting != true else { return }
+        // `applyServerVolume` sait déjà se taire pendant le raccourci et pendant un glissement.
         applyServerVolume(updated.volumeDb)
     }
 
