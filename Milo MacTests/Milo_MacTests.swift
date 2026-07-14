@@ -2,7 +2,7 @@
 //
 
 import Testing
-@testable import Milo_Mac
+@testable import Milo
 
 struct Milo_MacTests {
 
