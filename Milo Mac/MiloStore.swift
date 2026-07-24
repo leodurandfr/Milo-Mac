@@ -395,6 +395,31 @@ final class MiloStore {
         }
     }
 
+    /// Ferme la source active — le backend repasse à `active_source = none`.
+    /// Déclenché par un appui maintenu sur la ligne, comme le hold sur le dock
+    /// du frontend web.
+    func closeSource(_ sourceId: String) {
+        guard let apiService = connectionManager.apiService, isConnected else { return }
+
+        // L'état a pu changer pendant l'appui : ne fermer que si la source visée
+        // est toujours l'active, et qu'aucune requête n'est en vol.
+        guard state?.activeSource == sourceId, loadingStates[sourceId] != true else { return }
+
+        // Pas de startLoading ici, contrairement à selectSource : la fermeture n'a pas de
+        // phase de démarrage côté backend (juste plugin.stop()), et surtout
+        // syncLoadingStatesWithBackend ne saurait pas résoudre ce spinner — sa branche
+        // « transition confirmée » teste `identifier == activeSource`, or activeSource devient
+        // "none". Le spinner tiendrait donc la fenêtre de grâce entière (2 s) sur une ligne déjà
+        // éteinte. Le broadcast d'état suffit. Même choix que le frontend web (onCloseActive).
+        Task {
+            do {
+                try await apiService.changeSource("none")
+            } catch {
+                NSLog("❌ Closing source %@ failed: %@", sourceId, error.localizedDescription)
+            }
+        }
+    }
+
     func toggleFeature(_ toggleId: String) {
         guard let apiService = connectionManager.apiService, isConnected else { return }
         guard loadingStates[toggleId] != true else { return }
