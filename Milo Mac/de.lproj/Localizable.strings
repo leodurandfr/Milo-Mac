@@ -16,6 +16,9 @@
 "source.podcast" = "Podcasts";
 "source.airplay" = "AirPlay";
 "source.cd" = "CD-Player";
+"source.dlna" = "DLNA";
+"source.qobuz" = "Qobuz";
+"source.music_library" = "Musikbibliothek";
 
 // MARK: - Radio
 "radio.noFavorites" = "Kein Lieblingssender";

@@ -55,7 +55,10 @@ enum AudioSourceCatalog {
         .init(id: "podcast",   titleKey: "source.podcast",   icon: .asset("podcasts-icon")),
         .init(id: "airplay",   titleKey: "source.airplay",   icon: .symbol("airplay.audio")),
         .init(id: "mac",       titleKey: "source.mac",       icon: .asset("macos-icon")),
-        .init(id: "cd",        titleKey: "source.cd",        icon: .asset("cd-icon"))
+        .init(id: "cd",        titleKey: "source.cd",        icon: .asset("cd-icon")),
+        .init(id: "dlna",      titleKey: "source.dlna",      icon: .asset("dlna-icon")),
+        .init(id: "qobuz",     titleKey: "source.qobuz",     icon: .asset("qobuz-icon")),
+        .init(id: "music_library", titleKey: "source.music_library", icon: .asset("music-library-icon"))
     ]
 
     static let allIds: [String] = all.map(\.id)
