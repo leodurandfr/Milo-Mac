@@ -16,6 +16,9 @@
 "source.podcast" = "播客";
 "source.airplay" = "AirPlay";
 "source.cd" = "CD 播放器";
+"source.dlna" = "DLNA";
+"source.qobuz" = "Qobuz";
+"source.music_library" = "音乐库";
 
 // MARK: - Radio
 "radio.noFavorites" = "没有收藏的电台";

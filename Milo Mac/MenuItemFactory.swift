@@ -55,7 +55,10 @@ class MenuItemFactory {
         ({ L("source.podcast") }, "podcasts-icon", "podcast"),
         ({ L("source.airplay") }, "airplayaudio", "airplay"),
         ({ L("source.mac") }, "desktopcomputer", "mac"),
-        ({ L("source.cd") }, "cd-icon", "cd")
+        ({ L("source.cd") }, "cd-icon", "cd"),
+        ({ L("source.dlna") }, "dlna-icon", "dlna"),
+        ({ L("source.qobuz") }, "qobuz-icon", "qobuz"),
+        ({ L("source.music_library") }, "music-library-icon", "music_library")
     ]
 
     static let allSourceIds: [String] = allSourceConfigs.map { $0.sourceId }
