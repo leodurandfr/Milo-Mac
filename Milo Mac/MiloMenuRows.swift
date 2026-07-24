@@ -322,10 +322,27 @@ struct SourceRow: View {
 
     @State private var isHovering = false
 
+    /// Appui maintenu sur la source active : la ferme. `@GestureState` se remet seul à false
+    /// dès que le doigt se lève ou que le geste est annulé (déplacement au-delà de
+    /// `maximumDistance`) — rien à nettoyer à la main.
+    @GestureState private var isHoldPressing = false
+    /// Horodatage plutôt que booléen : le clic de relâchement qui suit l'appui doit être avalé,
+    /// mais si jamais il n'arrive pas, un drapeau resterait armé et mangerait le clic suivant.
+    @State private var holdFiredAt: Date?
+
+    /// Aligné sur HOLD_DELAY du frontend web (useDockAppHold.js).
+    private static let holdDelay: TimeInterval = 0.5
+
     /// La source « Mac » a besoin du driver roc-vad. Sans lui, la ligne reste visible mais
     /// renvoie vers les Réglages plutôt que d'échouer en silence.
     private var needsSetup: Bool {
         source.id == "mac" && !store.isRocVADReady
+    }
+
+    /// Seule la source active se ferme à l'appui maintenu, et pas pendant une transition
+    /// déjà en vol.
+    private var canCloseByHold: Bool {
+        isActive && !isLoading && !needsSetup
     }
 
     private var isActive: Bool {
@@ -389,10 +406,34 @@ struct SourceRow: View {
                 }
             }
         }
-        .opacity(needsSetup ? 0.55 : 1)
+        // Le contenu s'atténue pendant l'appui pour dire que quelque chose se prépare. Le fondu
+        // est nettement plus court que le geste : la ligne accuse le coup tout de suite, puis
+        // reste atténuée jusqu'au déclenchement. Étalé sur les 500 ms, il se lisait comme une
+        // latence plutôt que comme une réponse.
+        .opacity(needsSetup ? 0.55 : (isHoldPressing ? 0.35 : 1))
+        .animation(.easeOut(duration: isHoldPressing ? 0.15 : 0.12), value: isHoldPressing)
+        // `simultaneousGesture` et non `gesture` : le bouton de MenuRowContainer garde son clic,
+        // les deux cohabitent. Le geste n'est armé que sur la source active.
+        .simultaneousGesture(holdToClose, including: canCloseByHold ? .all : .none)
+    }
+
+    private var holdToClose: some Gesture {
+        LongPressGesture(minimumDuration: Self.holdDelay)
+            .updating($isHoldPressing) { pressing, state, _ in state = pressing }
+            .onEnded { _ in
+                holdFiredAt = Date()
+                store.closeSource(source.id)
+            }
     }
 
     private func activate() {
+        // Le relâchement qui suit un appui maintenu déclenche aussi le clic du bouton :
+        // on l'avale pour ne pas réactiver la source qu'on vient de fermer.
+        if let firedAt = holdFiredAt {
+            holdFiredAt = nil
+            if Date().timeIntervalSince(firedAt) < Self.holdDelay + 0.1 { return }
+        }
+
         if needsSetup {
             SettingsWindowPresenter.show(store: store)
         } else {
