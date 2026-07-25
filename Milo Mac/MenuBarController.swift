@@ -437,7 +437,13 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                     return
                 }
                 self.multiroomTopology = topology
-                if let volumes { self.multiroomVolumes = volumes }
+                if let volumes {
+                    self.multiroomVolumes = volumes
+                    // Amorcer le cache serveur du contrôleur : sans ça, le tout
+                    // premier geste sur une zone n'aurait que la valeur figée de
+                    // la ligne pour ancrer son servo.
+                    self.multiroomVolumeController.syncWithServer(volumes)
+                }
                 NSLog("✅ Multiroom loaded: %d clients, %d zones",
                       topology.clients.count, topology.zones.count)
                 // Rebuild du menu parent : c'est lui qui pose le caret sur la
@@ -956,8 +962,14 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         // casserait le drag en cours. On retente après le timeout d'interaction.
         // Vaut aussi pour les sliders du sous-menu multiroom : un rebuild du menu
         // parent réattache le sous-menu et casserait le geste en cours.
+        // Le pas de retente est court exprès : c'est lui qui borne le retard avec
+        // lequel les *autres* lignes multiroom (les enceintes pendant qu'on bouge
+        // leur zone, et l'inverse) rattrapent l'état serveur, puisqu'elles ne
+        // peuvent le faire qu'au prochain rebuild. Le corps de la retente est un
+        // simple test de date : le répéter coûte moins qu'une demi-seconde de
+        // valeurs périmées à l'écran.
         if volumeController.isUserInteracting || multiroomVolumeController.isUserInteracting {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                 self?.scheduleMenuRefresh()
             }
             return
@@ -1272,7 +1284,7 @@ extension MenuBarController {
         multiroomVolumes = volumes
         // Effacer les valeurs optimistes que le backend vient de confirmer, AVANT
         // de redessiner : sinon la ligne réafficherait la valeur locale périmée.
-        multiroomVolumeController.reconcile(with: volumes)
+        multiroomVolumeController.syncWithServer(volumes)
         scheduleMenuRefresh()
     }
 

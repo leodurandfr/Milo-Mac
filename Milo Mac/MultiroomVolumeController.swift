@@ -49,7 +49,15 @@ final class MultiroomVolumeController {
     private var debounceItems: [Target: DispatchWorkItem] = [:]
     private var fallbackItems: [Target: DispatchWorkItem] = [:]
 
-    private var lastInteractionAt: Date?
+    /// Dernier état serveur connu. On l'ancre ici plutôt que de le laisser capturer
+    /// par la closure d'une ligne : la ligne n'est pas reconstruite pendant un
+    /// geste, sa copie serait donc figée à l'état d'avant le drag.
+    private var latestVolumes: MultiroomVolumes?
+
+    /// Dernier geste **par cible**. Une granularité globale ne suffit pas : c'est
+    /// elle qui décide si une valeur locale peut être effacée, et effacer celle
+    /// d'une zone qu'on est en train de bouger casse son servo de delta.
+    private var lastInteractionAt: [Target: Date] = [:]
 
     // MARK: - Constantes
 
@@ -68,7 +76,12 @@ final class MultiroomVolumeController {
     /// Vrai tant qu'un geste est en cours : `MenuBarController` s'en sert pour
     /// différer la reconstruction du menu, qui détruirait le slider manipulé.
     var isUserInteracting: Bool {
-        guard let last = lastInteractionAt else { return false }
+        let now = Date()
+        return lastInteractionAt.values.contains { now.timeIntervalSince($0) < interactionTimeout }
+    }
+
+    private func isInteracting(with target: Target) -> Bool {
+        guard let last = lastInteractionAt[target] else { return false }
         return Date().timeIntervalSince(last) < interactionTimeout
     }
 
@@ -86,15 +99,18 @@ final class MultiroomVolumeController {
 
     // MARK: - Écriture
 
-    /// - Parameter serverValue: la valeur backend courante de la cible, utilisée
-    ///   pour ancrer le servo au tout début d'un geste sur une zone.
-    func handleVolumeChange(target: Target, newValue: Double, serverValue: Double) {
-        lastInteractionAt = Date()
+    /// - Parameter fallbackServerValue: valeur de repli pour ancrer le servo d'une
+    ///   zone, utilisée seulement si l'état serveur courant ne dit rien de la
+    ///   cible. On préfère toujours `latestVolumes`, qui est frais — la valeur que
+    ///   porte la ligne date de sa construction, donc d'avant le geste.
+    func handleVolumeChange(target: Target, newValue: Double, fallbackServerValue: Double) {
+        lastInteractionAt[target] = Date()
         localVolumes[target] = newValue
         pendingVolumes[target] = newValue
 
         if case .zone(let zoneId) = target, zoneAnchors[zoneId] == nil {
-            zoneAnchors[zoneId] = (anchor: serverValue, sent: 0)
+            zoneAnchors[zoneId] = (anchor: currentServerVolume(for: target) ?? fallbackServerValue,
+                                   sent: 0)
         }
 
         scheduleConfirmationFallback(for: target)
@@ -155,12 +171,19 @@ final class MultiroomVolumeController {
 
     // MARK: - Réconciliation
 
-    /// Confronte les valeurs locales à un nouvel état serveur et efface celles
-    /// qu'il a rattrapées. Tant qu'une valeur locale survit, elle prime à
-    /// l'affichage — c'est ce qui empêche le slider de sauter en arrière pendant
-    /// un drag.
-    func reconcile(with volumes: MultiroomVolumes) {
+    /// Mémorise le nouvel état serveur, puis efface les valeurs locales qu'il a
+    /// rattrapées. Tant qu'une valeur locale survit, elle prime à l'affichage —
+    /// c'est ce qui empêche le slider de sauter en arrière pendant un drag.
+    func syncWithServer(_ volumes: MultiroomVolumes) {
+        latestVolumes = volumes
+
         for (target, localValue) in localVolumes {
+            // Un geste en cours sur cette cible interdit l'effacement. Effacer ici
+            // emporterait aussi l'ancre du servo de zone, et le tick suivant
+            // repartirait d'une référence pré-geste avec un cumul remis à zéro :
+            // le delta déjà appliqué serait renvoyé une seconde fois et la zone
+            // s'emballerait.
+            guard !isInteracting(with: target) else { continue }
             guard let serverValue = serverVolume(for: target, in: volumes) else { continue }
             if abs(serverValue - localValue) <= confirmationTolerance {
                 localVolumes[target] = nil
@@ -188,7 +211,8 @@ final class MultiroomVolumeController {
         zoneAnchors.removeAll()
         pendingVolumes.removeAll()
         lastSentAt.removeAll()
-        lastInteractionAt = nil
+        lastInteractionAt.removeAll()
+        latestVolumes = nil
     }
 
     // MARK: - Envoi
@@ -225,17 +249,23 @@ final class MultiroomVolumeController {
             }
 
         case .zone(let zoneId):
-            guard var anchor = zoneAnchors[zoneId] else { return }
+            pendingVolumes[target] = nil
+            // L'ancre a pu disparaître entre la programmation du flush et son
+            // exécution (échec d'un envoi précédent, filet de confirmation). La
+            // reconstruire depuis l'état serveur courant plutôt qu'abandonner :
+            // sinon c'est la valeur de fin de geste qui est perdue et le slider
+            // recule à la première réconciliation.
+            var anchor = zoneAnchors[zoneId]
+                ?? (anchor: currentServerVolume(for: target) ?? value, sent: 0)
             // Reliquat : ce qui reste à envoyer pour atteindre la cible depuis
             // l'ancre, une fois déduit tout ce qu'on a déjà envoyé.
             let delta = (value - anchor.anchor) - anchor.sent
             guard abs(delta) > 0.01 else {
-                pendingVolumes[target] = nil
+                zoneAnchors[zoneId] = anchor
                 return
             }
             anchor.sent += delta
             zoneAnchors[zoneId] = anchor
-            pendingVolumes[target] = nil
 
             Task {
                 do {
@@ -254,6 +284,14 @@ final class MultiroomVolumeController {
         fallbackItems[target]?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.fallbackItems[target] = nil
+            // Un geste toujours en cours n'est pas une confirmation manquante :
+            // sur un drag qui dure, le filet emporterait l'ancre du servo en
+            // plein mouvement. On le repousse d'autant.
+            guard !self.isInteracting(with: target) else {
+                self.scheduleConfirmationFallback(for: target)
+                return
+            }
             // Le backend n'a jamais confirmé (valeur bornée à une limite, membre
             // hors ligne…) : on rend la main à l'état serveur.
             self.clearLocalState(for: target)
@@ -281,6 +319,10 @@ final class MultiroomVolumeController {
     }
 
     // MARK: - Accès à l'état serveur
+
+    private func currentServerVolume(for target: Target) -> Double? {
+        latestVolumes.flatMap { serverVolume(for: target, in: $0) }
+    }
 
     private func serverVolume(for target: Target, in volumes: MultiroomVolumes) -> Double? {
         switch target {

@@ -335,11 +335,11 @@ final class MultiroomSectionBuilder {
                 view.onRowClick = { [weak self] in self?.toggleZone(zoneId) }
             }
             if let target = row.sliderTarget {
-                let serverValue = row.serverVolumeDb
+                let fallbackServerValue = row.serverVolumeDb
                 view.onVolumeChange = { [weak self] value in
                     self?.volumeController.handleVolumeChange(target: target,
                                                               newValue: value,
-                                                              serverValue: serverValue)
+                                                              fallbackServerValue: fallbackServerValue)
                 }
             }
             if let muteTarget = row.muteTarget {
@@ -376,8 +376,11 @@ final class MultiroomSectionBuilder {
         /// pas de slider mais garde son bouton mute.
         let muteTarget: MultiroomVolumeController.Target?
         /// Valeur **serveur** brute, avant substitution de la valeur locale
-        /// optimiste : c'est elle qui ancre le servo de delta d'une zone. Ancrer
-        /// sur la valeur affichée ferait cumuler l'erreur d'un geste au suivant.
+        /// optimiste. Elle sert de repli pour ancrer le servo de delta d'une zone :
+        /// le contrôleur préfère son propre cache d'état serveur, qui reste frais
+        /// pendant un geste alors que cette copie-ci est figée à la construction
+        /// de la ligne. Ancrer sur la valeur *affichée* ferait, elle, cumuler
+        /// l'erreur d'un geste au suivant.
         let serverVolumeDb: Double
         /// Membres en ligne d'une zone, pour le mute (pas d'endpoint atomique).
         let zoneMembers: [String]
