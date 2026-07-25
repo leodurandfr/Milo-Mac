@@ -27,6 +27,13 @@
 "feature.multiroom" = "Multiroom";
 "feature.equalizer" = "Equalizador";
 
+// MARK: - Multiroom
+"multiroom.offline" = "Offline";
+"multiroom.externalVolume" = "Volume externo";
+"multiroom.noClients" = "Nenhuma coluna detetada";
+"multiroom.mute" = "Silenciar";
+"multiroom.unmute" = "Reativar som";
+
 // MARK: - Configuration Menu
 "config.settings" = "Definições...";
 "config.quit" = "Sair";

@@ -14,19 +14,51 @@ struct MenuItemConfig {
     var longPressAction: Selector? = nil
 }
 
+// MARK: - Menu Row Metrics
+
+/// Colonnes et centres d'une ligne de menu, **source unique** pour toutes les
+/// lignes qui doivent s'aligner entre elles : les lignes de source et de
+/// fonctionnalité (`CircularMenuItem`) et les lignes zones/enceintes du
+/// multiroom (`MultiroomSection`). Redupliquer ces valeurs les ferait dériver au
+/// premier ajustement.
+enum MenuRowMetrics {
+    static let containerWidth: CGFloat = 300
+    static let containerHeight: CGFloat = 32
+
+    /// Pastille ronde d'une ligne de source / fonctionnalité.
+    static let circleSize: CGFloat = 26
+    static let circleLeftMargin: CGFloat = 14
+
+    /// Colonne de texte : c'est sur elle que s'alignent les noms de zones et
+    /// d'enceintes.
+    static let textLeftMargin: CGFloat = 46
+    static let textHeight: CGFloat = 16
+
+    /// Marge droite, alignée sur `MenuItemFactory.rightMargin`.
+    static let rightMargin: CGFloat = 14
+
+    /// Centre horizontal de la pastille — les icônes du multiroom (caret de zone,
+    /// haut-parleur d'enceinte) se centrent dessus pour tomber dans le même axe.
+    static var circleCenterX: CGFloat { circleLeftMargin + circleSize / 2 }
+
+    /// Pastille et texte sont centrés verticalement dans la ligne.
+    static var circleMargin: CGFloat { (containerHeight - circleSize) / 2 }
+    static var textTopMargin: CGFloat { (containerHeight - textHeight) / 2 }
+}
+
 // MARK: - Circular Menu Item Component
 class CircularMenuItem {
     // MARK: - Constants (dimensions originales)
     private static let iconSize: CGFloat = 26
-    private static let circleSize: CGFloat = 26
-    private static let circleMargin: CGFloat = 3
-    private static let containerWidth: CGFloat = 300
-    private static let containerHeight: CGFloat = 32
-    private static let textLeftMargin: CGFloat = 46
+    private static let circleSize = MenuRowMetrics.circleSize
+    private static let circleMargin = MenuRowMetrics.circleMargin
+    private static let containerWidth = MenuRowMetrics.containerWidth
+    private static let containerHeight = MenuRowMetrics.containerHeight
+    private static let textLeftMargin = MenuRowMetrics.textLeftMargin
     private static let textWidth: CGFloat = 140
-    private static let textHeight: CGFloat = 16
-    private static let textTopMargin: CGFloat = 8
-    private static let circleLeftMargin: CGFloat = 14
+    private static let textHeight = MenuRowMetrics.textHeight
+    private static let textTopMargin = MenuRowMetrics.textTopMargin
+    private static let circleLeftMargin = MenuRowMetrics.circleLeftMargin
 
     // MARK: - Gestion globale des spinners
     private static var activeSpinners: [LoadingSpinner] = []
@@ -315,6 +347,14 @@ class HoverableView: NSView {
     /// Sous-vues atténuées pendant l'appui pour signaler la progression du geste.
     var pressFadeViews: [NSView] = []
 
+    /// Zone de la ligne qui déclenche `secondaryHandler` au lieu de l'action
+    /// normale — le caret du multiroom, qui déplie la liste des zones alors que
+    /// le reste de la ligne bascule le multiroom. On discrimine sur le point
+    /// plutôt qu'avec une sous-vue : `hitTest` renvoie `self` pour toute la
+    /// ligne, donc aucun enfant ne peut recevoir de clic.
+    var secondaryHitRect: NSRect?
+    var secondaryHandler: (() -> Void)?
+
     /// Début de l'appui long en cours, s'il y en a un. Statique car il ne peut
     /// y avoir qu'un seul appui souris à la fois : MenuBarController s'en sert
     /// pour différer le rebuild du menu, qui détruirait la vue en plein geste.
@@ -432,12 +472,21 @@ class HoverableView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+
+        // Zone secondaire (le caret du multiroom) : elle court-circuite l'action
+        // normale de la ligne, et n'arme pas l'appui maintenu.
+        if let secondaryHitRect, secondaryHitRect.contains(point), let secondaryHandler {
+            secondaryHandler()
+            return
+        }
+
         guard longPressHandler != nil else {
             clickHandler?()
             return
         }
 
-        beginPress(at: convert(event.locationInWindow, from: nil))
+        beginPress(at: point)
     }
 
     override func mouseDragged(with event: NSEvent) {

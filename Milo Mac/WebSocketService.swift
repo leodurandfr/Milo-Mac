@@ -13,6 +13,14 @@ protocol WebSocketServiceDelegate: AnyObject {
     func didReceiveMultiroomTransitionComplete(success: Bool)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
+    /// Volumes par client et par zone, extraits du même `volume/volume_changed`
+    /// que le volume global — le backend y publie l'état complet.
+    func didReceiveMultiroomVolumes(_ volumes: MultiroomVolumes)
+    /// `client` est nil quand le client a été retiré du registre.
+    func didReceiveMultiroomClientUpdate(macId: String, client: MultiroomClient?)
+    /// `zone` est nil quand la zone a été supprimée ; `memberRemoved` distingue le
+    /// cas « un client a quitté la zone » (la zone existe toujours).
+    func didReceiveMultiroomZoneUpdate(zoneId: String, zone: MultiroomZone?, memberRemoved: Bool)
 }
 
 class WebSocketService: NSObject {
@@ -166,6 +174,11 @@ class WebSocketService: NSObject {
         case multiroomError
         case volumeLimitsChanged
         case dockAppsChanged
+        /// Registre multiroom : un client apparaît/disparaît ou change d'état
+        /// (en ligne, renommé, type d'enceinte, changement de zone).
+        case multiroomClientChanged
+        /// Composition ou nom d'une zone.
+        case multiroomZoneChanged
     }
 
     private func parseMessage(_ text: String) {
@@ -198,6 +211,10 @@ class WebSocketService: NSObject {
             handled = .volumeLimitsChanged
         case ("settings", "dock_apps_changed"):
             handled = .dockAppsChanged
+        case ("multiroom", "client_state_changed"):
+            handled = .multiroomClientChanged
+        case ("multiroom", "zone_changed"):
+            handled = .multiroomZoneChanged
         default:
             return
         }
@@ -212,6 +229,8 @@ class WebSocketService: NSObject {
             case .multiroomError:     self.delegate?.didReceiveMultiroomTransitionComplete(success: false)
             case .volumeLimitsChanged: self.handleVolumeLimitsChange(eventData)
             case .dockAppsChanged:    self.handleDockAppsChange(eventData)
+            case .multiroomClientChanged: self.handleMultiroomClientChange(eventData)
+            case .multiroomZoneChanged:   self.handleMultiroomZoneChange(eventData)
             }
         }
     }
@@ -235,6 +254,15 @@ class WebSocketService: NSObject {
     private func handleVolumeChange(_ data: [String: Any]) {
         let volumeDb: Double
         let state = data["state"] as? [String: Any]
+
+        // `state` porte l'état de volume COMPLET (VolumeState.to_dict) : volume
+        // global, mais aussi les volumes par client et par zone du multiroom.
+        // On les publie avant le décodage du volume global — ils restent valides
+        // même si ce dernier échoue, et c'est la voie de mise à jour temps réel
+        // du sous-menu multiroom (aucun autre événement ne les porte).
+        if let state, state["clients"] != nil || state["zones"] != nil {
+            delegate?.didReceiveMultiroomVolumes(MultiroomVolumes(volumeStateData: state))
+        }
 
         // Priorité au nouveau format (state.global_volume_db)
         if let state = state, let db = state["global_volume_db"] as? Double {
@@ -283,6 +311,29 @@ class WebSocketService: NSObject {
               let enabledApps = config["enabled_apps"] as? [String] else { return }
 
         delegate?.didReceiveDockAppsUpdate(enabledApps)
+    }
+
+    // multiroom/client_state_changed → {mac_id, client?}
+    // `client` est ABSENT (et non null) quand le client sort du registre.
+    private func handleMultiroomClientChange(_ data: [String: Any]) {
+        guard let macId = data["mac_id"] as? String else { return }
+
+        let client = (data["client"] as? [String: Any]).flatMap(MultiroomClient.init(json:))
+        delegate?.didReceiveMultiroomClientUpdate(macId: macId, client: client)
+    }
+
+    // multiroom/zone_changed → union discriminée par les clés présentes :
+    //   {zone_id, zone}    création / mise à jour
+    //   {zone_id}          suppression de la zone
+    //   {zone_id, mac_id}  un client a quitté la zone — la zone existe toujours
+    // Le troisième cas omet lui aussi `zone` : sans le test sur `mac_id`, on
+    // supprimerait à tort une zone encore vivante.
+    private func handleMultiroomZoneChange(_ data: [String: Any]) {
+        guard let zoneId = data["zone_id"] as? String else { return }
+
+        let zone = (data["zone"] as? [String: Any]).flatMap(MultiroomZone.init(json:))
+        let memberRemoved = zone == nil && data["mac_id"] != nil
+        delegate?.didReceiveMultiroomZoneUpdate(zoneId: zoneId, zone: zone, memberRemoved: memberRemoved)
     }
 
     // MARK: - Ping

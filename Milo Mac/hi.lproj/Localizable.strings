@@ -27,6 +27,13 @@
 "feature.multiroom" = "मल्टीरूम";
 "feature.equalizer" = "इक्वलाइज़र";
 
+// MARK: - Multiroom
+"multiroom.offline" = "ऑफ़लाइन";
+"multiroom.externalVolume" = "बाहरी वॉल्यूम";
+"multiroom.noClients" = "कोई स्पीकर नहीं मिला";
+"multiroom.mute" = "म्यूट करें";
+"multiroom.unmute" = "अनम्यूट करें";
+
 // MARK: - Configuration Menu
 "config.settings" = "सेटिंग्स...";
 "config.quit" = "बाहर निकलें";

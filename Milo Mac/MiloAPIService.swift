@@ -346,6 +346,59 @@ class MiloAPIService {
         }
     }
 
+    // MARK: - Multiroom API
+
+    /// Composition du système (clients + zones). C'est le backend qui porte
+    /// l'appartenance aux zones (`Client.zone_id` / `Zone.client_ids`) : on ne la
+    /// reconstruit jamais à partir des groupes d'égaliseur comme le fait le
+    /// frontend web.
+    func fetchMultiroomTopology() async throws -> MultiroomTopology {
+        MultiroomTopology(json: try await fetchJSON("/api/multiroom/state"))
+    }
+
+    /// Volumes par client et par zone. Même payload que `getVolumeStatus()` —
+    /// `/api/volume/state` sert les deux — mais on en extrait ici les sous-objets
+    /// `clients` et `zones` (moyennes de zone déjà calculées par le backend).
+    func fetchMultiroomVolumes() async throws -> MultiroomVolumes {
+        let json = try await fetchJSON("/api/volume/state")
+        guard let data = json["data"] as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+        return MultiroomVolumes(volumeStateData: data)
+    }
+
+    /// Volume absolu d'un client, en dB.
+    ///
+    /// Le backend renvoie **400** si la valeur sort des limites configurées (il ne
+    /// clampe pas) : on borne donc avant l'envoi, sur les limites en cache.
+    func setClientVolume(macId: String, volumeDb: Double) async throws {
+        let limits = cachedLimits
+        let clamped = min(max(volumeDb, limits.minDb), limits.maxDb)
+        try await send("/api/volume/client/mac/\(Self.macForURL(macId))",
+                       method: "PATCH", body: ["volume_db": clamped])
+    }
+
+    func setClientMute(macId: String, mute: Bool) async throws {
+        try await send("/api/volume/client/mac/\(Self.macForURL(macId))/mute",
+                       method: "PATCH", body: ["mute": mute])
+    }
+
+    /// Applique un **delta** à toute une zone, atomiquement : le backend calcule
+    /// les nouvelles valeurs de tous ses clients, les applique en parallèle et ne
+    /// diffuse qu'un seul `volume_changed`. C'est ce qui évite la course qu'aurait
+    /// une boucle de PATCH client par client.
+    func applyZoneDelta(zoneId: String, deltaDb: Double) async throws {
+        let encoded = zoneId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? zoneId
+        try await send("/api/volume/zone/\(encoded)",
+                       method: "PATCH", body: ["delta_db": deltaDb])
+    }
+
+    /// Le MAC voyage sans deux-points dans l'URL (`dca6327ed343`) alors qu'il en
+    /// porte partout ailleurs, réponses comprises — asymétrie imposée par le backend.
+    private static func macForURL(_ macId: String) -> String {
+        macId.replacingOccurrences(of: ":", with: "")
+    }
+
     // MARK: - Radio API
 
     func getRadioFavorites() async throws -> [RadioStation] {

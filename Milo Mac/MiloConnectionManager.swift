@@ -39,6 +39,9 @@ protocol MiloConnectionManagerDelegate: AnyObject {
     func didReceiveMultiroomTransitionComplete(success: Bool)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
+    func didReceiveMultiroomVolumes(_ volumes: MultiroomVolumes)
+    func didReceiveMultiroomClientUpdate(macId: String, client: MultiroomClient?)
+    func didReceiveMultiroomZoneUpdate(zoneId: String, zone: MultiroomZone?, memberRemoved: Bool)
 }
 
 class MiloConnectionManager: NSObject {
@@ -472,6 +475,18 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 
     func didReceiveDockAppsUpdate(_ enabledApps: [String]) {
         delegate?.didReceiveDockAppsUpdate(enabledApps)
+    }
+
+    func didReceiveMultiroomVolumes(_ volumes: MultiroomVolumes) {
+        delegate?.didReceiveMultiroomVolumes(volumes)
+    }
+
+    func didReceiveMultiroomClientUpdate(macId: String, client: MultiroomClient?) {
+        delegate?.didReceiveMultiroomClientUpdate(macId: macId, client: client)
+    }
+
+    func didReceiveMultiroomZoneUpdate(zoneId: String, zone: MultiroomZone?, memberRemoved: Bool) {
+        delegate?.didReceiveMultiroomZoneUpdate(zoneId: zoneId, zone: zone, memberRemoved: memberRemoved)
     }
 }
 

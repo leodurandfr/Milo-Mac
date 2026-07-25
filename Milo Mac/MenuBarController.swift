@@ -31,6 +31,24 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     private var radioStationLoadingTimer: Timer?
     private let radioStationLoadingTimeout: TimeInterval = 15.0
 
+    // MARK: - Multiroom Cache
+    /// Composition (clients + zones) et volumes du multiroom. Chargés une fois
+    /// quand le multiroom s'active, puis tenus à jour par WebSocket : les volumes
+    /// par `volume/volume_changed` (qui porte l'état complet), la composition par
+    /// `multiroom/client_state_changed` et `multiroom/zone_changed`.
+    private var multiroomTopology: MultiroomTopology?
+    private var multiroomVolumes: MultiroomVolumes?
+    private var isLoadingMultiroom = false
+    private let multiroomVolumeController = MultiroomVolumeController()
+    /// Les lignes zones/enceintes sont insérées dans le menu principal, sous
+    /// « Multiroom » — pas dans un sous-menu. Le builder ne porte donc que l'état
+    /// de dépliage : c'est le rebuild coalescé du menu qui les régénère.
+    private lazy var multiroomSection: MultiroomSectionBuilder = {
+        let builder = MultiroomSectionBuilder(volumeController: multiroomVolumeController)
+        builder.onNeedsRefresh = { [weak self] in self?.scheduleMenuRefresh() }
+        return builder
+    }()
+
     // MARK: - UI State
     private var activeMenu: NSMenu?
     private var isPreferencesMenuActive = false
@@ -75,6 +93,9 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
 
         setupStatusItem()
         connectionManager.delegate = self
+        multiroomVolumeController.onNeedsRefresh = { [weak self] in
+            self?.scheduleMenuRefresh()
+        }
         hotkeyManager = GlobalHotkeyManager(connectionManager: connectionManager, menuController: self)
         setupObservers()
         updateIcon()
@@ -235,6 +256,10 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         // prochaine ouverture.
         CircularMenuItem.cleanupAllSpinners()
         volumeController.cleanup()
+        // Les valeurs locales optimistes n'ont plus rien à afficher, et leurs
+        // timers de confirmation n'ont plus lieu d'être. Les requêtes déjà
+        // parties, elles, aboutissent normalement.
+        multiroomVolumeController.cleanup()
         activeMenu = nil
         isPreferencesMenuActive = false
         volumeController.activeMenu = nil
@@ -340,7 +365,119 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
             target: self,
             action: #selector(toggleClicked)
         )
-        systemItems.forEach { menu.addItem($0) }
+
+        for item in systemItems {
+            menu.addItem(item)
+
+            // Caret + lignes zones/enceintes sous la ligne Multiroom, insérées
+            // dans le menu principal (pas de flyout). On n'arme le caret qu'une
+            // fois les données chargées — pendant la transition d'activation, la
+            // ligne reste une simple bascule.
+            guard let toggleId = item.representedObject as? String,
+                  toggleId == "multiroom",
+                  currentState?.multiroomEnabled == true,
+                  loadingStates["multiroom"] != true,
+                  multiroomTopology != nil else { continue }
+
+            attachMultiroomCaret(to: item)
+
+            let rows = multiroomSection.makeItems(
+                items: currentMultiroomItems(),
+                limits: currentVolumeLimits()
+            )
+            rows.forEach { menu.addItem($0) }
+        }
+    }
+
+    // MARK: - Multiroom
+
+    /// Pose le caret sur la ligne Multiroom et lui réserve une zone de clic : le
+    /// caret déplie la liste, le reste de la ligne continue de basculer le
+    /// multiroom.
+    private func attachMultiroomCaret(to item: NSMenuItem) {
+        guard let containerView = item.view as? HoverableView else { return }
+
+        let symbol = multiroomSection.isExpanded ? "chevron.down" : "chevron.right"
+        if let chevronImage = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
+            let chevronView = NSImageView(image: chevronImage)
+            chevronView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
+            chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+            chevronView.frame = NSRect(x: 276, y: 10, width: 12, height: 12)
+            containerView.addSubview(chevronView)
+        }
+
+        // Zone de clic généreuse autour du glyphe : 12 px seraient invisables.
+        containerView.secondaryHitRect = NSRect(x: 262, y: 0,
+                                                width: containerView.bounds.width - 262,
+                                                height: containerView.bounds.height)
+        containerView.secondaryHandler = { [weak self] in
+            self?.multiroomSection.toggleExpanded()
+        }
+    }
+
+    private func currentVolumeLimits() -> (minDb: Double, maxDb: Double) {
+        if let volume = currentVolume {
+            return (volume.limitMinDb, volume.limitMaxDb)
+        }
+        return connectionManager.apiService?.cachedLimits
+            ?? (VolumeDefaults.limitMinDb, VolumeDefaults.limitMaxDb)
+    }
+
+    private func currentMultiroomItems() -> [MultiroomDisplayItem] {
+        guard let topology = multiroomTopology else { return [] }
+        return MultiroomDisplayModel.build(
+            topology: topology,
+            volumes: multiroomVolumes ?? .empty,
+            fallbackVolumeDb: currentVolumeLimits().minDb
+        )
+    }
+
+    /// Charge composition + volumes. Appelé quand le multiroom devient actif
+    /// (connexion, activation depuis le Mac, ou activation depuis un autre client).
+    private func loadMultiroomStateInBackground() {
+        guard let apiService = connectionManager.apiService, !isLoadingMultiroom else { return }
+        isLoadingMultiroom = true
+
+        Task {
+            async let topologyResult = try? apiService.fetchMultiroomTopology()
+            async let volumesResult = try? apiService.fetchMultiroomVolumes()
+
+            let topology = await topologyResult
+            let volumes = await volumesResult
+
+            await MainActor.run {
+                self.isLoadingMultiroom = false
+                guard let topology else {
+                    NSLog("❌ Failed to load multiroom topology")
+                    return
+                }
+                self.multiroomTopology = topology
+                if let volumes { self.multiroomVolumes = volumes }
+                NSLog("✅ Multiroom loaded: %d clients, %d zones",
+                      topology.clients.count, topology.zones.count)
+                // Rebuild du menu parent : c'est lui qui pose le caret sur la
+                // ligne Multiroom, et il ne le fait qu'une fois la topologie là.
+                self.scheduleMenuRefresh()
+            }
+        }
+    }
+
+    private func clearMultiroomState() {
+        multiroomTopology = nil
+        multiroomVolumes = nil
+        isLoadingMultiroom = false
+        multiroomVolumeController.cleanup()
+        multiroomSection.reset()
+    }
+
+    /// Aligne le cache multiroom sur l'état courant : charge à l'activation,
+    /// purge à la désactivation.
+    private func syncMultiroomAvailability(_ state: MiloState) {
+        if state.multiroomEnabled {
+            if multiroomTopology == nil { loadMultiroomStateInBackground() }
+        } else if multiroomTopology != nil {
+            clearMultiroomState()
+        }
     }
 
     private func addPreferencesSection(to menu: NSMenu) {
@@ -832,7 +969,9 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         // Ne pas détruire le slider pendant que l'utilisateur le manipule :
         // le rebuild le remplacerait par l'écho (retardé) du serveur et
         // casserait le drag en cours. On retente après le timeout d'interaction.
-        if volumeController.isUserInteracting {
+        // Vaut aussi pour les sliders du sous-menu multiroom : un rebuild du menu
+        // parent réattache le sous-menu et casserait le geste en cours.
+        if volumeController.isUserInteracting || multiroomVolumeController.isUserInteracting {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 self?.scheduleMenuRefresh()
             }
@@ -930,6 +1069,9 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
                 if state.activeSource == "radio" && self.cachedRadioFavorites == nil {
                     self.loadRadioFavoritesInBackground()
                 }
+                // Idem multiroom : il peut être déjà actif à la connexion, sans
+                // qu'aucune transition ne soit diffusée.
+                self.syncMultiroomAvailability(state)
             }
             return true
         } catch {
@@ -989,6 +1131,7 @@ extension MenuBarController {
 
         let apiService = connectionManager.apiService
         volumeController.apiService = apiService
+        multiroomVolumeController.apiService = apiService
 
         // Reset failure counters on successful connection
         consecutiveRefreshFailures = 0
@@ -1054,12 +1197,21 @@ extension MenuBarController {
 
         checkFunctionalityStateChange(state)
         syncLoadingStatesWithBackend()
+        syncMultiroomAvailability(state)
 
         // Toujours rafraîchir le menu ouvert pour refléter les changements d'état
         scheduleMenuRefresh()
     }
 
     func didReceiveMultiroomTransitionComplete(success: Bool) {
+        // Le multiroom vient de s'activer : c'est le moment de charger zones et
+        // enceintes, snapserver étant prêt. Fait avant le garde sur le spinner —
+        // la transition a pu être déclenchée depuis un autre client, auquel cas
+        // aucun loading local n'est en cours ici.
+        if success, currentState?.multiroomEnabled == true, multiroomTopology == nil {
+            loadMultiroomStateInBackground()
+        }
+
         guard loadingStates["multiroom"] == true else { return }
         if !success {
             // Clear expected state on failure so no late state_changed accidentally
@@ -1124,11 +1276,68 @@ extension MenuBarController {
         scheduleMenuRefresh()
     }
 
+    /// Volumes par client et par zone, portés par le même `volume/volume_changed`
+    /// que le volume global. C'est l'unique voie de mise à jour temps réel du
+    /// sous-menu : on ne repoll jamais `/api/volume/state` pour ça.
+    func didReceiveMultiroomVolumes(_ volumes: MultiroomVolumes) {
+        // Ignorer tant que le multiroom n'est pas monté : le backend diffuse ces
+        // événements en permanence, y compris hors multiroom (mute local…).
+        guard multiroomTopology != nil else { return }
+
+        multiroomVolumes = volumes
+        // Effacer les valeurs optimistes que le backend vient de confirmer, AVANT
+        // de redessiner : sinon la ligne réafficherait la valeur locale périmée.
+        multiroomVolumeController.reconcile(with: volumes)
+        scheduleMenuRefresh()
+    }
+
+    /// Un client a changé d'état (en ligne/hors ligne, renommé, zone) ou a quitté
+    /// le registre. Mise à jour incrémentale : pas de re-fetch complet.
+    func didReceiveMultiroomClientUpdate(macId: String, client: MultiroomClient?) {
+        guard multiroomTopology != nil else { return }
+
+        if let client {
+            multiroomTopology?.clients[macId] = client
+        } else {
+            multiroomTopology?.clients.removeValue(forKey: macId)
+        }
+
+        // La composition change : le sous-menu doit être reconstruit (les lignes
+        // ne correspondent plus), et le menu parent peut avoir à retirer le caret
+        // s'il ne reste plus rien à montrer.
+        scheduleMenuRefresh()
+    }
+
+    func didReceiveMultiroomZoneUpdate(zoneId: String, zone: MultiroomZone?, memberRemoved: Bool) {
+        guard multiroomTopology != nil else { return }
+
+        if let zone {
+            multiroomTopology?.zones[zoneId] = zone
+        } else if memberRemoved {
+            // Un client a quitté la zone, mais la zone existe toujours et le
+            // payload ne la porte pas : seul un re-fetch donne sa composition à
+            // jour. Supprimer la zone ici la ferait disparaître à tort. On garde
+            // la topologie courante le temps du fetch — l'effacer retirerait le
+            // caret et détacherait le flyout ouvert pour quelques centaines de ms.
+            loadMultiroomStateInBackground()
+            return
+        } else {
+            multiroomTopology?.zones.removeValue(forKey: zoneId)
+        }
+
+        scheduleMenuRefresh()
+    }
+
     private func clearState() {
         currentState = nil
         currentVolume = nil
         enabledDockApps = nil
         volumeController.apiService = nil
+        multiroomVolumeController.apiService = nil
+
+        // La composition a pu changer pendant la coupure : on repart du backend
+        // à la reconnexion plutôt que de faire confiance au cache.
+        clearMultiroomState()
 
         // Le cache radio doit être re-fetché à la reconnexion (les favoris ont
         // pu changer pendant la coupure), et un spinner de station en vol ne
