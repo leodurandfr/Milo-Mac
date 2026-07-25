@@ -362,6 +362,12 @@ final class MultiroomSectionBuilder {
                 }
             }
 
+            // Aucune action sur l'item : le menu principal laisse
+            // `autoenablesItems` à son défaut (true), qui désactive tout item
+            // sans action. Or `NSMenu` lit un mouseUp au-dessus d'un item ACTIVÉ
+            // comme une sélection et se referme — c'est ce qui fermerait le menu
+            // au relâchement d'un slider. Le slider de volume du menu principal
+            // repose sur exactement la même configuration.
             let item = NSMenuItem()
             item.view = view
             return item
