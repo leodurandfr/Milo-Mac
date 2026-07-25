@@ -8,6 +8,10 @@ struct MenuItemConfig {
     let target: AnyObject
     let action: Selector
     let representedObject: Any?
+    /// Action déclenchée par un appui maintenu (500 ms). Quand elle est nil —
+    /// le cas de toutes les lignes sauf la source active — le clic reste
+    /// instantané au mouseDown.
+    var longPressAction: Selector? = nil
 }
 
 // MARK: - Circular Menu Item Component
@@ -77,6 +81,13 @@ class CircularMenuItem {
             _ = target?.perform(action, with: menuItem)
         }
 
+        if let longPressAction = config.longPressAction {
+            containerView.longPressHandler = { [weak target, weak menuItem] in
+                guard let menuItem else { return }
+                _ = target?.perform(longPressAction, with: menuItem)
+            }
+        }
+
         containerView.configureHoverBackground(leftMargin: 5, rightMargin: 5)
 
         // Créer le cercle avec loader ou icône
@@ -86,6 +97,10 @@ class CircularMenuItem {
         // Ajouter le texte
         let textField = createTextField(config: config)
         containerView.addSubview(textField)
+
+        // Contenu atténué pendant l'appui maintenu (sans toucher au fond de survol,
+        // qui vit dans un CALayer du container et non dans ses sous-vues).
+        containerView.pressFadeViews = [circleView, textField]
 
         return containerView
     }
@@ -292,8 +307,35 @@ class IconProvider {
 // MARK: - Hoverable View
 class HoverableView: NSView {
     var clickHandler: (() -> Void)?
+
+    /// Action d'appui maintenu. Tant qu'elle est nil, mouseDown déclenche le
+    /// clic immédiatement (comportement historique de toutes les lignes).
+    var longPressHandler: (() -> Void)?
+
+    /// Sous-vues atténuées pendant l'appui pour signaler la progression du geste.
+    var pressFadeViews: [NSView] = []
+
+    /// Début de l'appui long en cours, s'il y en a un. Statique car il ne peut
+    /// y avoir qu'un seul appui souris à la fois : MenuBarController s'en sert
+    /// pour différer le rebuild du menu, qui détruirait la vue en plein geste.
+    private(set) static var activePressStartedAt: Date?
+
+    /// Aligné sur HOLD_DELAY du frontend web (useDockAppHold.js).
+    static let longPressDelay: TimeInterval = 0.5
+    private static let pressFadeAlpha: CGFloat = 0.35
+    /// Nettement plus court que le geste : la ligne accuse le coup tout de suite,
+    /// puis reste atténuée jusqu'au déclenchement. Étalé sur les 500 ms, le fondu
+    /// se lisait comme une latence plutôt que comme une réponse.
+    private static let pressFadeDuration: TimeInterval = 0.15
+    private static let pressCancelDuration: TimeInterval = 0.12
+    /// Au-delà, on considère que l'utilisateur fait autre chose qu'un appui.
+    private static let pressMoveTolerance: CGFloat = 4
+
     private var trackingArea: NSTrackingArea?
     private var hoverBackgroundLayer: CALayer?
+    private var pressTimer: Timer?
+    private var pressOrigin: NSPoint?
+    private var longPressFired = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -303,6 +345,13 @@ class HoverableView: NSView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupView()
+    }
+
+    deinit {
+        pressTimer?.invalidate()
+        if pressOrigin != nil {
+            HoverableView.activePressStartedAt = nil
+        }
     }
 
     private func setupView() {
@@ -354,6 +403,12 @@ class HoverableView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateTrackingAreas()
+
+        // Un rebuild du menu retire la vue de sa fenêtre : ne pas laisser
+        // derrière soi un timer d'appui ni un verrou de refresh orphelin.
+        if window == nil {
+            cancelPress()
+        }
     }
 
     func setHoverActive(_ active: Bool) {
@@ -373,14 +428,99 @@ class HoverableView: NSView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         setHoverActive(false)
+        cancelPress()
     }
 
     override func mouseDown(with event: NSEvent) {
-        clickHandler?()
+        guard longPressHandler != nil else {
+            clickHandler?()
+            return
+        }
+
+        beginPress(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let origin = pressOrigin else { return }
+
+        let point = convert(event.locationInWindow, from: nil)
+        if abs(point.x - origin.x) > HoverableView.pressMoveTolerance
+            || abs(point.y - origin.y) > HoverableView.pressMoveTolerance {
+            cancelPress()
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard longPressHandler != nil else {
+            super.mouseUp(with: event)
+            return
+        }
+
+        let fired = longPressFired
+        cancelPress()
+
+        // Appui long déjà déclenché : on avale le clic de relâchement pour ne
+        // pas réenchaîner sur l'action normale.
+        if !fired {
+            clickHandler?()
+        }
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         return bounds.contains(point) ? self : nil
+    }
+
+    // MARK: - Appui maintenu
+
+    private func beginPress(at point: NSPoint) {
+        pressTimer?.invalidate()
+        pressOrigin = point
+        longPressFired = false
+        HoverableView.activePressStartedAt = Date()
+
+        setPressFade(active: true, duration: HoverableView.pressFadeDuration)
+
+        // Mode .common : NSMenu fait tourner sa propre boucle de tracking, un
+        // timer en mode .default ne se déclencherait jamais menu ouvert.
+        let timer = Timer(timeInterval: HoverableView.longPressDelay, repeats: false) { [weak self] _ in
+            guard let self, self.pressOrigin != nil else { return }
+
+            // Filet de sécurité : si le mouseUp n'a pas été délivré (relâchement
+            // hors fenêtre pendant le tracking du menu), un clic bref ne doit
+            // pas se transformer en appui long.
+            guard NSEvent.pressedMouseButtons & 0x1 != 0 else {
+                self.cancelPress()
+                return
+            }
+
+            self.longPressFired = true
+            self.longPressHandler?()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pressTimer = timer
+    }
+
+    private func cancelPress() {
+        pressTimer?.invalidate()
+        pressTimer = nil
+
+        guard pressOrigin != nil else { return }
+        pressOrigin = nil
+        HoverableView.activePressStartedAt = nil
+
+        setPressFade(active: false, duration: HoverableView.pressCancelDuration)
+    }
+
+    private func setPressFade(active: Bool, duration: TimeInterval) {
+        // Core Animation s'exécute côté render server : le fondu progresse
+        // normalement malgré la boucle de tracking du menu.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for view in pressFadeViews {
+                view.animator().alphaValue = active ? HoverableView.pressFadeAlpha : 1.0
+            }
+        }
     }
 }
 

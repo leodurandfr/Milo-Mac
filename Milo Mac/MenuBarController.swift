@@ -285,7 +285,8 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
             loadingStates: loadingStates,
             enabledApps: enabledDockApps,
             target: self,
-            action: #selector(sourceClicked)
+            action: #selector(sourceClicked),
+            longPressAction: #selector(sourceHoldToClose)
         )
 
         // Add items to menu and attach submenu to Radio if favorites available
@@ -571,6 +572,41 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         }
     }
 
+    /// Appui maintenu sur la source active : la ferme (retour à `none`), comme
+    /// le hold sur le dock du frontend web.
+    @objc private func sourceHoldToClose(_ sender: NSMenuItem) {
+        guard let sourceId = sender.representedObject as? String,
+              let apiService = connectionManager.apiService,
+              isMiloConnected else { return }
+
+        // L'état a pu changer pendant les 500 ms d'appui : ne fermer que si la
+        // source visée est toujours l'active, et qu'aucune requête n'est en vol.
+        guard currentState?.activeSource == sourceId,
+              loadingStates[sourceId] != true else { return }
+
+        // Pas de startLoading ici, contrairement à sourceClicked : la fermeture
+        // n'a pas de phase de démarrage côté backend (juste plugin.stop()), et
+        // surtout syncLoadingStatesWithBackend ne saurait pas résoudre ce
+        // spinner — sa branche « transition confirmée » teste
+        // `identifier == activeSource`, or activeSource devient "none". Le
+        // spinner tiendrait donc la fenêtre de grâce entière (2 s), pastille
+        // peinte en couleur d'accent (loadingIsActive), c'est-à-dire le langage
+        // visuel du démarrage. Le broadcast d'état suffit : toutes les pastilles
+        // passent au gris. Même choix que le frontend web (onCloseActive).
+        Task {
+            do {
+                try await apiService.changeSource("none")
+            } catch {
+                NSLog("❌ Closing source %@ failed: %@", sourceId, error.localizedDescription)
+                await MainActor.run {
+                    // Aucun état à défaire, mais la ligne est restée atténuée par
+                    // le geste : la reconstruire lui rend son opacité.
+                    self.scheduleMenuRefresh()
+                }
+            }
+        }
+    }
+
     @objc private func toggleClicked(_ sender: NSMenuItem) {
         guard let toggleType = sender.representedObject as? String,
               let apiService = connectionManager.apiService,
@@ -798,6 +834,17 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         // casserait le drag en cours. On retente après le timeout d'interaction.
         if volumeController.isUserInteracting {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.scheduleMenuRefresh()
+            }
+            return
+        }
+
+        // Idem pendant un appui maintenu sur la source active : le rebuild
+        // détruirait la vue en plein geste et l'annulerait. Le plafond de 1 s
+        // rend le garde auto-cicatrisant si un relâchement était manqué.
+        if let pressStart = HoverableView.activePressStartedAt,
+           Date().timeIntervalSince(pressStart) < 1.0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 self?.scheduleMenuRefresh()
             }
             return

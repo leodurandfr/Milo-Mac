@@ -63,7 +63,7 @@ class MenuItemFactory {
 
     static let allSourceIds: [String] = allSourceConfigs.map { $0.sourceId }
 
-    static func createAudioSourcesSection(state: MiloState?, loadingStates: [String: Bool] = [:], enabledApps: [String]? = nil, target: AnyObject, action: Selector) -> [NSMenuItem] {
+    static func createAudioSourcesSection(state: MiloState?, loadingStates: [String: Bool] = [:], enabledApps: [String]? = nil, target: AnyObject, action: Selector, longPressAction: Selector? = nil) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
 
         items.append(createSecondaryHeader(title: L("menu.audio_sources.title")))
@@ -96,7 +96,10 @@ class MenuItemFactory {
                 isActive: isActive,
                 target: target,
                 action: action,
-                representedObject: sourceId
+                representedObject: sourceId,
+                // Seule la source active se ferme à l'appui maintenu ; on
+                // n'arme pas le geste pendant une transition déjà en vol.
+                longPressAction: (isActive && !isLoading) ? longPressAction : nil
             )
 
             items.append(CircularMenuItem.createWithLoadingSupport(
