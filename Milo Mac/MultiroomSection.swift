@@ -283,18 +283,16 @@ final class MultiroomRowView: NSView {
 
 // MARK: - Construction de la section
 
-/// Fabrique les lignes insérées sous « Multiroom » dans le menu principal, et
-/// porte l'état de dépliage (la section entière, et chaque zone).
+/// Fabrique les lignes insérées sous l'en-tête « Multiroom » du menu principal,
+/// et porte le dépliage de chaque zone.
+///
+/// La section n'a pas d'état déplié/replié qui lui soit propre : elle existe tant
+/// que le multiroom est actif, ce que dit l'interrupteur de l'en-tête.
 ///
 /// Pas de `NSMenu` persistant ni de diff d'identités ici, contrairement au
 /// sous-menu radio : les lignes vivent dans le menu principal, que
 /// `MenuBarController` reconstruit déjà en entier de façon coalescée.
 final class MultiroomSectionBuilder {
-    /// Section **dépliée** par défaut : dès que le multiroom est actif, ses zones
-    /// et enceintes sont ce qu'on vient voir. Le caret de la ligne « Multiroom »
-    /// pointe donc vers le bas à l'ouverture (convention macOS : `chevron.down`
-    /// = déplié), et sert à replier.
-    private(set) var isExpanded = true
     private var expandedZones: Set<String> = []
 
     private let volumeController: MultiroomVolumeController
@@ -306,21 +304,13 @@ final class MultiroomSectionBuilder {
         self.volumeController = volumeController
     }
 
-    func toggleExpanded() {
-        isExpanded.toggle()
-        onNeedsRefresh?()
-    }
-
     func reset() {
-        isExpanded = true
         expandedZones.removeAll()
     }
 
-    /// Lignes à insérer sous « Multiroom ». Vide quand la section est repliée.
+    /// Lignes à insérer sous l'en-tête « Multiroom ».
     func makeItems(items: [MultiroomDisplayItem],
                    limits: (minDb: Double, maxDb: Double)) -> [NSMenuItem] {
-        guard isExpanded else { return [] }
-
         // Purger les zones dépliées disparues, sinon l'ensemble grossit au fil
         // des reconfigurations.
         let liveZoneIds = Set(items.compactMap { item -> String? in

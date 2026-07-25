@@ -347,14 +347,6 @@ class HoverableView: NSView {
     /// Sous-vues atténuées pendant l'appui pour signaler la progression du geste.
     var pressFadeViews: [NSView] = []
 
-    /// Zone de la ligne qui déclenche `secondaryHandler` au lieu de l'action
-    /// normale — le caret du multiroom, qui déplie la liste des zones alors que
-    /// le reste de la ligne bascule le multiroom. On discrimine sur le point
-    /// plutôt qu'avec une sous-vue : `hitTest` renvoie `self` pour toute la
-    /// ligne, donc aucun enfant ne peut recevoir de clic.
-    var secondaryHitRect: NSRect?
-    var secondaryHandler: (() -> Void)?
-
     /// Début de l'appui long en cours, s'il y en a un. Statique car il ne peut
     /// y avoir qu'un seul appui souris à la fois : MenuBarController s'en sert
     /// pour différer le rebuild du menu, qui détruirait la vue en plein geste.
@@ -473,13 +465,6 @@ class HoverableView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-
-        // Zone secondaire (le caret du multiroom) : elle court-circuite l'action
-        // normale de la ligne, et n'arme pas l'appui maintenu.
-        if let secondaryHitRect, secondaryHitRect.contains(point), let secondaryHandler {
-            secondaryHandler()
-            return
-        }
 
         guard longPressHandler != nil else {
             clickHandler?()

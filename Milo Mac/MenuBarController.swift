@@ -41,8 +41,9 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     private var isLoadingMultiroom = false
     private let multiroomVolumeController = MultiroomVolumeController()
     /// Les lignes zones/enceintes sont insérées dans le menu principal, sous
-    /// « Multiroom » — pas dans un sous-menu. Le builder ne porte donc que l'état
-    /// de dépliage : c'est le rebuild coalescé du menu qui les régénère.
+    /// l'en-tête « Multiroom » — pas dans un sous-menu. Le builder ne porte donc
+    /// que le dépliage des zones : c'est le rebuild coalescé du menu qui les
+    /// régénère. La section entière, elle, suit l'interrupteur de l'en-tête.
     private lazy var multiroomSection: MultiroomSectionBuilder = {
         let builder = MultiroomSectionBuilder(volumeController: multiroomVolumeController)
         builder.onNeedsRefresh = { [weak self] in self?.scheduleMenuRefresh() }
@@ -361,25 +362,33 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         let systemItems = MenuItemFactory.createSystemControlsSection(
             state: currentState,
             loadingStates: loadingStates,
+            pendingStates: expectedFunctionalityStates,
             enabledApps: enabledDockApps,
             target: self,
             action: #selector(toggleClicked)
         )
 
+        // Backend n'exposant ni multiroom ni égaliseur : le séparateur qui ferme
+        // la section des sources n'a plus rien à séparer.
+        guard !systemItems.isEmpty else {
+            if let last = menu.items.last, last.isSeparatorItem {
+                menu.removeItem(last)
+            }
+            return
+        }
+
         for item in systemItems {
             menu.addItem(item)
 
-            // Caret + lignes zones/enceintes sous la ligne Multiroom, insérées
-            // dans le menu principal (pas de flyout). On n'arme le caret qu'une
-            // fois les données chargées — pendant la transition d'activation, la
-            // ligne reste une simple bascule.
+            // Zones et enceintes juste sous l'en-tête « Multiroom » : elles font
+            // partie de sa section, donc avant le séparateur qui la ferme. On
+            // attend d'avoir la topologie — le temps de la bascule, la section se
+            // réduit à son en-tête et son interrupteur.
             guard let toggleId = item.representedObject as? String,
                   toggleId == "multiroom",
                   currentState?.multiroomEnabled == true,
                   loadingStates["multiroom"] != true,
                   multiroomTopology != nil else { continue }
-
-            attachMultiroomCaret(to: item)
 
             let rows = multiroomSection.makeItems(
                 items: currentMultiroomItems(),
@@ -390,30 +399,6 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     }
 
     // MARK: - Multiroom
-
-    /// Pose le caret sur la ligne Multiroom et lui réserve une zone de clic : le
-    /// caret déplie la liste, le reste de la ligne continue de basculer le
-    /// multiroom.
-    private func attachMultiroomCaret(to item: NSMenuItem) {
-        guard let containerView = item.view as? HoverableView else { return }
-
-        let symbol = multiroomSection.isExpanded ? "chevron.down" : "chevron.right"
-        if let chevronImage = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
-            let chevronView = NSImageView(image: chevronImage)
-            chevronView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.5)
-            chevronView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
-            chevronView.frame = NSRect(x: 276, y: 10, width: 12, height: 12)
-            containerView.addSubview(chevronView)
-        }
-
-        // Zone de clic généreuse autour du glyphe : 12 px seraient invisables.
-        containerView.secondaryHitRect = NSRect(x: 262, y: 0,
-                                                width: containerView.bounds.width - 262,
-                                                height: containerView.bounds.height)
-        containerView.secondaryHandler = { [weak self] in
-            self?.multiroomSection.toggleExpanded()
-        }
-    }
 
     private func currentVolumeLimits() -> (minDb: Double, maxDb: Double) {
         if let volume = currentVolume {
