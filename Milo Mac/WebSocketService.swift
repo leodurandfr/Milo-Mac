@@ -15,6 +15,14 @@ protocol WebSocketServiceDelegate: AnyObject {
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
+    /// La *structure* multiroom a changé (un client s'est connecté/déconnecté, une zone a
+    /// été créée/modifiée/supprimée). Le store re-fetch `/api/multiroom/state` plutôt que de
+    /// réappliquer le diff d'union du wire — plus robuste, et la liste n'est pas assez grande
+    /// pour que le coût compte.
+    func didReceiveMultiroomStructureChanged()
+    /// Volume/mute LIVE par client et par zone (porté par `volume/volume_changed` en mode
+    /// multiroom). Alimente les sliders de la sous-section.
+    func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
@@ -189,8 +197,9 @@ final class WebSocketService: NSObject {
         /// _FULL_STATE_CATEGORIES côté backend). L'état EQ arrive via le system/state_changed
         /// compagnon, pas via equalizer/enabled_changed.
         case state(MiloState, multiroomChanged: Bool)
-        case volume(VolumeStatus)
+        case volume(VolumeStatus, multiroom: MultiroomVolume?)
         case multiroomFailed
+        case multiroomStructureChanged
         case volumeLimits(minDb: Double, maxDb: Double)
         case dockApps([String])
     }
@@ -221,6 +230,11 @@ final class WebSocketService: NSObject {
             decoded = Self.decodeVolume(eventData)
         case ("routing", "multiroom_error"):
             decoded = .multiroomFailed
+        case ("multiroom", "client_state_changed"),
+             ("multiroom", "zone_changed"):
+            // Un seul signal côté store : la structure a bougé, re-fetch. On ne distingue
+            // pas client vs zone — le re-fetch couvre les deux.
+            decoded = .multiroomStructureChanged
         case ("settings", "volume_limits_changed"):
             decoded = Self.decodeVolumeLimits(eventData)
         case ("settings", "dock_apps_changed"):
@@ -253,11 +267,20 @@ final class WebSocketService: NSObject {
                 delegate?.didReceiveMultiroomTransitionComplete(success: true)
             }
 
-        case .volume(let volume):
+        case .volume(let volume, let multiroom):
             delegate?.didReceiveVolumeUpdate(volume)
+            // En mode multiroom, le même événement porte le volume/mute par client et par
+            // zone (`state.clients` / `state.zones`) — la source LIVE des sliders de la
+            // sous-section.
+            if let multiroom {
+                delegate?.didReceiveMultiroomVolumeUpdate(multiroom)
+            }
 
         case .multiroomFailed:
             delegate?.didReceiveMultiroomTransitionComplete(success: false)
+
+        case .multiroomStructureChanged:
+            delegate?.didReceiveMultiroomStructureChanged()
 
         case .volumeLimits(let minDb, let maxDb):
             delegate?.didReceiveVolumeLimitsUpdate(minDb: minDb, maxDb: maxDb)
@@ -296,6 +319,16 @@ final class WebSocketService: NSObject {
         let mode = state?["mode"] as? String
         let multiroomEnabled = (mode == "multiroom") || (data["multiroom_enabled"] as? Bool ?? false)
 
+        // Volume/mute par client et par zone : seulement en mode multiroom, et seulement s'il
+        // y a effectivement des clients/zones (sinon nil, on ne réveille pas le store pour rien).
+        let multiroom: MultiroomVolume?
+        if let state, mode == "multiroom" {
+            let mv = MultiroomVolume(state: state)
+            multiroom = (mv.clients.isEmpty && mv.zones.isEmpty) ? nil : mv
+        } else {
+            multiroom = nil
+        }
+
         // Les limites ne sont pas dans les événements WebSocket ; elles sont préservées
         // depuis le cache API par `MiloStore.didReceiveVolumeUpdate`.
         return .volume(VolumeStatus(
@@ -304,7 +337,7 @@ final class WebSocketService: NSObject {
             dspAvailable: true,
             limitMinDb: 0,
             limitMaxDb: 0
-        ))
+        ), multiroom: multiroom)
     }
 
     // settings/volume_limits_changed → data.limits.{min_db,max_db}

@@ -105,6 +105,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         setupStatusItem()
         setupPanel()
         observeConnection()
+        observeMultiroomExpansion()
         updateIcon()
     }
 
@@ -146,6 +147,21 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 self.updateIcon()
                 self.observeConnection()
+            }
+        }
+    }
+
+    /// La sous-section multiroom se déplie/replie pendant que le panneau est ouvert :
+    /// `positionPanel()` n'étant joué qu'à l'ouverture, on le rejoue pour que la fenêtre suive
+    /// la nouvelle hauteur de contenu. Même motif de réarmement que `observeConnection`.
+    private func observeMultiroomExpansion() {
+        withObservationTracking {
+            _ = store.multiroomExpanded
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.panel.isVisible { self.positionPanel() }
+                self.observeMultiroomExpansion()
             }
         }
     }
@@ -343,21 +359,14 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         }
 
         // La taille vient du contenu SwiftUI : elle change selon que le pied est visible,
-        // que Milō est connecté, ou qu'on est dans la liste des stations radio.
+        // que Milō est connecté, qu'on est dans la liste des stations radio, ou que la
+        // sous-section multiroom est dépliée.
         hostingController.view.layoutSubtreeIfNeeded()
         var size = hostingController.view.fittingSize
 
         // Hauteur ENTIÈRE, indispensable au calage sous-pixel : voir `shadowMargin`, dont les
-        // 60,5 pt ne tombent juste que si la hauteur du contenu est entière.
-        //
-        // Sans ce calage, le panneau glissait d'un pixel selon la parité du contenu — vérifié :
-        // à 420,5 pt de contenu il s'ouvrait à 34,5, à 416,0 il tombait à 35,0. Or le contenu
-        // change tout le temps (connexion, pied, liste radio).
-        //
-        // Le plafond est appliqué APRÈS l'arrondi, et il est lui-même entier : la hauteur reste
-        // donc entière dans les deux cas. (Dans l'autre ordre, l'arrondi vers le haut pourrait
-        // faire repasser la hauteur au-dessus du plafond.) C'est une ceinture-bretelle : le
-        // contenu se borne déjà tout seul, `fittingSize` ne devrait jamais dépasser.
+        // 60,5 pt ne tombent juste que si la hauteur du contenu est entière. Sans ce calage, le
+        // panneau glissait d'un pixel selon la parité du contenu.
         size.height = min(size.height.rounded(.up), maxContentHeight)
 
         hostingController.view.frame = NSRect(origin: .zero, size: size)
@@ -365,7 +374,6 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         // La fenêtre est plus grande que le panneau : la marge accueille l'ombre. Le verre y
         // est centré par les contraintes posées dans setupPanel().
         let m = PanelMetrics.shadowMargin
-        panel.setContentSize(NSSize(width: size.width + 2 * m, height: size.height + 2 * m))
 
         let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
 
@@ -382,10 +390,13 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
 
         // Ancré sur le bas de la BARRE DES MENUS (`visibleFrame.maxY`), et non sur le bas du
         // bouton : sur un écran à encoche la barre est plus haute que l'élément d'état, et
-        // s'ancrer au bouton fait chevaucher le panneau sous la barre.
+        // s'ancrer au bouton fait chevaucher le panneau sous la barre. Le panneau grandit donc
+        // vers le BAS (le haut reste collé sous la barre), comme « Son ».
         let y = visible.maxY - PanelMetrics.topGap - size.height
 
-        panel.setFrameOrigin(NSPoint(x: x - m, y: y - m))
+        panel.setFrame(NSRect(x: x - m, y: y - m,
+                              width: size.width + 2 * m, height: size.height + 2 * m),
+                       display: false)
     }
 
     // MARK: - Fermeture au clic extérieur

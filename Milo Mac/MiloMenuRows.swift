@@ -342,7 +342,8 @@ struct SourceRow: View {
 
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: activate) {
-            RowIcon(icon: source.icon, isActive: isActive)
+            // Spinner de transition DANS la pastille.
+            RowIcon(icon: source.icon, isActive: isActive, isLoading: isLoading)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(source.title)
@@ -381,12 +382,6 @@ struct SourceRow: View {
                 .buttonStyle(.plain)
             } else {
                 Spacer(minLength: 4)
-
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.7)
-                }
             }
         }
         .opacity(needsSetup ? 0.55 : 1)
@@ -415,6 +410,13 @@ struct FeatureRow: View {
     @Bindable var store: MiloStore
     let feature: FeatureDescriptor
 
+    /// Multiroom porte, comme la ligne Radio, DEUX commandes : le corps bascule la
+    /// fonctionnalité, le chevron à droite déplie la sous-section (zones/clients). Le chevron
+    /// n'apparaît que lorsqu'il y a quelque chose à déplier (`store.canShowMultiroom`).
+    var showsChevron: Bool = false
+    var isExpanded: Bool = false
+    var onChevron: (() -> Void)? = nil
+
     @State private var isHovering = false
 
     private var isLoading: Bool { store.loadingStates[feature.id] == true }
@@ -422,18 +424,28 @@ struct FeatureRow: View {
 
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: toggle) {
-            RowIcon(icon: feature.icon, isActive: isOn)
+            // Le spinner de bascule vit DANS la pastille (comme les sources), pas à droite.
+            RowIcon(icon: feature.icon, isActive: isOn, isLoading: isLoading)
 
             Text(feature.title)
                 .font(.system(size: 13))
                 .lineLimit(1)
 
-            Spacer(minLength: 4)
-
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
+            if showsChevron {
+                // Même construction que le caret Radio (SourceRow) : le bouton d'expansion
+                // prend tout le vide à droite du libellé, pas juste l'encre du chevron —
+                // une cible large pour une commande utilisée autant que la ligne.
+                Button { onChevron?() } label: {
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 4)
+                        ExpandChevron(isExpanded: isExpanded)
+                    }
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Spacer(minLength: 4)
             }
         }
     }
@@ -443,6 +455,364 @@ struct FeatureRow: View {
     private func toggle() {
         guard !isLoading else { return }
         store.toggleFeature(feature.id)
+    }
+}
+
+// MARK: - Sous-section Multiroom (accordéon inline)
+
+/// Géométrie de la sous-section multiroom, en cartes « inset-grouped » façon macOS.
+private enum MultiroomMetrics {
+    /// Fond des cartes, RELEVÉ AU PIXEL sur le panneau « Son » déplié sous AirPods (capture 2×) :
+    /// verre à 32,32,32, inset à 52,52,52 — soit un voile **blanc à 9 %** (identique sur les
+    /// trois canaux), un fond plus CLAIR que le verre. Dynamique pour rester juste en clair
+    /// (bascule sur du noir à 9 %), comme `secondarySystemFill` inverse blanc/noir.
+    static let cardFill: Color = {
+        let ns = NSColor(name: nil) { appearance in
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(white: dark ? 1 : 0, alpha: 0.09)
+        }
+        return Color(nsColor: ns)
+    }()
+
+    /// Écart de verre entre la ligne Multiroom et la première carte. Mesuré sur « Son » : 5 pt.
+    static let gapAboveCards: CGFloat = 5
+    /// Marge des cartes vis-à-vis des bords du panneau.
+    static let cardHInset: CGFloat = 10
+    /// Écart de verre entre deux cartes distinctes (zone, client standalone).
+    static let cardSpacing: CGFloat = 6
+    static let cardCornerRadius: CGFloat = 9
+
+    /// Retraits internes d'une ligne dans une carte.
+    static let rowHInset: CGFloat = 10
+    static let rowVInset: CGFloat = 6
+
+    static let iconSize: CGFloat = 18
+    static let muteIconSize: CGFloat = 22
+    /// Écart icône → nom, et nom → contrôles.
+    static let gap: CGFloat = 7
+
+    /// Largeur FIXE de la colonne de nom, pour que tous les sliders (zone comme client)
+    /// s'alignent sur la même largeur. Un nom plus long est fondu (dégradé) plutôt que coupé
+    /// par « … ».
+    static let nameWidth: CGFloat = 74
+    /// Longueur du fondu en fin de nom.
+    static let nameFade: CGFloat = 14
+
+    /// Intervalle mini entre deux envois réseau pendant un glissement de slider. À chaque
+    /// pixel on rafraîchit le pouce localement, mais on n'envoie au backend qu'à cette cadence
+    /// (la valeur finale part toujours au relâchement). Sans ça, le flot de PATCH fait
+    /// rediffuser le backend en continu et toute la section se re-rend → glissement saccadé.
+    static let sendThrottle: TimeInterval = 0.06
+}
+
+/// La sous-section dépliable sous la ligne Multiroom, en **cartes distinctes** : une carte par
+/// zone (en-tête + filet + clients membres) et une carte par client standalone. Tout est sur
+/// une ligne (icône + nom + slider + mute) et aligné à gauche, sans indentation.
+struct MultiroomSection: View {
+    @Bindable var store: MiloStore
+
+    var body: some View {
+        VStack(spacing: MultiroomMetrics.cardSpacing) {
+            ForEach(store.multiroomDisplayItems) { item in
+                switch item {
+                case .zone(let zone, let clients):
+                    MultiroomCard {
+                        MultiroomRow(store: store, kind: .zone(zone, clients))
+                        // Un SEUL filet, entre l'en-tête de zone et ses clients — pas entre
+                        // chaque client.
+                        if !clients.isEmpty {
+                            MultiroomRowSeparator()
+                        }
+                        ForEach(clients) { client in
+                            MultiroomRow(store: store, kind: .client(client))
+                        }
+                    }
+                case .standalone(let client):
+                    MultiroomCard {
+                        MultiroomRow(store: store, kind: .client(client))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, MultiroomMetrics.cardHInset)
+        .padding(.top, MultiroomMetrics.gapAboveCards)
+        .padding(.bottom, MultiroomMetrics.cardSpacing)
+        .frame(width: MenuRowMetrics.width, alignment: .leading)
+    }
+}
+
+/// Une carte grise arrondie qui regroupe ses lignes.
+private struct MultiroomCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(MultiroomMetrics.cardFill)
+            .clipShape(RoundedRectangle(cornerRadius: MultiroomMetrics.cardCornerRadius,
+                                        style: .continuous))
+    }
+}
+
+/// Filet natif entre l'en-tête de zone et ses clients : pleine largeur de la carte, avec un
+/// léger retrait SYMÉTRIQUE de chaque côté.
+private struct MultiroomRowSeparator: View {
+    var body: some View {
+        Divider()
+            .padding(.horizontal, MultiroomMetrics.rowHInset)
+    }
+}
+
+/// Une ligne de carte : icône + nom + slider + mute, sur une seule ligne. Sert aussi bien à
+/// une zone (slider maître en DELTA, mute de tous ses clients) qu'à un client (slider absolu).
+private struct MultiroomRow: View {
+    @Bindable var store: MiloStore
+    let kind: Kind
+
+    enum Kind {
+        case zone(MultiroomZone, [MultiroomClient])
+        case client(MultiroomClient)
+    }
+
+    /// Dernière valeur ENVOYÉE pendant un glissement (base du prochain delta pour une zone,
+    /// coalescence pour un client). `nil` hors glissement.
+    @State private var lastSent: Double?
+    /// Dernière valeur scrubée (envoyée ou non) — envoyée au relâchement pour ne pas perdre
+    /// le dernier mouvement quand il tombe dans un intervalle throttlé.
+    @State private var pending: Double?
+    /// Horodatage du dernier envoi réseau, pour le throttle.
+    @State private var lastSendAt: Date = .distantPast
+
+    var body: some View {
+        HStack(spacing: MultiroomMetrics.gap) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .frame(width: MultiroomMetrics.iconSize, height: MultiroomMetrics.iconSize)
+
+            FadingText(
+                text: name,
+                weight: isZone ? .medium : .regular,
+                dimmed: !online
+            )
+
+            if controllable {
+                MultiroomVolumeSlider(
+                    liveValueDb: valueDb,
+                    range: store.volumeLimits,
+                    onScrub: scrub,
+                    onEnd: endScrub
+                )
+                MuteButton(muted: muted, action: toggleMute)
+            } else {
+                Spacer(minLength: 4)
+                if !online {
+                    Text(L("multiroom.offline"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .padding(.horizontal, MultiroomMetrics.rowHInset)
+        .padding(.vertical, MultiroomMetrics.rowVInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Dérivés selon le type
+
+    private var isZone: Bool { if case .zone = kind { return true }; return false }
+
+    private var icon: String {
+        isZone ? "hifispeaker.2.fill" : "hifispeaker.fill"
+    }
+
+    private var name: String {
+        switch kind {
+        case .zone(let zone, _): return zone.name
+        case .client(let client): return client.name
+        }
+    }
+
+    private var online: Bool {
+        switch kind {
+        case .zone(_, let clients): return clients.contains { $0.online }
+        case .client(let client): return client.online
+        }
+    }
+
+    /// Le slider n'a de prise que si l'élément est joignable ET pilote son volume.
+    private var controllable: Bool {
+        switch kind {
+        case .zone(_, let clients):
+            return clients.contains { $0.online }
+        case .client(let client):
+            let vol = store.multiroomVolume.clients[client.macId]
+            return client.online && client.volumeControl && (vol?.available ?? true)
+        }
+    }
+
+    private var valueDb: Double {
+        switch kind {
+        case .zone(let zone, _):
+            return store.multiroomVolume.zones[zone.id]?.averageVolumeDb ?? VolumeDefaults.limitMinDb
+        case .client(let client):
+            return store.multiroomVolume.clients[client.macId]?.volumeDb ?? client.volumeDb
+        }
+    }
+
+    private var muted: Bool {
+        switch kind {
+        case .zone(let zone, _):
+            return store.multiroomVolume.zones[zone.id]?.allMuted ?? false
+        case .client(let client):
+            return store.multiroomVolume.clients[client.macId]?.mute ?? client.mute
+        }
+    }
+
+    // MARK: Actions
+
+    /// Appelé à chaque cran du glissement. Le pouce suit déjà localement (voir
+    /// `MultiroomVolumeSlider`) ; ici on THROTTLE seulement les envois réseau.
+    private func scrub(_ newValue: Double) {
+        pending = newValue
+        let now = Date()
+        if now.timeIntervalSince(lastSendAt) >= MultiroomMetrics.sendThrottle {
+            flushSend(newValue)
+            lastSendAt = now
+        }
+    }
+
+    /// Au relâchement : on envoie la dernière valeur (au cas où elle est tombée dans un
+    /// intervalle throttlé), puis on remet à zéro le suivi.
+    private func endScrub() {
+        if let pending { flushSend(pending) }
+        pending = nil
+        lastSent = nil
+        lastSendAt = .distantPast
+    }
+
+    /// Client : volume absolu. Zone : delta depuis la dernière valeur ENVOYÉE (le backend n'a
+    /// pas de volume de zone, il répercute le delta sur ses clients). Comme `lastSent` ne bouge
+    /// qu'à l'envoi réel, throttler ne perd aucun mouvement — le prochain delta le rattrape.
+    private func flushSend(_ value: Double) {
+        switch kind {
+        case .zone(let zone, _):
+            let previous = lastSent ?? valueDb
+            let delta = value - previous
+            if abs(delta) > 0.05 {
+                store.setZoneVolumeDelta(zoneId: zone.id, deltaDb: delta)
+                lastSent = value
+            }
+        case .client(let client):
+            store.setClientVolume(mac: client.macId, volumeDb: value)
+        }
+    }
+
+    private func toggleMute() {
+        switch kind {
+        case .zone(_, let clients):
+            let onlineMacs = clients.filter { $0.online }.map(\.macId)
+            store.setZoneMute(clientMacs: onlineMacs, muted: !muted)
+        case .client(let client):
+            store.setClientMute(mac: client.macId, muted: !muted)
+        }
+    }
+}
+
+/// Nom d'élément à largeur FIXE, pour aligner toutes les colonnes de slider. Un nom trop long
+/// n'est pas coupé par « … » mais **fondu** en dégradé sur son bord droit — plus propre, et
+/// c'est le langage de macOS (Musique, Réglages). Le fondu ne porte que sur les derniers points
+/// de la largeur : un nom court, qui n'atteint pas cette zone, n'est pas affecté.
+private struct FadingText: View {
+    let text: String
+    let weight: Font.Weight
+    let dimmed: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13, weight: weight))
+            .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            .lineLimit(1)
+            // Taille NATURELLE (pas de troncature « … »), puis calée dans une largeur fixe et
+            // rognée : le texte qui déborde est masqué, et le dégradé le fait disparaître en
+            // fondu au lieu d'un bord net.
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(width: MultiroomMetrics.nameWidth, alignment: .leading)
+            .clipped()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black,
+                              location: (MultiroomMetrics.nameWidth - MultiroomMetrics.nameFade)
+                                       / MultiroomMetrics.nameWidth),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+    }
+}
+
+/// Bouton muet : un haut-parleur qui bascule sur `speaker.slash` une fois coupé.
+private struct MuteButton: View {
+    let muted: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(muted ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .frame(width: MultiroomMetrics.muteIconSize, height: MultiroomMetrics.muteIconSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Slider de volume d'un élément multiroom : le `Slider` natif SwiftUI (comme le volume
+/// global de cette branche), en `.small` pour le rail fin de « Son ».
+///
+/// Pendant un glissement, on affiche la valeur LOCALE (`dragValue`) et on appelle `onScrub`
+/// à chaque cran ; au relâchement on rend la main à la valeur live du store (échos WebSocket).
+/// Cela évite que l'écho serveur, en retard d'un aller-retour, ne fasse sauter le pouce.
+private struct MultiroomVolumeSlider: View {
+    let liveValueDb: Double
+    let range: (minDb: Double, maxDb: Double)
+    let onScrub: (Double) -> Void
+    let onEnd: () -> Void
+
+    @State private var dragValue: Double?
+
+    private var bounds: ClosedRange<Double> {
+        range.maxDb > range.minDb ? range.minDb...range.maxDb
+                                  : VolumeDefaults.limitMinDb...VolumeDefaults.limitMaxDb
+    }
+
+    var body: some View {
+        Slider(
+            value: Binding(
+                get: {
+                    let v = dragValue ?? liveValueDb
+                    return Swift.min(Swift.max(v, bounds.lowerBound), bounds.upperBound)
+                },
+                set: { newValue in
+                    dragValue = newValue
+                    onScrub(newValue)
+                }
+            ),
+            in: bounds,
+            onEditingChanged: { editing in
+                if !editing {
+                    dragValue = nil
+                    onEnd()
+                }
+            }
+        )
+        .controlSize(.small)
+        .accessibilityLabel(L("accessibility.volume_slider"))
     }
 }
 
@@ -572,11 +942,33 @@ private struct ChevronCircle: View {
     }
 }
 
+/// Chevron d'expansion de la ligne Multiroom.
+///
+/// Nu et non pastillé, contrairement au caret Radio : Radio MÈNE AILLEURS (une autre vue),
+/// là où celui-ci déplie sur PLACE. C'est exactement le langage du panneau « Son » sous
+/// AirPods — un chevron qui pointe à droite fermé, vers le bas ouvert.
+private struct ExpandChevron: View {
+    let isExpanded: Bool
+
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.secondary)
+            // +90° horaire : « > » fermé bascule sur « ⌄ » ouvert.
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .padding(.trailing, 2)
+    }
+}
+
 /// Pastille d'icône : accent quand actif, gris sinon — le même langage visuel que la
 /// section « Sortie » du panneau Son.
+///
+/// Pendant un chargement, le spinner remplace l'icône DANS la pastille (au lieu de s'afficher
+/// à droite de la ligne), pour les sources comme pour les fonctionnalités.
 private struct RowIcon: View {
     let icon: SourceIcon
     let isActive: Bool
+    var isLoading: Bool = false
 
     var body: some View {
         ZStack {
@@ -584,8 +976,17 @@ private struct RowIcon: View {
                 .fill(isActive ? AnyShapeStyle(MenuRowMetrics.activeCircleColor)
                                : AnyShapeStyle(.tertiary))
 
-            icon.image
-                .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.55)
+                    // Blanc sur la pastille active (bleue) pour le contraste ; teinte par
+                    // défaut sur la pastille grise, déjà lisible.
+                    .tint(isActive ? .white : nil)
+            } else {
+                icon.image
+                    .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+            }
         }
         .frame(width: MenuRowMetrics.iconSize, height: MenuRowMetrics.iconSize)
     }

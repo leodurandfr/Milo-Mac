@@ -24,6 +24,15 @@ final class MiloStore {
     private(set) var enabledApps: [String]?
     private(set) var radioFavorites: [RadioStation]?
 
+    /// Structure multiroom (zones + clients), lue quand le multiroom est activé. Vide sinon.
+    /// Alimente la sous-section dépliable de la ligne Multiroom.
+    private(set) var multiroom: MultiroomSnapshot = .empty
+
+    /// Volume/mute EN DIRECT par client et par zone (moyennes de zone incluses). Amorcé avec
+    /// la structure, puis poussé par `volume/volume_changed`. Alimente les sliders et boutons
+    /// muet de la sous-section.
+    private(set) var multiroomVolume: MultiroomVolume = .empty
+
     /// Spinners en cours, indexés par identifiant de source ("spotify"…) ou de
     /// fonctionnalité ("multiroom", "equalizer").
     private(set) var loadingStates: [String: Bool] = [:]
@@ -43,6 +52,14 @@ final class MiloStore {
     /// Vrai quand le panneau a été ouvert avec la touche Option enfoncée : le pied
     /// (Paramètres, Quitter) n'apparaît qu'alors. Posé par MenuBarShell à l'ouverture.
     var showsPreferences = false
+
+    /// Vrai quand la sous-section multiroom est dépliée sous la ligne Multiroom.
+    ///
+    /// Dans le store, et non en `@State` local de la vue, pour deux raisons : `MenuBarShell`
+    /// l'observe pour redimensionner la fenêtre (le panneau grandit/rétrécit avec l'accordéon,
+    /// comme le panneau « Son » sous AirPods) ; et il doit se refermer à la fermeture du panneau
+    /// ou quand le multiroom est coupé.
+    var multiroomExpanded = false
 
     // MARK: - Dépendances
 
@@ -414,6 +431,114 @@ final class MiloStore {
         }
     }
 
+    // MARK: - Multiroom
+
+    /// Vrai quand la sous-section multiroom peut s'afficher : le multiroom est actif ET le
+    /// registre a au moins un élément à montrer. Le chevron de la ligne Multiroom n'apparaît
+    /// qu'alors (comme le caret Radio, gardé par `canShowRadioStations`).
+    var canShowMultiroom: Bool {
+        state?.multiroomEnabled == true && !multiroomDisplayItems.isEmpty
+    }
+
+    /// La liste ordonnée pour l'affichage : les zones (chacune avec ses clients membres),
+    /// puis les clients standalone. Trié en-ligne-d'abord, zones avant clients, puis
+    /// alphabétique — le même langage que la section « Sortie » de « Son » et que le
+    /// frontend web du multiroom.
+    var multiroomDisplayItems: [MultiroomDisplayItem] {
+        let clientsInZones = Set(multiroom.zones.values.flatMap { $0.clientIds })
+
+        var items: [MultiroomDisplayItem] = []
+
+        for zone in multiroom.zones.values {
+            // On garde l'ordre des membres tel que le backend l'a trié (local d'abord).
+            let members = zone.clientIds.compactMap { multiroom.clients[$0] }
+            guard !members.isEmpty else { continue }
+            items.append(.zone(zone, clients: members))
+        }
+
+        for client in multiroom.clients.values
+        where client.zoneId == nil && !clientsInZones.contains(client.macId) {
+            items.append(.standalone(client))
+        }
+
+        return items.sorted { lhs, rhs in
+            if lhs.isOnline != rhs.isOnline { return lhs.isOnline }
+            if lhs.isZone != rhs.isZone { return lhs.isZone }
+            return lhs.sortName.localizedCaseInsensitiveCompare(rhs.sortName) == .orderedAscending
+        }
+    }
+
+    /// Recharge la structure multiroom ET le volume live depuis le backend. Appelé à
+    /// l'ouverture de la sous-section, quand le multiroom passe actif, et sur tout événement
+    /// WebSocket de structure. Silencieux en cas d'échec : on garde la dernière valeur connue.
+    func loadMultiroomState() {
+        guard let apiService = connectionManager.apiService else { return }
+        Task {
+            do {
+                async let structure = apiService.fetchMultiroomState()
+                async let volume = apiService.fetchMultiroomVolume()
+                multiroom = try await structure
+                multiroomVolume = try await volume
+            } catch {
+                NSLog("❌ Failed to load multiroom state: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    // MARK: - Actions multiroom (volume / mute)
+
+    /// Fixe le volume ABSOLU d'un client. Fire-and-forget : le backend rediffuse le nouvel
+    /// état par `volume/volume_changed`, qui met `multiroomVolume` à jour.
+    func setClientVolume(mac: String, volumeDb: Double) {
+        guard let apiService = connectionManager.apiService else { return }
+        Task {
+            do { try await apiService.setClientVolume(mac: mac, volumeDb: volumeDb) }
+            catch { NSLog("❌ setClientVolume failed: %@", error.localizedDescription) }
+        }
+    }
+
+    /// Bascule le mute d'un client.
+    func setClientMute(mac: String, muted: Bool) {
+        guard let apiService = connectionManager.apiService else { return }
+        Task {
+            do { try await apiService.setClientMute(mac: mac, muted: muted) }
+            catch { NSLog("❌ setClientMute failed: %@", error.localizedDescription) }
+        }
+    }
+
+    /// Applique un DELTA de volume à une zone (le backend le répercute sur ses clients).
+    func setZoneVolumeDelta(zoneId: String, deltaDb: Double) {
+        guard let apiService = connectionManager.apiService else { return }
+        Task {
+            do { try await apiService.setZoneVolumeDelta(zoneId: zoneId, deltaDb: deltaDb) }
+            catch { NSLog("❌ setZoneVolumeDelta failed: %@", error.localizedDescription) }
+        }
+    }
+
+    /// Mute/démute une zone entière — le backend n'a pas d'endpoint de zone pour le mute, on
+    /// le pose donc client par client (comme le frontend web), sur les seuls MAC fournis.
+    func setZoneMute(clientMacs: [String], muted: Bool) {
+        guard let apiService = connectionManager.apiService else { return }
+        Task {
+            for mac in clientMacs {
+                do { try await apiService.setClientMute(mac: mac, muted: muted) }
+                catch { NSLog("❌ setZoneMute(%@) failed: %@", mac, error.localizedDescription) }
+            }
+        }
+    }
+
+    /// Synchronise le cache multiroom avec l'état courant : on le charge dès que le
+    /// multiroom est actif (et pas encore chargé), on le vide quand il est coupé. Appelé sur
+    /// chaque nouvel état (fetch HTTP comme push WebSocket).
+    private func syncMultiroomState(for newState: MiloState) {
+        if newState.multiroomEnabled {
+            if multiroom.clients.isEmpty { loadMultiroomState() }
+        } else if !multiroom.clients.isEmpty || !multiroom.zones.isEmpty {
+            multiroom = .empty
+            multiroomVolume = .empty
+        }
+    }
+
     // MARK: - Loading : fonctionnalités (multiroom, equalizer)
 
     private func startFunctionalityLoading(for identifier: String, expectedState: Bool) {
@@ -676,6 +801,7 @@ final class MiloStore {
             if newState.activeSource == "radio" && radioFavorites == nil {
                 loadRadioFavoritesInBackground()
             }
+            syncMultiroomState(for: newState)
             return true
         } catch {
             return false
@@ -747,6 +873,10 @@ final class MiloStore {
         // survivre à la déconnexion.
         radioFavorites = nil
         endRadioStationLoading()
+
+        // La structure multiroom sera re-fetchée à la reconnexion si le multiroom est actif.
+        multiroom = .empty
+        multiroomVolume = .empty
 
         loadingStates.keys.forEach { stopLoading(for: $0) }
         manualLoadingProtection.removeAll()
@@ -821,6 +951,18 @@ extension MiloStore: MiloConnectionManagerDelegate {
 
         checkFunctionalityStateChange(newState)
         syncLoadingStatesWithBackend()
+        syncMultiroomState(for: newState)
+    }
+
+    func didReceiveMultiroomStructureChanged() {
+        // Seulement quand le multiroom est actif : sinon la sous-section est masquée et un
+        // re-fetch ne servirait à rien.
+        guard state?.multiroomEnabled == true else { return }
+        loadMultiroomState()
+    }
+
+    func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume) {
+        multiroomVolume = volume
     }
 
     func didReceiveMultiroomTransitionComplete(success: Bool) {
@@ -878,5 +1020,45 @@ extension MiloStore: MiloConnectionManagerDelegate {
     /// des sources.
     func didReceiveDockAppsUpdate(_ apps: [String]) {
         enabledApps = apps
+    }
+}
+
+// MARK: - Élément d'affichage multiroom
+
+/// Une entrée de la sous-section multiroom : soit une zone (avec la liste ordonnée de ses
+/// clients membres, affichés indentés dessous), soit un client standalone.
+///
+/// Construit sur le main actor à partir du `MultiroomSnapshot` (voir
+/// `MiloStore.multiroomDisplayItems`) ; pas besoin qu'il soit `Sendable`, il ne franchit
+/// aucune frontière d'isolation.
+enum MultiroomDisplayItem: Identifiable {
+    case zone(MultiroomZone, clients: [MultiroomClient])
+    case standalone(MultiroomClient)
+
+    var id: String {
+        switch self {
+        case .zone(let zone, _): return "zone:\(zone.id)"
+        case .standalone(let client): return "client:\(client.macId)"
+        }
+    }
+
+    var isZone: Bool {
+        if case .zone = self { return true }
+        return false
+    }
+
+    /// En ligne si l'élément est joignable — pour une zone, dès qu'un de ses clients l'est.
+    var isOnline: Bool {
+        switch self {
+        case .zone(_, let clients): return clients.contains { $0.online }
+        case .standalone(let client): return client.online
+        }
+    }
+
+    var sortName: String {
+        switch self {
+        case .zone(let zone, _): return zone.name
+        case .standalone(let client): return client.name
+        }
     }
 }

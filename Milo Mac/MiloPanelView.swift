@@ -57,11 +57,29 @@ struct MiloPanelView: View {
         // déclenche pas. On remet la vue à sa racine en observant la fermeture, sinon le
         // panneau se rouvrirait sur la liste des stations.
         .onChange(of: store.isPanelOpen) { _, isOpen in
-            if !isOpen { route = .root }
+            if !isOpen {
+                route = .root
+                store.multiroomExpanded = false
+            }
         }
         .onChange(of: store.canShowRadioStations) { _, canShow in
             if !canShow, route == .radioStations { route = .root }
         }
+        // Le multiroom a été coupé (ou la liste s'est vidée) pendant que la sous-section
+        // était ouverte : on la referme, sinon elle resterait dépliée sur du vide.
+        .onChange(of: store.canShowMultiroom) { _, canShow in
+            if !canShow { store.multiroomExpanded = false }
+        }
+    }
+
+    /// Bascule la sous-section multiroom. À l'ouverture, on force un re-fetch de la structure
+    /// pour partir de données fraîches (un client a pu passer en ligne depuis la connexion).
+    /// La fenêtre est redimensionnée par `MenuBarShell` qui observe `multiroomExpanded`.
+    private func toggleMultiroom() {
+        if !store.multiroomExpanded {
+            store.loadMultiroomState()
+        }
+        store.multiroomExpanded.toggle()
     }
 
     /// Retrait sous la dernière ligne, au-dessus du bord bas du panneau.
@@ -120,7 +138,20 @@ struct MiloPanelView: View {
                 MenuSectionHeader(text: L("menu.features.title"))
 
                 ForEach(features) { feature in
-                    FeatureRow(store: store, feature: feature)
+                    let isMultiroom = feature.id == "multiroom"
+                    FeatureRow(
+                        store: store,
+                        feature: feature,
+                        showsChevron: isMultiroom && store.canShowMultiroom,
+                        isExpanded: isMultiroom && store.multiroomExpanded,
+                        onChevron: isMultiroom ? { toggleMultiroom() } : nil
+                    )
+
+                    // La sous-section se glisse JUSTE sous la ligne Multiroom (et non en fin
+                    // de liste) — l'accordéon s'ouvre là où on a cliqué, comme sous AirPods.
+                    if isMultiroom, store.multiroomExpanded, store.canShowMultiroom {
+                        MultiroomSection(store: store)
+                    }
                 }
             }
         } else {

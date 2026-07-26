@@ -98,6 +98,153 @@ private struct RadioStationsResponse: Decodable {
     let stations: [RadioStation]
 }
 
+// MARK: - Multiroom
+
+/// Un client multiroom — un haut-parleur milo-client, ou le client local du Pi — tel que
+/// servi par `/api/multiroom/state`. `Sendable` : décodé hors du main actor (pool
+/// Swift-concurrency) puis remis au store, qui le possède.
+///
+/// L'identité canonique est le `mac_id` (le backend indexe tout dessus). `volumeControl`
+/// vaut faux pour une carte DAC / un ampli externe qui gère son propre volume — le futur
+/// slider n'a alors pas de prise, comme sur le frontend web.
+struct MultiroomClient: Sendable, Identifiable {
+    let macId: String
+    let name: String
+    let online: Bool
+    let zoneId: String?
+    let volumeDb: Double
+    let mute: Bool
+    let volumeControl: Bool
+    let isLocal: Bool
+
+    var id: String { macId }
+
+    init?(json: [String: Any]) {
+        guard let macId = json["mac_id"] as? String,
+              let name = json["name"] as? String else { return nil }
+        self.macId = macId
+        self.name = name
+        online = json["online"] as? Bool ?? false
+        zoneId = json["zone_id"] as? String
+        volumeDb = (json["volume_db"] as? Double)
+            ?? (json["volume_db"] as? Int).map(Double.init)
+            ?? VolumeDefaults.limitMinDb
+        mute = json["mute"] as? Bool ?? false
+        volumeControl = json["volume_control"] as? Bool ?? true
+        isLocal = (json["ip"] as? String) == "127.0.0.1"
+    }
+}
+
+/// Une zone multiroom : un groupe de clients liés, avec un nom et l'ordre de ses membres
+/// (`client_ids`, déjà triés client-local-d'abord par le backend).
+struct MultiroomZone: Sendable, Identifiable {
+    let id: String
+    let name: String
+    let clientIds: [String]
+
+    init?(json: [String: Any]) {
+        guard let id = json["id"] as? String,
+              let name = json["name"] as? String else { return nil }
+        self.id = id
+        self.name = name
+        clientIds = json["client_ids"] as? [String] ?? []
+    }
+}
+
+/// Instantané complet du registre multiroom (`/api/multiroom/state`), clients et zones
+/// indexés par leur identifiant. C'est la *structure* : noms, appartenance aux zones,
+/// présence en ligne. Le volume/mute en direct arrive à part, par l'événement WebSocket
+/// `volume/volume_changed` (voir Étape 2).
+struct MultiroomSnapshot: Sendable {
+    let clients: [String: MultiroomClient]   // indexés par mac_id
+    let zones: [String: MultiroomZone]       // indexés par zone_id
+
+    static let empty = MultiroomSnapshot(clients: [:], zones: [:])
+
+    init(clients: [String: MultiroomClient], zones: [String: MultiroomZone]) {
+        self.clients = clients
+        self.zones = zones
+    }
+
+    init(json: [String: Any]) {
+        var clients: [String: MultiroomClient] = [:]
+        for (mac, raw) in (json["clients"] as? [String: Any] ?? [:]) {
+            if let dict = raw as? [String: Any], let client = MultiroomClient(json: dict) {
+                clients[mac] = client
+            }
+        }
+
+        var zones: [String: MultiroomZone] = [:]
+        for (zid, raw) in (json["zones"] as? [String: Any] ?? [:]) {
+            if let dict = raw as? [String: Any], let zone = MultiroomZone(json: dict) {
+                zones[zid] = zone
+            }
+        }
+
+        self.clients = clients
+        self.zones = zones
+    }
+}
+
+/// Volume/mute EN DIRECT par client et par zone, tel que porté par `/api/volume/state` et par
+/// l'événement WebSocket `volume/volume_changed` (`data.state`). Distinct de la *structure*
+/// (`MultiroomSnapshot`) : celle-ci dit qui existe et où, celui-ci dit où en est le volume.
+///
+/// La moyenne de zone (`averageVolumeDb`) est pré-calculée par le backend — le slider de zone
+/// s'y cale, et ne recompose pas la moyenne des clients côté app.
+struct MultiroomVolume: Sendable {
+    struct Client: Sendable {
+        let volumeDb: Double
+        let mute: Bool
+        /// Faux quand le client ne peut pas régler son volume (carte DAC / ampli externe).
+        let available: Bool
+    }
+
+    struct Zone: Sendable {
+        let averageVolumeDb: Double
+        let allMuted: Bool
+    }
+
+    let clients: [String: Client]   // indexés par mac_id
+    let zones: [String: Zone]       // indexés par zone_id
+
+    static let empty = MultiroomVolume(clients: [:], zones: [:])
+
+    init(clients: [String: Client], zones: [String: Zone]) {
+        self.clients = clients
+        self.zones = zones
+    }
+
+    /// Décode le `data`/`state` de `/api/volume/state` ou de `volume/volume_changed`.
+    init(state: [String: Any]) {
+        func double(_ any: Any?) -> Double? {
+            (any as? Double) ?? (any as? Int).map(Double.init)
+        }
+
+        var clients: [String: Client] = [:]
+        for (mac, raw) in (state["clients"] as? [String: Any] ?? [:]) {
+            guard let dict = raw as? [String: Any] else { continue }
+            clients[mac] = Client(
+                volumeDb: double(dict["volume_db"]) ?? VolumeDefaults.limitMinDb,
+                mute: dict["mute"] as? Bool ?? false,
+                available: dict["available"] as? Bool ?? true
+            )
+        }
+
+        var zones: [String: Zone] = [:]
+        for (zid, raw) in (state["zones"] as? [String: Any] ?? [:]) {
+            guard let dict = raw as? [String: Any] else { continue }
+            zones[zid] = Zone(
+                averageVolumeDb: double(dict["average_volume_db"]) ?? VolumeDefaults.limitMinDb,
+                allMuted: dict["all_muted"] as? Bool ?? false
+            )
+        }
+
+        self.clients = clients
+        self.zones = zones
+    }
+}
+
 /// Résolution DNS → IPv4 partagée (bloc CFHost unique pour toute l'app).
 /// MiloAPIService prend le premier résultat ; MiloConnectionManager garde la
 /// liste complète pour son test de latence. CFHost est soft-déprécié — le jour
@@ -386,6 +533,50 @@ final class MiloAPIService: Sendable {
             $0.cachedLimitMinDb = minDb
             $0.cachedLimitMaxDb = maxDb
         }
+    }
+
+    // MARK: - Multiroom API
+
+    /// Lit la structure multiroom complète (clients + zones). Servi par le registre, donc
+    /// indépendant de l'état actif — on ne l'appelle toutefois que lorsque le multiroom est
+    /// activé (voir `MiloStore.loadMultiroomState`).
+    func fetchMultiroomState() async throws -> MultiroomSnapshot {
+        MultiroomSnapshot(json: try await fetchJSON("/api/multiroom/state"))
+    }
+
+    /// Lit le volume/mute en direct par client et par zone (moyennes de zone incluses) depuis
+    /// `/api/volume/state`. Amorce les sliders de la sous-section avant que le premier
+    /// `volume/volume_changed` ne prenne le relais.
+    func fetchMultiroomVolume() async throws -> MultiroomVolume {
+        let json = try await fetchJSON("/api/volume/state")
+        return MultiroomVolume(state: json["data"] as? [String: Any] ?? [:])
+    }
+
+    /// Le backend indexe les clients par MAC AVEC deux-points ; l'URL les veut SANS.
+    private static func macURL(_ macId: String) -> String {
+        macId.replacingOccurrences(of: ":", with: "")
+    }
+
+    /// Fixe le volume ABSOLU d'un client (dB). `PATCH /api/volume/client/mac/{mac}`.
+    func setClientVolume(mac: String, volumeDb: Double) async throws {
+        try await send("/api/volume/client/mac/\(Self.macURL(mac))", method: "PATCH",
+                       body: ["volume_db": volumeDb])
+    }
+
+    /// Bascule le mute d'un client. `PATCH /api/volume/client/mac/{mac}/mute`.
+    func setClientMute(mac: String, muted: Bool) async throws {
+        try await send("/api/volume/client/mac/\(Self.macURL(mac))/mute", method: "PATCH",
+                       body: ["mute": muted])
+    }
+
+    /// Applique un DELTA de volume à toute une zone. `PATCH /api/volume/zone/{id}`.
+    ///
+    /// La zone n'a pas de volume propre : le backend répercute le delta sur chaque client et
+    /// rediffuse la nouvelle moyenne. C'est pourquoi le slider de zone travaille en relatif
+    /// (voir `MultiroomZoneRow`), là où celui d'un client est absolu.
+    func setZoneVolumeDelta(zoneId: String, deltaDb: Double) async throws {
+        try await send("/api/volume/zone/\(zoneId)", method: "PATCH",
+                       body: ["delta_db": deltaDb])
     }
 
     // MARK: - Radio API

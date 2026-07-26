@@ -27,6 +27,9 @@
 "feature.multiroom" = "मल्टीरूम";
 "feature.equalizer" = "इक्वलाइज़र";
 
+// MARK: - Multiroom
+"multiroom.offline" = "ऑफ़लाइन";
+
 // MARK: - Configuration Menu
 "config.settings" = "सेटिंग्स...";
 "config.quit" = "बाहर निकलें";

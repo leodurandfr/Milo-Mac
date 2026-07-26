@@ -27,6 +27,9 @@
 "feature.multiroom" = "Multiroom";
 "feature.equalizer" = "Ecualizador";
 
+// MARK: - Multiroom
+"multiroom.offline" = "Sin conexión";
+
 // MARK: - Configuration Menu
 "config.settings" = "Ajustes...";
 "config.quit" = "Salir";

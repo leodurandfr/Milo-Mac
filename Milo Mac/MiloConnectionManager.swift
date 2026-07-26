@@ -45,6 +45,8 @@ protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
+    func didReceiveMultiroomStructureChanged()
+    func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
@@ -460,6 +462,14 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 
     func didReceiveMultiroomTransitionComplete(success: Bool) {
         delegate?.didReceiveMultiroomTransitionComplete(success: success)
+    }
+
+    func didReceiveMultiroomStructureChanged() {
+        delegate?.didReceiveMultiroomStructureChanged()
+    }
+
+    func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume) {
+        delegate?.didReceiveMultiroomVolumeUpdate(volume)
     }
 
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double) {

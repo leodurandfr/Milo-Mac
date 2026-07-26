@@ -27,6 +27,9 @@
 "feature.multiroom" = "多房间";
 "feature.equalizer" = "均衡器";
 
+// MARK: - Multiroom
+"multiroom.offline" = "离线";
+
 // MARK: - Configuration Menu
 "config.settings" = "设置...";
 "config.quit" = "退出";
