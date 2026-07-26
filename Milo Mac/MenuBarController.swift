@@ -104,7 +104,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         setupStatusItem()
         connectionManager.delegate = self
         multiroomVolumeController.onNeedsRefresh = { [weak self] in
-            self?.scheduleMenuRefresh()
+            self?.refreshMultiroomRows()
         }
         hotkeyManager = GlobalHotkeyManager(connectionManager: connectionManager, menuController: self)
         setupObservers()
@@ -270,6 +270,7 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         // timers de confirmation n'ont plus lieu d'être. Les requêtes déjà
         // parties, elles, aboutissent normalement.
         multiroomVolumeController.cleanup()
+        multiroomSection.invalidateLiveRows()
         activeMenu = nil
         isPreferencesMenuActive = false
         volumeController.activeMenu = nil
@@ -1046,6 +1047,10 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
 
     private func updateMenuInRealTime(_ menu: NSMenu) {
         CircularMenuItem.cleanupAllSpinners()
+        // Les lignes multiroom sortent du menu : plus rien à mettre à jour en
+        // place tant que le rebuild ne les a pas réenregistrées — et il peut très
+        // bien ne pas les réafficher (sous-niveau replié, multiroom éteint).
+        multiroomSection.invalidateLiveRows()
         menu.removeAllItems()
 
         if isMiloConnected {
@@ -1340,6 +1345,21 @@ extension MenuBarController {
         // Effacer les valeurs optimistes que le backend vient de confirmer, AVANT
         // de redessiner : sinon la ligne réafficherait la valeur locale périmée.
         multiroomVolumeController.syncWithServer(volumes)
+        refreshMultiroomRows()
+    }
+
+    /// Reflète l'état courant des volumes/mutes multiroom. Passe par une mise à
+    /// jour en place des lignes affichées quand la structure du sous-niveau n'a
+    /// pas bougé, et ne retombe sur une reconstruction du menu que sinon.
+    ///
+    /// Ces événements arrivent à la cadence d'un drag : les faire passer par un
+    /// rebuild recréait tous les sliders plusieurs fois par seconde, et pendant
+    /// un geste — où le rebuild est bloqué — les autres lignes restaient figées
+    /// jusqu'au relâchement.
+    private func refreshMultiroomRows() {
+        guard activeMenu != nil else { return }
+        if multiroomSection.applyInPlace(items: currentMultiroomItems(),
+                                         limits: currentVolumeLimits()) { return }
         scheduleMenuRefresh()
     }
 
