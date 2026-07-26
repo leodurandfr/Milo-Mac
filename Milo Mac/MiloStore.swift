@@ -61,6 +61,13 @@ final class MiloStore {
     /// ou quand le multiroom est coupé.
     var multiroomExpanded = false
 
+    /// Fraction d'ouverture de l'accordéon multiroom, de 0 (replié) à 1 (déplié). Animée par un
+    /// timer dans `MenuBarShell` (et NON par `withAnimation`) : la sous-section a une hauteur de
+    /// `naturelle × fraction`, si bien qu'à chaque pas le contenu SwiftUI a une taille CONCRÈTE,
+    /// sur laquelle `MenuBarShell` recale la fenêtre — là où `withAnimation` rapporterait la
+    /// taille finale d'un coup à `NSHostingController`, faisant sauter la fenêtre.
+    var multiroomRevealFraction: CGFloat = 0
+
     // MARK: - Dépendances
 
     let connectionManager = MiloConnectionManager()

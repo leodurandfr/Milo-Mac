@@ -81,6 +81,16 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     /// Vrai pendant le fondu de sortie. La fenêtre est encore « visible » à ce moment-là.
     private var isHiding = false
 
+    /// Ordonnée ÉCRAN du bord HAUT du panneau (`origin.y + height`), posée par `positionPanel`.
+    ///
+    /// Le panneau est collé sous la barre des menus et ne doit grandir/rétrécir QUE vers le bas.
+    /// Pendant l'accordéon multiroom c'est `stepReveal` qui repose le cadre à chaque pas (haut
+    /// déjà correct). Mais `NSHostingController` peut AUSSI redimensionner la fenêtre de lui-même
+    /// quand le contenu change au repos (un client passe en ligne) : AppKit garde alors le coin
+    /// bas-gauche et fait monter le bord haut sous la barre. `windowDidResize` le recolle à cette
+    /// valeur — un simple décalage d'origine, sans toucher à la hauteur (donc sans boucle).
+    private var pinnedTopY: CGFloat?
+
     init(store: MiloStore) {
         self.store = store
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -151,19 +161,72 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         }
     }
 
-    /// La sous-section multiroom se déplie/replie pendant que le panneau est ouvert :
-    /// `positionPanel()` n'étant joué qu'à l'ouverture, on le rejoue pour que la fenêtre suive
-    /// la nouvelle hauteur de contenu. Même motif de réarmement que `observeConnection`.
+    // MARK: - Accordéon multiroom
+
+    /// Anime `multiroomRevealFraction` à chaque bascule de `multiroomExpanded`. Même motif de
+    /// réarmement que `observeConnection`.
+    ///
+    /// C'est un timer (valeurs concrètes 120 fois/s), et NON `withAnimation` : chaque pas donne
+    /// au contenu SwiftUI une hauteur concrète, sur laquelle `stepReveal` recale aussitôt la
+    /// fenêtre (voir `positionPanel`), le verre suivant tout seul. `withAnimation`, lui,
+    /// rapporterait la taille FINALE d'un coup à `NSHostingController` (qui redimensionnerait la
+    /// fenêtre d'un bloc) : la fenêtre sauterait, contenu centré pendant la transition.
     private func observeMultiroomExpansion() {
         withObservationTracking {
             _ = store.multiroomExpanded
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if self.panel.isVisible { self.positionPanel() }
+                self.animateReveal(to: self.store.multiroomExpanded ? 1 : 0)
                 self.observeMultiroomExpansion()
             }
         }
+    }
+
+    private var revealTimer: Timer?
+    private var revealStartFraction: CGFloat = 0
+    private var revealTargetFraction: CGFloat = 0
+    private var revealStartTime: CFTimeInterval = 0
+    private let revealDuration: CFTimeInterval = 0.28
+
+    private func animateReveal(to target: CGFloat) {
+        revealTimer?.invalidate()
+        revealStartFraction = store.multiroomRevealFraction
+        revealTargetFraction = target
+        revealStartTime = CACurrentMediaTime()
+
+        guard revealStartFraction != target else {
+            store.multiroomRevealFraction = target
+            return
+        }
+
+        // Même idiome que l'animation du HUD de volume : un `Timer` à 120 Hz, `CACurrentMediaTime`
+        // pour l'horloge, `MainActor.assumeIsolated` pour retraverser vers l'acteur principal (le
+        // timer arrive bien sur le thread principal, mais son type ne peut pas le dire).
+        revealTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
+            let running = MainActor.assumeIsolated { self?.stepReveal() ?? false }
+            if !running { timer.invalidate() }
+        }
+    }
+
+    private func stepReveal() -> Bool {
+        let raw = (CACurrentMediaTime() - revealStartTime) / revealDuration
+        let t = min(CGFloat(raw), 1)
+        // easeInOut cubique.
+        let e = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+        store.multiroomRevealFraction = revealStartFraction + (revealTargetFraction - revealStartFraction) * e
+        // On recale la fenêtre sur la taille RÉELLE du contenu à ce pas. Indispensable :
+        // l'auto-dimensionnement de `NSHostingController` agrandit la fenêtre quand le contenu
+        // grandit, mais ne la RÉTRÉCIT pas quand il diminue (la contrainte intrinsèque pousse
+        // vers le haut, jamais vers le bas). Sans ce recalage, la fenêtre resterait haute à la
+        // fermeture. `positionPanel` mesure le contenu et le recolle sous la barre des menus.
+        if panel.isVisible { positionPanel() }
+
+        guard t >= 1 else { return true }
+        store.multiroomRevealFraction = revealTargetFraction
+        if panel.isVisible { positionPanel() }
+        revealTimer = nil
+        return false
     }
 
     // MARK: - Panneau
@@ -394,9 +457,12 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         // vers le BAS (le haut reste collé sous la barre), comme « Son ».
         let y = visible.maxY - PanelMetrics.topGap - size.height
 
-        panel.setFrame(NSRect(x: x - m, y: y - m,
-                              width: size.width + 2 * m, height: size.height + 2 * m),
-                       display: false)
+        let frame = NSRect(x: x - m, y: y - m,
+                           width: size.width + 2 * m, height: size.height + 2 * m)
+        // On fige le bord haut AVANT de poser le cadre : le `setFrame` déclenche `windowDidResize`,
+        // qui doit déjà connaître la bonne valeur (sinon il recalerait sur l'ancienne).
+        pinnedTopY = frame.origin.y + frame.height
+        panel.setFrame(frame, display: false)
     }
 
     // MARK: - Fermeture au clic extérieur
@@ -427,5 +493,17 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         guard panel.isVisible else { return }
         hidePanel()
+    }
+
+    /// `NSHostingController` redimensionne la fenêtre à la taille du contenu SwiftUI (dépli/repli
+    /// de l'accordéon multiroom). AppKit garde alors le coin bas-gauche fixe, ce qui ferait
+    /// monter le bord haut sous la barre des menus : on le recolle à `pinnedTopY` en ne bougeant
+    /// que l'origine (jamais la hauteur — pas de boucle de redimensionnement). Voir `pinnedTopY`.
+    func windowDidResize(_ notification: Notification) {
+        guard let top = pinnedTopY else { return }
+        let newY = top - panel.frame.height
+        if abs(panel.frame.origin.y - newY) > 0.01 {
+            panel.setFrameOrigin(NSPoint(x: panel.frame.origin.x, y: newY))
+        }
     }
 }

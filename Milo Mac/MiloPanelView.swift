@@ -27,8 +27,20 @@ struct MiloPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             switch route {
             case .root:
-                rootContent
+                // FIXÉ à sa hauteur naturelle : sans quoi, si la fenêtre est un instant plus
+                // haute que le contenu (léger retard de l'auto-dimensionnement pendant le repli
+                // de l'accordéon multiroom), le VStack distribue le surplus aux lignes rendues
+                // verticalement élastiques par leur bouton-chevron (`.frame(maxHeight: .infinity)`)
+                // — et la ligne Multiroom « gonflait » à la fermeture. Le contenu racine n'a aucun
+                // élément qui doive s'étirer ; on le borne donc à son idéal.
+                VStack(alignment: .leading, spacing: 0) {
+                    rootContent
+                }
+                .fixedSize(horizontal: false, vertical: true)
             case .radioStations:
+                // PAS de `fixedSize` ici : la ScrollView des stations est l'unique élément
+                // élastique du panneau, elle doit pouvoir rétrécir pour défiler (voir le plafond
+                // `maxHeight` plus bas).
                 radioContent
             }
         }
@@ -60,6 +72,9 @@ struct MiloPanelView: View {
             if !isOpen {
                 route = .root
                 store.multiroomExpanded = false
+                // Repli instantané à la fermeture (le panneau n'est plus visible) : on ne veut
+                // pas rouvrir sur une animation à moitié jouée.
+                store.multiroomRevealFraction = 0
             }
         }
         .onChange(of: store.canShowRadioStations) { _, canShow in
@@ -74,7 +89,11 @@ struct MiloPanelView: View {
 
     /// Bascule la sous-section multiroom. À l'ouverture, on force un re-fetch de la structure
     /// pour partir de données fraîches (un client a pu passer en ligne depuis la connexion).
-    /// La fenêtre est redimensionnée par `MenuBarShell` qui observe `multiroomExpanded`.
+    ///
+    /// On ne fait QUE basculer l'état : l'animation est pilotée par `MenuBarShell`, qui observe
+    /// `multiroomExpanded` et fait varier `multiroomRevealFraction` via un timer (voir le store).
+    /// Surtout PAS de `withAnimation` ici — cela rapporterait la taille finale d'un coup à
+    /// `NSHostingController`, qui ferait sauter la fenêtre.
     private func toggleMultiroom() {
         if !store.multiroomExpanded {
             store.loadMultiroomState()
@@ -149,8 +168,13 @@ struct MiloPanelView: View {
 
                     // La sous-section se glisse JUSTE sous la ligne Multiroom (et non en fin
                     // de liste) — l'accordéon s'ouvre là où on a cliqué, comme sous AirPods.
-                    if isMultiroom, store.multiroomExpanded, store.canShowMultiroom {
-                        MultiroomSection(store: store)
+                    //
+                    // La ligne Multiroom (au-dessus) est une vraie ligne du VStack : elle ne
+                    // bouge pas. Seul l'accordéon en dessous s'ouvre/se ferme (voir
+                    // `MultiroomAccordion`). Le pied (Égaliseur, réglages) est poussé/rappelé
+                    // par la hauteur de l'accordéon.
+                    if isMultiroom, store.canShowMultiroom {
+                        MultiroomAccordion(store: store)
                     }
                 }
             }
@@ -203,6 +227,38 @@ struct MiloPanelView: View {
             // alors qu'il n'y a rien à faire défiler.
             .scrollBounceBehavior(.basedOnSize)
         }
+    }
+}
+
+/// Accordéon multiroom : la sous-section zones/clients dont la hauteur s'ouvre/se ferme.
+///
+/// La sous-section est TOUJOURS montée (tant que le multiroom est dispo) et gardée à sa taille
+/// naturelle par `fixedSize` ; un GeometryReader en mesure la hauteur (elle ne dépend que du
+/// nombre de zones/clients, jamais de la fenêtre — aucune boucle). Le conteneur affiche cette
+/// hauteur MULTIPLIÉE par `multiroomRevealFraction` (0 replié → 1 déplié), animée par un timer
+/// dans `MenuBarShell`. `clipped()` révèle le contenu du haut vers le bas.
+///
+/// Sous-vue isolée exprès : elle seule lit `multiroomRevealFraction`, donc elle seule se
+/// re-rend à chaque pas du timer — pas tout le panneau.
+private struct MultiroomAccordion: View {
+    @Bindable var store: MiloStore
+    @State private var naturalHeight: CGFloat = 0
+
+    var body: some View {
+        MultiroomSection(store: store)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { naturalHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in naturalHeight = h }
+                }
+            )
+            .frame(height: naturalHeight * store.multiroomRevealFraction, alignment: .top)
+            .clipped()
+            // Cible cliquable seulement une fois franchement ouvert, pour ne pas capter un clic
+            // sur des cartes encore quasi refermées.
+            .allowsHitTesting(store.multiroomRevealFraction > 0.99)
     }
 }
 
