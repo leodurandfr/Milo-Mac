@@ -992,7 +992,7 @@ private struct RowIcon: View {
             if isLoading {
                 ProgressView()
                     .controlSize(.small)
-                    .scaleEffect(0.55)
+                    .scaleEffect(0.85)
                     // Blanc sur la pastille active (bleue) pour le contraste ; teinte par
                     // défaut sur la pastille grise, déjà lisible.
                     .tint(isActive ? .white : nil)
