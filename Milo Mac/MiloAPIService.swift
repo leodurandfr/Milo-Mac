@@ -89,9 +89,16 @@ struct BulkSettings {
 }
 
 /// Station radio telle que servie par /api/radio/stations.
+///
+/// `favicon` est le logo de la station : vide/absent pour beaucoup de favoris,
+/// sinon soit une image hébergée par le Pi (`/api/radio/images/…`), soit une URL
+/// externe à faire passer par le proxy backend. La résolution en URL absolue
+/// vit dans `MiloAPIService.radioFaviconURL(for:)`, qui reprend la règle du
+/// frontend Milō (utils/faviconUrl.js).
 struct RadioStation: Decodable {
     let id: String
     let name: String
+    let favicon: String?
 }
 
 private struct RadioStationsResponse: Decodable {
@@ -588,6 +595,25 @@ final class MiloAPIService: Sendable {
         } catch {
             throw APIError.invalidResponse
         }
+    }
+
+    /// Résout le `favicon` d'une station en URL absolue affichable.
+    ///
+    /// Reprend la logique du frontend Milō (`utils/faviconUrl.js`) : une image
+    /// locale (`/api/radio/images/…`) est servie telle quelle ; une URL externe
+    /// passe par le proxy `/api/radio/favicon?url=…`, qui spoofe les en-têtes
+    /// pour contourner les WAF qui rejettent un fetch brut. `nil` si le favori
+    /// n'a pas de logo — l'appelant affiche alors son fallback.
+    func radioFaviconURL(for favicon: String?) -> URL? {
+        guard let favicon, !favicon.isEmpty else { return nil }
+        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
+        let base = "http://\(hostToUse):\(port)"
+        if favicon.hasPrefix("/api/radio/images/") {
+            return URL(string: base + favicon)
+        }
+        var comps = URLComponents(string: "\(base)/api/radio/favicon")
+        comps?.queryItems = [URLQueryItem(name: "url", value: favicon)]
+        return comps?.url
     }
 
     func playRadioStation(_ stationId: String) async throws {

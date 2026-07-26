@@ -842,6 +842,8 @@ struct RadioStationRow: View {
 
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: toggle) {
+            StationFavicon(url: store.radioFaviconURL(for: station.favicon))
+
             Text(station.name)
                 .font(.system(size: 13))
                 .lineLimit(1)
@@ -866,6 +868,41 @@ struct RadioStationRow: View {
         } else {
             store.playRadioStation(station.id)
         }
+    }
+}
+
+/// Logo d'une station, à gauche de son nom : 32×32 à coins arrondis, avec un
+/// fallback pour les favoris sans favicon (beaucoup n'en ont pas). L'image se
+/// recadre en `.fill` puis est rognée au carré arrondi, comme la grille de
+/// favoris du frontend Milō.
+private struct StationFavicon: View {
+    let url: URL?
+
+    private let size: CGFloat = 32
+    private let cornerRadius: CGFloat = 7
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            if case .success(let image) = phase {
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                placeholder
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color(nsColor: .quaternarySystemFill))
+            .overlay {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
     }
 }
 

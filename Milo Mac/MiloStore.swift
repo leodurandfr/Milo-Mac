@@ -388,6 +388,13 @@ final class MiloStore {
         }
     }
 
+    /// URL absolue du logo d'une station, ou nil s'il n'en a pas (l'appelant
+    /// affiche alors un fallback). Délègue à `MiloAPIService`, qui connaît le
+    /// host/port résolus et la règle de proxy des favicons.
+    func radioFaviconURL(for favicon: String?) -> URL? {
+        connectionManager.apiService?.radioFaviconURL(for: favicon)
+    }
+
     /// Identifiant de la station en cours de lecture, ou nil.
     var playingRadioStationId: String? {
         let metadataIsPlaying = state?.metadata["is_playing"] as? Int == 1
