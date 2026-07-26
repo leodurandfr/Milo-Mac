@@ -204,16 +204,23 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     }
 
     @objc private func statusItemClicked() {
-        // `isVisible` reste vrai pendant le fondu de sortie : sans ce drapeau, recliquer
-        // l'icône à ce moment-là refermerait un panneau déjà en train de partir au lieu de
-        // le rouvrir.
-        if panel.isVisible && !isHiding {
-            hidePanel()
+        // Panneau visible : ce clic est un basculement vers « fermé ». Y compris quand il est
+        // DÉJÀ en train de se fermer — car c'est souvent ce même clic qui l'a fermé : sur un
+        // vrai clic, le mouse-down lui fait perdre le focus (`windowDidResignKey` → `hidePanel`)
+        // AVANT que le mouse-up ne déclenche cette action. On laisse donc la fermeture aller à
+        // son terme au lieu de rouvrir (sinon l'icône ne refermait jamais le panneau).
+        if panel.isVisible {
+            if !isHiding { hidePanel() }
             return
         }
 
         // Option-clic : le panneau s'ouvre avec son pied (Paramètres, Quitter).
-        store.showsPreferences = NSApp.currentEvent?.modifierFlags.contains(.option) ?? false
+        //
+        // On lit l'état VIVANT des modificateurs (`NSEvent.modifierFlags`), et non ceux portés
+        // par `NSApp.currentEvent` : sur l'action d'un NSStatusItem, l'event du mouse-up arrive
+        // avec des `modifierFlags` vides (vérifié : option enfoncée, `currentEvent` à 0, état
+        // global à `.option`). S'appuyer dessus laissait le pied invisible.
+        store.showsPreferences = NSEvent.modifierFlags.contains(.option)
 
         showPanel()
     }
