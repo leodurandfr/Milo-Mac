@@ -256,6 +256,10 @@ private struct MultiroomAccordion: View {
             )
             .frame(height: naturalHeight * store.multiroomRevealFraction, alignment: .top)
             .clipped()
+            // Fondu synchronisé avec le dévoilement : les cartes apparaissent/disparaissent en
+            // opacité en même temps que la hauteur s'ouvre/se ferme. La fraction va déjà de 0 à 1
+            // (et retour) selon la courbe du timer.
+            .opacity(store.multiroomRevealFraction)
             // Cible cliquable seulement une fois franchement ouvert, pour ne pas capter un clic
             // sur des cartes encore quasi refermées.
             .allowsHitTesting(store.multiroomRevealFraction > 0.99)

@@ -486,6 +486,15 @@ private enum MultiroomMetrics {
     static let rowHInset: CGFloat = 10
     static let rowVInset: CGFloat = 6
 
+    /// Retrait de GAUCHE d'une ligne, calé pour que le NOM (après la pastille et l'écart) tombe
+    /// à la même abscisse que le libellé « Multiroom » de la ligne parente — soit
+    /// `contentInset + iconSize + iconTextGap` du bord du panneau. On le déduit des métriques
+    /// plutôt que de le coder en dur : `cardHInset + rowLeadingInset + iconSize + gap` doit
+    /// égaler ce libellé, d'où la soustraction. (Le côté droit garde `rowHInset`.)
+    static let rowLeadingInset: CGFloat =
+        MenuRowMetrics.contentInset + MenuRowMetrics.iconSize + MenuRowMetrics.iconTextGap
+        - cardHInset - iconSize - gap
+
     static let iconSize: CGFloat = 18
     static let muteIconSize: CGFloat = 22
     /// Écart icône → nom, et nom → contrôles.
@@ -493,8 +502,9 @@ private enum MultiroomMetrics {
 
     /// Largeur FIXE de la colonne de nom, pour que tous les sliders (zone comme client)
     /// s'alignent sur la même largeur. Un nom plus long est fondu (dégradé) plutôt que coupé
-    /// par « … ».
-    static let nameWidth: CGFloat = 74
+    /// par « … ». Volontairement serrée pour laisser le plus de place aux barres de volume :
+    /// les noms un peu longs partent en fondu, c'est assumé.
+    static let nameWidth: CGFloat = 64
     /// Longueur du fondu en fin de nom.
     static let nameFade: CGFloat = 14
 
@@ -613,7 +623,10 @@ private struct MultiroomRow: View {
                 }
             }
         }
-        .padding(.horizontal, MultiroomMetrics.rowHInset)
+        // Gauche calée pour aligner le NOM sous le libellé « Multiroom » (voir `rowLeadingInset`) ;
+        // droite en `rowHInset` normal.
+        .padding(.leading, MultiroomMetrics.rowLeadingInset)
+        .padding(.trailing, MultiroomMetrics.rowHInset)
         .padding(.vertical, MultiroomMetrics.rowVInset)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
