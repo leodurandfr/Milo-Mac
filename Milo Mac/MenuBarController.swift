@@ -1000,15 +1000,27 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         menuRefreshScheduled = false
         guard let menu = activeMenu else { return }
 
-        // Ne pas détruire le slider pendant que l'utilisateur le manipule :
-        // le rebuild le remplacerait par l'écho (retardé) du serveur et
-        // casserait le drag en cours. On retente après le timeout d'interaction.
-        // Vaut aussi pour les sliders du sous-menu multiroom : un rebuild du menu
-        // parent réattache le sous-menu et casserait le geste en cours.
+        // Ne pas détruire le slider pendant que l'utilisateur le manipule : le
+        // rebuild le retire de sa fenêtre, ce qui interrompt la boucle de
+        // tracking de `NSSlider` — le geste se termine alors que le clic est
+        // toujours enfoncé. Le verrou porte sur le vrai mouseDown→mouseUp, parce
+        // que les gardes temporels ci-dessous expirent dès que la valeur cesse de
+        // changer : maintenir le pouce immobile plus de 0,3 s suffisait à laisser
+        // passer le rebuild en plein geste.
+        if NativeVolumeSlider.isDraggingAnySlider {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.scheduleMenuRefresh()
+            }
+            return
+        }
+
+        // Après le relâchement, on laisse retomber les gardes temporels : ils
+        // couvrent la fenêtre où les derniers envois sont encore en vol et où
+        // l'écho serveur ferait reculer la valeur affichée.
         // Le pas de retente est court exprès : c'est lui qui borne le retard avec
         // lequel les *autres* lignes multiroom (les enceintes pendant qu'on bouge
-        // leur zone, et l'inverse) rattrapent l'état serveur, puisqu'elles ne
-        // peuvent le faire qu'au prochain rebuild. Le corps de la retente est un
+        // leur zone, et l'inverse) rattrapent l'état serveur quand elles ne
+        // peuvent pas être mises à jour en place. Le corps de la retente est un
         // simple test de date : le répéter coûte moins qu'une demi-seconde de
         // valeurs périmées à l'écran.
         if volumeController.isUserInteracting || multiroomVolumeController.isUserInteracting {

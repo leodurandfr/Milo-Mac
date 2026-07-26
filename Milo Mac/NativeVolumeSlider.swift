@@ -29,8 +29,41 @@ class NativeVolumeSlider: NSSlider {
     private let trackLayer = CALayer()
     private let iconLayer = CALayer()
     private var isThumbPressed: Bool = false
+    /// Vrai dès que l'appui en cours a produit un changement de valeur : ce qui
+    /// suit est un drag, plus le saut initial du clic.
+    private var hasChangedDuringPress: Bool = false
     private var lastValue: Double = 0
     private var isUpdatingProgrammatically: Bool = false
+
+    // MARK: - Verrou de geste
+
+    /// Slider dont le bouton souris est actuellement enfoncé, s'il y en a un.
+    ///
+    /// Statique parce qu'il ne peut y avoir qu'un geste à la fois, et faible
+    /// pour survivre à la destruction de la vue. `MenuBarController` le consulte
+    /// pour ne pas reconstruire le menu pendant un drag : le rebuild retire la
+    /// vue de sa fenêtre, la boucle de tracking de `NSSlider` s'interrompt, et
+    /// le geste se termine tout seul alors que l'utilisateur tient toujours le
+    /// clic. Le garde temporel qu'utilisait `flushMenuRefresh` ne pouvait pas le
+    /// voir : il expirait dès que la valeur cessait de changer, c'est-à-dire dès
+    /// que l'utilisateur maintenait le pouce immobile.
+    private(set) static weak var activeDragSlider: NativeVolumeSlider?
+
+    /// Vrai tant qu'un slider est manipulé.
+    ///
+    /// Le test du bouton physique est un filet : si la boucle de tracking était
+    /// interrompue sans rendre la main (vue détruite en plein geste), le verrou
+    /// se libère de lui-même au lieu de figer le menu.
+    static var isDraggingAnySlider: Bool {
+        activeDragSlider != nil && NSEvent.pressedMouseButtons & 0x1 != 0
+    }
+
+    /// Vrai si c'est **ce** slider qui est manipulé — pour ne bloquer les mises à
+    /// jour serveur que sur la ligne réellement sous la souris.
+    static func isDragging(_ slider: NSSlider?) -> Bool {
+        guard let slider, activeDragSlider === slider else { return false }
+        return NSEvent.pressedMouseButtons & 0x1 != 0
+    }
 
     // Pour gérer l'action externe
     private var externalTarget: AnyObject?
@@ -67,11 +100,22 @@ class NativeVolumeSlider: NSSlider {
     
     @objc private func sliderValueChanged() {
         let valueDifference = abs(doubleValue - lastValue)
-        
-        // Si la différence est importante (> 3%), c'est probablement un clic
-        // Si la différence est petite, c'est probablement un drag
-        let isLikelyClick = valueDifference > 3.0 && !isUpdatingProgrammatically
-        
+
+        // Un clic sur la piste fait sauter la valeur : le saut s'anime. Les ticks
+        // suivants du même appui sont un drag et doivent coller au curseur.
+        //
+        // Le seul écart de valeur ne suffit pas à les distinguer : sur les
+        // sliders étroits du sous-niveau multiroom (~90 px pour toute la plage),
+        // un drag rapide franchit facilement 3 dB entre deux ticks et déclenchait
+        // alors l'animation de 0,25 s — le pouce traînait derrière la souris.
+        // C'est le rang du tick dans l'appui qui tranche : le premier est le clic,
+        // les autres sont le geste.
+        let isFirstChangeOfPress = isThumbPressed && !hasChangedDuringPress
+        if isThumbPressed { hasChangedDuringPress = true }
+        let isLikelyClick = valueDifference > 3.0
+            && !isUpdatingProgrammatically
+            && (!isThumbPressed || isFirstChangeOfPress)
+
         updateLayerPositions(animated: isLikelyClick)
         lastValue = doubleValue
         
@@ -575,15 +619,26 @@ class NativeVolumeSlider: NSSlider {
         if trackRect.contains(point) {
             isThumbPressed = true
         }
-        
+        hasChangedDuringPress = false
+
+        // `NSSliderCell` piste jusqu'au relâchement (`prefersTrackingUntilMouseUp`)
+        // et consomme lui-même le mouseUp : `super.mouseDown` ne rend la main
+        // qu'à la fin du geste, et `mouseUp(with:)` n'est jamais appelé. C'est
+        // donc ici — et seulement ici — qu'on connaît les deux bornes exactes du
+        // geste, d'où le verrou posé autour de l'appel plutôt que dans une paire
+        // mouseDown/mouseUp qui ne se referme pas.
+        let previousDrag = NativeVolumeSlider.activeDragSlider
+        NativeVolumeSlider.activeDragSlider = self
+        defer {
+            if NativeVolumeSlider.activeDragSlider === self {
+                NativeVolumeSlider.activeDragSlider = previousDrag
+            }
+            isThumbPressed = false
+            updateLayerPositions(animated: false)
+        }
+
         // Laisser NSSlider gérer tout le tracking nativement
         super.mouseDown(with: event)
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        isThumbPressed = false
-        updateLayerPositions(animated: false)
-        super.mouseUp(with: event)
     }
 }
 

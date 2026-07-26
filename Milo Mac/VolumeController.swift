@@ -74,6 +74,10 @@ class VolumeController {
 
     func updateSliderFromWebSocket(_ volumeDb: Double, animated: Bool = true, duration: TimeInterval? = nil) {
         guard let slider = volumeSlider, !isUserInteracting else { return }
+        // `isUserInteracting` expire 0,3 s après le dernier changement de valeur :
+        // un pouce maintenu immobile en plein drag le laisse retomber, et l'écho
+        // serveur viendrait déplacer le thumb sous la souris. Le vrai geste fait foi.
+        guard !NativeVolumeSlider.isDragging(slider) else { return }
 
         // Éviter les mises à jour inutiles (tolérance de 0.1 dB)
         if abs(slider.doubleValue - volumeDb) < 0.1 {
