@@ -33,6 +33,8 @@
 "multiroom.noClients" = "No speaker detected";
 "multiroom.mute" = "Mute";
 "multiroom.unmute" = "Unmute";
+"multiroom.showSpeakers" = "Show speakers";
+"multiroom.hideSpeakers" = "Hide speakers";
 
 // MARK: - Configuration Menu
 "config.settings" = "Settings...";

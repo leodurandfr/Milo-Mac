@@ -7,27 +7,37 @@ import AppKit
 /// sur sa vue la plus large — une ligne plus large décalerait tout le reste.
 private enum MultiroomLayout {
     static let rowWidth = MenuRowMetrics.containerWidth
-    static let rowHeight = MenuRowMetrics.containerHeight
+    /// Exactement la hauteur de l'en-tête « Multiroom » : le sous-niveau prolonge
+    /// la section, il ne pèse pas plus lourd que sa tête.
+    static let rowHeight = MenuItemFactory.featureRowHeight
 
-    /// Boîte du glyphe (caret de zone, haut-parleur d'enceinte). Elle est centrée
-    /// sur l'axe des pastilles des lignes de source, pas posée à sa propre marge :
-    /// les deux familles de lignes partagent ainsi le même axe d'icônes.
-    static let iconSize: CGFloat = 20
-    static let iconX = MenuRowMetrics.circleCenterX - iconSize / 2
+    /// Boîte du glyphe (caret de zone, haut-parleur d'enceinte), calée sur le bord
+    /// gauche du titre « Multiroom » — donc décalée d'un caret vers la droite par
+    /// rapport à l'en-tête. Ce micro-décalage est ce qui fait lire le bloc comme un
+    /// sous-niveau, sans l'indentation franche qui l'éloignerait de sa section.
+    ///
+    /// Le glyphe est centré dans sa boîte plutôt que collé à gauche : leurs
+    /// largeurs vont du chevron étroit au `hifispeaker.2.fill`, un calage à gauche
+    /// donnerait une colonne en dents de scie.
+    static let iconSize: CGFloat = 15
+    static let iconX = MenuItemFactory.sideMargin + MenuItemFactory.caretSlot
 
-    /// Les noms s'alignent sur la colonne de texte des lignes de source.
-    static let nameX = MenuRowMetrics.textLeftMargin
+    static let nameX = iconX + iconSize + 4
 
-    static let muteSize: CGFloat = 24
+    static let nameFont = NSFont.menuFont(ofSize: 13)
+
+    static let muteSize: CGFloat = 20
     static let muteX = rowWidth - MenuRowMetrics.rightMargin - muteSize
     static let sliderEnd = muteX - 10
+    /// La piste du slider est dessinée sur 22 px fixes, centrée sur `midY` : plus
+    /// bas, elle déborderait de sa vue au lieu de rétrécir.
     static let sliderHeight: CGFloat = 22
 
     /// Zones et enceintes partagent le même bord gauche (pas d'indentation des
     /// membres) : la zone se reconnaît à son chevron, l'enceinte à son icône de
     /// haut-parleur. Tous les sliders démarrent ainsi sur la même colonne.
     ///
-    /// Le plafond de largeur des noms garantit qu'il reste ~86 px de slider dans
+    /// Le plafond de largeur des noms garantit qu'il reste ~90 px de slider dans
     /// le pire cas. À 300 px, il n'y a pas la place d'afficher en plus la valeur
     /// en dB que montre le frontend web.
     static let minNameWidth: CGFloat = 70
@@ -76,7 +86,7 @@ private final class MultiroomMuteButton: NSView {
 
         imageView.frame = bounds
         imageView.imageScaling = .scaleProportionallyDown
-        imageView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        imageView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         addSubview(imageView)
     }
 
@@ -180,7 +190,7 @@ final class MultiroomRowView: NSView {
         iconView.image = NSImage(systemSymbolName: model.iconSymbol, accessibilityDescription: nil)
         iconView.contentTintColor = dimmed ? NSColor.tertiaryLabelColor : NSColor.secondaryLabelColor
         iconView.imageScaling = .scaleProportionallyDown
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
         iconView.frame = NSRect(x: MultiroomLayout.iconX,
                                 y: midY - MultiroomLayout.iconSize / 2,
                                 width: MultiroomLayout.iconSize,
@@ -188,7 +198,7 @@ final class MultiroomRowView: NSView {
         addSubview(iconView)
 
         nameLabel.stringValue = model.name
-        nameLabel.font = NSFont.menuFont(ofSize: 13)
+        nameLabel.font = MultiroomLayout.nameFont
         nameLabel.textColor = dimmed ? NSColor.tertiaryLabelColor : NSColor.labelColor
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.frame = NSRect(x: MultiroomLayout.nameX,
@@ -491,7 +501,7 @@ final class MultiroomSectionBuilder {
     /// Aligne toutes les colonnes de noms sur le plus large (plafonné), pour que
     /// les sliders démarrent au même x — l'équivalent du `--name-width` du web.
     private func computeNameWidth(rows: [FlatRow]) -> CGFloat {
-        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.menuFont(ofSize: 13)]
+        let attributes: [NSAttributedString.Key: Any] = [.font: MultiroomLayout.nameFont]
         var widest: CGFloat = 0
         for row in rows {
             widest = max(widest, (row.model.name as NSString).size(withAttributes: attributes).width)

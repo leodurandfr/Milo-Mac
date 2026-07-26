@@ -340,6 +340,27 @@ class IconProvider {
 class HoverableView: NSView {
     var clickHandler: (() -> Void)?
 
+    /// Seconde cible de clic, en coordonnées de la vue : un clic dedans déclenche
+    /// `secondaryClickHandler` au lieu de `clickHandler`. Une ligne qui porte deux
+    /// actions reste ainsi **une seule** vue — donc un seul fond de survol, celui
+    /// de la ligne entière. Imbriquer deux `HoverableView` ne marcherait pas :
+    /// `hitTest` renvoie toujours `self` sans convertir le point, un enfant décalé
+    /// ne recevrait jamais le clic.
+    var secondaryClickZone: NSRect?
+    var secondaryClickHandler: (() -> Void)?
+
+    /// Joué une fois, quand la ligne entre dans une fenêtre. `NSMenu` construit ses
+    /// vues hors écran : une animation lancée à la construction serait déjà finie
+    /// au moment de l'affichage.
+    var onAppear: (() -> Void)?
+
+    /// Fond conservé hors survol : une ligne dépliée reste visiblement ouverte,
+    /// comme le périphérique déplié du menu Son du système. À poser **après**
+    /// `configureHoverBackground`, qui crée le calque.
+    var keepsBackgroundHighlighted = false {
+        didSet { setHoverActive(isHovered) }
+    }
+
     /// Action d'appui maintenu. Tant qu'elle est nil, mouseDown déclenche le
     /// clic immédiatement (comportement historique de toutes les lignes).
     var longPressHandler: (() -> Void)?
@@ -367,7 +388,10 @@ class HoverableView: NSView {
     private var hoverBackgroundLayer: CALayer?
     private var pressTimer: Timer?
     private var pressOrigin: NSPoint?
+    private var lastMouseDownPoint: NSPoint = .zero
     private var longPressFired = false
+    private var hasAppeared = false
+    private var isHovered = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -440,11 +464,25 @@ class HoverableView: NSView {
         // derrière soi un timer d'appui ni un verrou de refresh orphelin.
         if window == nil {
             cancelPress()
+            return
         }
+
+        guard !hasAppeared else { return }
+        hasAppeared = true
+        onAppear?()
     }
 
     func setHoverActive(_ active: Bool) {
-        let color: NSColor = active ? NSColor.tertiaryLabelColor : .clear
+        isHovered = active
+
+        // Dépliée, la ligne garde un fond hors survol — mais plus discret que
+        // celui-ci, sinon le survol ne se verrait plus dessus.
+        let color: NSColor
+        if active {
+            color = NSColor.tertiaryLabelColor
+        } else {
+            color = keepsBackgroundHighlighted ? NSColor.quaternaryLabelColor : .clear
+        }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -465,13 +503,22 @@ class HoverableView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        lastMouseDownPoint = point
 
         guard longPressHandler != nil else {
-            clickHandler?()
+            handler(at: point)?()
             return
         }
 
         beginPress(at: point)
+    }
+
+    /// Action visée par un clic à cet endroit de la ligne.
+    private func handler(at point: NSPoint) -> (() -> Void)? {
+        if let zone = secondaryClickZone, zone.contains(point) {
+            return secondaryClickHandler
+        }
+        return clickHandler
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -495,8 +542,10 @@ class HoverableView: NSView {
 
         // Appui long déjà déclenché : on avale le clic de relâchement pour ne
         // pas réenchaîner sur l'action normale.
+        // Le point retenu est celui de l'appui, pas du relâchement, et il survit
+        // à `cancelPress` : un geste abandonné reste un clic, comme avant.
         if !fired {
-            clickHandler?()
+            handler(at: lastMouseDownPoint)?()
         }
     }
 

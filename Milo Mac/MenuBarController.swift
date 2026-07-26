@@ -49,6 +49,15 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         builder.onNeedsRefresh = { [weak self] in self?.scheduleMenuRefresh() }
         return builder
     }()
+    /// Le sous-niveau zones/enceintes est replié par défaut : le multiroom actif
+    /// ajoute d'abord un caret à l'en-tête, et c'est un clic dessus qui déroule
+    /// les lignes. Sans ça, activer le multiroom fait bondir la hauteur du menu.
+    /// L'état survit aux rebuilds et aux ouvertures du menu, mais pas à une
+    /// extinction du multiroom (`clearMultiroomState`).
+    private var isMultiroomExpanded = false
+    /// Le caret ne se dessine en fondu qu'à sa première apparition — les rebuilds
+    /// suivants (dépliage, volume, topologie) le trouvent déjà en place.
+    private var hasRevealedMultiroomCaret = false
 
     // MARK: - UI State
     private var activeMenu: NSMenu?
@@ -359,13 +368,28 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
     }
 
     private func addSystemControlsSection(to menu: NSMenu) {
+        // Le caret n'apparaît qu'avec ce qu'il déplie : tant que la topologie
+        // n'est pas là, l'en-tête reste une simple ligne à interrupteur.
+        let hasMultiroomRows = currentState?.multiroomEnabled == true
+            && loadingStates["multiroom"] != true
+            && multiroomTopology != nil
+        let disclosure: MenuItemFactory.FeatureDisclosure = !hasMultiroomRows
+            ? .none
+            : (isMultiroomExpanded ? .expanded : .collapsed)
+
+        let animatesCaret = disclosure.isVisible && !hasRevealedMultiroomCaret
+        if animatesCaret { hasRevealedMultiroomCaret = true }
+
         let systemItems = MenuItemFactory.createSystemControlsSection(
             state: currentState,
             loadingStates: loadingStates,
             pendingStates: expectedFunctionalityStates,
             enabledApps: enabledDockApps,
+            multiroomDisclosure: disclosure,
+            animatesMultiroomCaret: animatesCaret,
             target: self,
-            action: #selector(toggleClicked)
+            action: #selector(toggleClicked),
+            disclosureAction: #selector(multiroomDisclosureClicked)
         )
 
         // Backend n'exposant ni multiroom ni égaliseur : le séparateur qui ferme
@@ -383,12 +407,18 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
             // Zones et enceintes juste sous l'en-tête « Multiroom » : elles font
             // partie de sa section, donc avant le séparateur qui la ferme. On
             // attend d'avoir la topologie — le temps de la bascule, la section se
-            // réduit à son en-tête et son interrupteur.
+            // réduit à son en-tête et son interrupteur — puis un dépliage
+            // explicite du caret.
             guard let toggleId = item.representedObject as? String,
                   toggleId == "multiroom",
-                  currentState?.multiroomEnabled == true,
-                  loadingStates["multiroom"] != true,
-                  multiroomTopology != nil else { continue }
+                  hasMultiroomRows,
+                  isMultiroomExpanded else { continue }
+
+            // Le bloc déplié s'ouvre sur un séparateur pleine largeur, comme le
+            // menu Son du système sous un périphérique déplié. Celui qui le ferme
+            // existe déjà : c'est celui de la section suivante — et quand il n'y
+            // en a pas, le bas du menu ferme le bloc tout seul.
+            menu.addItem(NSMenuItem.separator())
 
             let rows = multiroomSection.makeItems(
                 items: currentMultiroomItems(),
@@ -459,6 +489,19 @@ class MenuBarController: NSObject, MiloConnectionManagerDelegate, NSMenuDelegate
         isLoadingMultiroom = false
         multiroomVolumeController.cleanup()
         multiroomSection.reset()
+        // Le multiroom s'éteint : la prochaine activation repart repliée, et son
+        // caret se redessinera en fondu comme la première fois.
+        isMultiroomExpanded = false
+        hasRevealedMultiroomCaret = false
+    }
+
+    /// Clic sur le caret ou sur le titre « Multiroom » : déplie/replie zones et
+    /// enceintes. Distinct de `toggleClicked`, réservé à l'interrupteur — la ligne
+    /// porte deux actions dès qu'elle a un sous-niveau.
+    @objc private func multiroomDisclosureClicked(_ sender: NSMenuItem) {
+        guard sender.representedObject as? String == "multiroom" else { return }
+        isMultiroomExpanded.toggle()
+        scheduleMenuRefresh()
     }
 
     /// Aligne le cache multiroom sur l'état courant : charge à l'activation,

@@ -33,6 +33,8 @@
 "multiroom.noClients" = "Nenhuma coluna detetada";
 "multiroom.mute" = "Silenciar";
 "multiroom.unmute" = "Reativar som";
+"multiroom.showSpeakers" = "Mostrar colunas";
+"multiroom.hideSpeakers" = "Ocultar colunas";
 
 // MARK: - Configuration Menu
 "config.settings" = "Definições...";

@@ -33,6 +33,8 @@
 "multiroom.noClients" = "कोई स्पीकर नहीं मिला";
 "multiroom.mute" = "म्यूट करें";
 "multiroom.unmute" = "अनम्यूट करें";
+"multiroom.showSpeakers" = "स्पीकर दिखाएँ";
+"multiroom.hideSpeakers" = "स्पीकर छिपाएँ";
 
 // MARK: - Configuration Menu
 "config.settings" = "सेटिंग्स...";

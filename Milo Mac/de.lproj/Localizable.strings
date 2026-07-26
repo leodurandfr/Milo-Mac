@@ -33,6 +33,8 @@
 "multiroom.noClients" = "Kein Lautsprecher erkannt";
 "multiroom.mute" = "Stummschalten";
 "multiroom.unmute" = "Stummschaltung aufheben";
+"multiroom.showSpeakers" = "Lautsprecher einblenden";
+"multiroom.hideSpeakers" = "Lautsprecher ausblenden";
 
 // MARK: - Configuration Menu
 "config.settings" = "Einstellungen...";
