@@ -8,6 +8,33 @@ enum PanelRoute: Hashable, Sendable {
     case radioStations
 }
 
+/// Morceau affiché par `NowPlayingRow`, tous sources confondues — voir `MiloStore.nowPlaying`.
+struct NowPlayingInfo: Equatable {
+    let title: String
+    let artist: String?
+    let artworkURL: URL?
+    /// Médaillon affiché dans un coin de la pochette — pour l'instant, uniquement le logo de la
+    /// STATION quand Radio joue un morceau reconnu avec sa propre pochette (voir
+    /// `MiloStore.radioNowPlaying`). `nil` partout ailleurs.
+    let badgeArtworkURL: URL?
+    let isPlaying: Bool
+}
+
+/// Sources qui exposent une vraie télécommande côté backend (`COMMANDS` non vide dans Milo),
+/// et donc les seules pour qui `NowPlayingRow` peut afficher un bouton play/pause générique et
+/// un bouton suivant. Radio n'y figure pas : elle n'a pas de vraie pause ni de morceau suivant,
+/// elle a son propre bouton stop/relance dédié (`MiloStore.toggleRadioNowPlaying`).
+///
+/// AirPlay, DLNA et Qobuz sont des récepteurs PASSIFS : AirPlay 2 ne supporte pas le contrôle
+/// distant, DLNA et Qobuz sont pilotés par l'émetteur ou l'application tierce — leur
+/// `COMMANDS` est vide côté backend, et lui envoyer pause/next échouerait en 400 : elles
+/// n'apparaissent dans aucune des deux listes. Podcast n'a pas de notion d'épisode suivant
+/// (pas de commande `next` dans sa table), d'où son absence de `nextSources`.
+private enum NowPlayingControls {
+    static let pauseResumeSources: Set<String> = ["spotify", "music_library", "cd", "podcast"]
+    static let nextSources: Set<String> = ["spotify", "music_library", "cd"]
+}
+
 /// Source de vérité de l'UI : les vues SwiftUI observent ces propriétés et se re-rendent
 /// seules. Rien ne reconstruit de menu à chaque événement.
 ///
@@ -30,6 +57,13 @@ final class MiloStore {
     private(set) var volume: VolumeStatus?
     private(set) var enabledApps: [String]?
     private(set) var radioFavorites: [RadioStation]?
+
+    /// Dernier morceau détecté, tous sources confondues — alimente `NowPlayingAccordion`, PAS
+    /// `nowPlaying` directement : contrairement à ce dernier, il reste peuplé un instant après
+    /// l'arrêt de la lecture, le temps que `MenuBarShell` anime le repli de la ligne à zéro
+    /// (`nowPlayingRevealFraction`). Sans lui, la ligne perdrait son contenu AVANT d'avoir fini
+    /// de se refermer. Voir `syncDisplayedNowPlaying`.
+    private(set) var displayedNowPlaying: NowPlayingInfo?
 
     /// Structure multiroom (zones + clients), lue quand le multiroom est activé. Vide sinon.
     /// Alimente la sous-section dépliable de la ligne Multiroom.
@@ -74,6 +108,15 @@ final class MiloStore {
     /// sur laquelle `MenuBarShell` recale la fenêtre — là où `withAnimation` rapporterait la
     /// taille finale d'un coup à `NSHostingController`, faisant sauter la fenêtre.
     var multiroomRevealFraction: CGFloat = 0
+
+    /// Fraction de repli/déploiement de la ligne « en cours », de 0 (masquée) à 1 (pleine
+    /// hauteur) — même mécanique que `multiroomRevealFraction`, pour la même raison : animée
+    /// pas à pas par un timer dans `MenuBarShell`, jamais par `withAnimation`.
+    ///
+    /// Synchronisée à l'état RÉEL sans animation à l'ouverture du panneau (`MenuBarShell.
+    /// showPanel`) — l'utilisateur vient d'ouvrir, il n'y a rien à faire glisser. Seuls les
+    /// changements survenant PENDANT que le panneau est ouvert sont animés.
+    var nowPlayingRevealFraction: CGFloat = 0
 
     // MARK: - Navigation du panneau
 
@@ -205,6 +248,11 @@ final class MiloStore {
     @ObservationIgnored private var manualLoadingProtection: [String: Date] = [:]
     @ObservationIgnored private var expectedFunctionalityStates: [String: Bool] = [:]
     @ObservationIgnored private var radioStationLoadingTimer: Timer?
+
+    /// Dernière station radio connue (identifiant, nom, logo) — voir `radioNowPlaying`. Non
+    /// observée : elle ne change jamais sans que `state` change aussi dans le même appel
+    /// (`syncLastRadioStation`), et c'est `state` qui déclenche le nouveau rendu.
+    @ObservationIgnored private var lastRadioStation: (id: String, name: String, favicon: String?)?
 
     // MARK: - Poll de fond (non observé)
 
@@ -457,6 +505,124 @@ final class MiloStore {
         return state?.metadata["station_id"] as? String
     }
 
+    /// Morceau en cours de lecture, tous sources confondues, ou nil si rien de détecté.
+    ///
+    /// Le backend expose une projection canonique (`title`/`artist`/`album_art_url`, voir
+    /// `PlaybackMetadata` côté Milo) commune à Spotify, AirPlay, DLNA, CD, Qobuz et la
+    /// bibliothèque musicale. Radio fait exception, déléguée à `radioNowPlaying`. Les sources
+    /// sans notion de lecture (Bluetooth, Mac) n'émettent aucune de ces clés : `title` reste
+    /// vide et la ligne ne s'affiche pas.
+    ///
+    /// Gardé sur la présence d'un TITRE, pas sur `is_playing` : une source en pause
+    /// (Spotify, bibliothèque musicale, CD, Podcast) garde son titre/artiste en métadonnées
+    /// avec `is_playing` à faux — masquer la ligne à ce moment-là ferait disparaître le bouton
+    /// pause juste après l'avoir pressé. Le backend vide `metadata` (donc `title`) quand la
+    /// source s'arrête réellement ou change (voir `_metadata = {}` des sources concernées).
+    var nowPlaying: NowPlayingInfo? {
+        guard let state, isConnected else { return nil }
+        return nowPlayingInfo(for: state)
+    }
+
+    /// Calcul pur derrière `nowPlaying`, factorisé pour être rejouable sur un `MiloState`
+    /// explicite — c'est ce que `syncDisplayedNowPlaying` utilise depuis `refreshState`/
+    /// `didReceiveStateUpdate`, avant que `state` lui-même ne soit forcément à jour.
+    private func nowPlayingInfo(for state: MiloState) -> NowPlayingInfo? {
+        if state.activeSource == "radio" { return radioNowPlaying(state) }
+
+        let title = state.metadata["title"] as? String
+        let artist = state.metadata["artist"] as? String
+        let artworkPath = state.metadata["album_art_url"] as? String
+
+        guard let title, !title.isEmpty else { return nil }
+        return NowPlayingInfo(
+            title: title,
+            artist: (artist?.isEmpty == false) ? artist : nil,
+            artworkURL: connectionManager.apiService?.nowPlayingArtworkURL(for: artworkPath),
+            badgeArtworkURL: nil,
+            isPlaying: state.metadata["is_playing"] as? Int == 1
+        )
+    }
+
+    /// Projection Radio de `nowPlaying` : le morceau reconnu (Shazam/in-band) s'il y en a un,
+    /// sinon le nom + le logo de la STATION elle-même — pour toujours montrer quelque chose
+    /// pendant une écoute radio, même sans reconnaissance. `lastRadioStation` couvre le cas du
+    /// stop, où le backend vide justement ces champs de `metadata` (voir
+    /// `_handle_stop_playback` côté Milo) : sans lui, la ligne disparaîtrait avec la station et
+    /// le bouton « relancer » n'aurait plus rien à relancer.
+    private func radioNowPlaying(_ state: MiloState) -> NowPlayingInfo? {
+        let isRecognizedTrack = (state.metadata["track_title"] as? String)?.isEmpty == false
+        let stationName = (state.metadata["station_name"] as? String) ?? lastRadioStation?.name
+        let stationFavicon = (state.metadata["favicon"] as? String) ?? lastRadioStation?.favicon
+
+        let title = isRecognizedTrack ? (state.metadata["track_title"] as? String) : stationName
+        guard let title, !title.isEmpty else { return nil }
+
+        let artist = isRecognizedTrack ? (state.metadata["track_artist"] as? String) : nil
+        let trackArtworkPath = state.metadata["track_artwork"] as? String
+        let trackArtworkURL = connectionManager.apiService?.nowPlayingArtworkURL(for: trackArtworkPath)
+        let stationArtworkURL = radioFaviconURL(for: stationFavicon)
+
+        // Le logo de la station se glisse en médaillon sur la pochette SEULEMENT quand celle-ci
+        // est la pochette PROPRE au morceau reconnu (Shazam) : sans artwork à lui, la pochette
+        // affichée EST déjà le logo de la station (repli juste en dessous) — le redoubler en
+        // médaillon serait redondant.
+        let badgeArtworkURL = trackArtworkURL != nil ? stationArtworkURL : nil
+
+        return NowPlayingInfo(
+            title: title,
+            artist: (artist?.isEmpty == false) ? artist : nil,
+            artworkURL: trackArtworkURL ?? stationArtworkURL,
+            badgeArtworkURL: badgeArtworkURL,
+            isPlaying: state.metadata["is_playing"] as? Int == 1
+        )
+    }
+
+    /// Vrai si la source active accepte pause/resume — voir `NowPlayingControls`.
+    var nowPlayingSupportsPauseResume: Bool {
+        state.map { NowPlayingControls.pauseResumeSources.contains($0.activeSource) } ?? false
+    }
+
+    /// Vrai si la source active accepte de passer au morceau suivant.
+    var nowPlayingSupportsNext: Bool {
+        state.map { NowPlayingControls.nextSources.contains($0.activeSource) } ?? false
+    }
+
+    /// Bascule play/pause de la source active. Fire-and-forget, comme les actions multiroom :
+    /// le prochain `state_changed` (WebSocket ou poll de fond) rediffuse `is_playing` et met la
+    /// ligne à jour tout seule — pas de spinner ni d'état optimiste à gérer ici.
+    func toggleNowPlayingPause() {
+        guard let apiService = connectionManager.apiService,
+              let source = state?.activeSource,
+              let isPlaying = nowPlaying?.isPlaying else { return }
+        let command = isPlaying ? "pause" : "resume"
+        Task {
+            do { try await apiService.sendPlaybackCommand(command, to: source) }
+            catch { NSLog("❌ Now-playing %@ (%@) failed: %@", command, source, error.localizedDescription) }
+        }
+    }
+
+    /// Passe au morceau suivant de la source active.
+    func advanceToNextTrack() {
+        guard let apiService = connectionManager.apiService, let source = state?.activeSource else { return }
+        Task {
+            do { try await apiService.sendPlaybackCommand("next", to: source) }
+            catch { NSLog("❌ Now-playing next (%@) failed: %@", source, error.localizedDescription) }
+        }
+    }
+
+    /// Bascule stop/relance pour Radio : contrairement à `toggleNowPlayingPause`, ce n'est PAS
+    /// une vraie pause (Radio n'en a pas) — soit on stoppe le flux en cours, soit on relance la
+    /// DERNIÈRE station connue (`lastRadioStation`, qui survit à un stop côté client alors que
+    /// le backend a déjà vidé ses champs de `metadata`).
+    func toggleRadioNowPlaying() {
+        guard state?.activeSource == "radio" else { return }
+        if nowPlaying?.isPlaying == true {
+            stopRadioPlayback()
+        } else if let stationId = lastRadioStation?.id {
+            playRadioStation(stationId)
+        }
+    }
+
     /// Vrai quand la source Radio est posée et que ses favoris peuvent s'afficher.
     var canShowRadioStations: Bool {
         state?.activeSource == "radio"
@@ -605,6 +771,30 @@ final class MiloStore {
         } else if !multiroom.clients.isEmpty || !multiroom.zones.isEmpty {
             multiroom = .empty
             multiroomVolume = .empty
+        }
+    }
+
+    /// Maintient `lastRadioStation` à jour tant que Radio est la source active. Un `stop` vide
+    /// les champs de station de `metadata` (voir `_handle_stop_playback` côté Milo) SANS changer
+    /// `active_source` — la garde ne se déclenche donc que sur un vrai changement de source, pas
+    /// sur un stop, ce qui est justement le but : survivre au stop pour le bouton « relancer ».
+    private func syncLastRadioStation(for newState: MiloState) {
+        guard newState.activeSource == "radio" else {
+            lastRadioStation = nil
+            return
+        }
+        guard let id = newState.metadata["station_id"] as? String,
+              let name = newState.metadata["station_name"] as? String else { return }
+        lastRadioStation = (id: id, name: name, favicon: newState.metadata["favicon"] as? String)
+    }
+
+    /// Maintient `displayedNowPlaying` à jour — SEULEMENT quand un morceau est détecté, jamais
+    /// remis à nil ici. Appelée après `syncLastRadioStation` (dont `radioNowPlaying` dépend pour
+    /// son repli après un stop) : il doit rester peuplé après que `nowPlaying` retombe à nil, le
+    /// temps que `MenuBarShell` anime `nowPlayingRevealFraction` jusqu'à 0.
+    private func syncDisplayedNowPlaying(for newState: MiloState) {
+        if let info = nowPlayingInfo(for: newState) {
+            displayedNowPlaying = info
         }
     }
 
@@ -871,6 +1061,8 @@ final class MiloStore {
                 loadRadioFavoritesInBackground()
             }
             syncMultiroomState(for: newState)
+            syncLastRadioStation(for: newState)
+            syncDisplayedNowPlaying(for: newState)
             return true
         } catch {
             return false
@@ -942,6 +1134,8 @@ final class MiloStore {
         // survivre à la déconnexion.
         radioFavorites = nil
         endRadioStationLoading()
+        lastRadioStation = nil
+        displayedNowPlaying = nil
 
         // La structure multiroom sera re-fetchée à la reconnexion si le multiroom est actif.
         multiroom = .empty
@@ -1021,6 +1215,8 @@ extension MiloStore: MiloConnectionManagerDelegate {
         checkFunctionalityStateChange(newState)
         syncLoadingStatesWithBackend()
         syncMultiroomState(for: newState)
+        syncLastRadioStation(for: newState)
+        syncDisplayedNowPlaying(for: newState)
     }
 
     func didReceiveMultiroomStructureChanged() {

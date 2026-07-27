@@ -304,6 +304,227 @@ struct MenuSectionHeader: View {
     }
 }
 
+// MARK: - Morceau en cours
+
+/// Géométrie de la ligne « en cours ». Sans référence système à mesurer (aucun module natif
+/// n'a d'équivalent) : des valeurs choisies, comme les contrôles de la sous-section multiroom.
+private enum NowPlayingMetrics {
+    static let artworkSize: CGFloat = 48
+    static let artworkCornerRadius: CGFloat = 8
+    /// Écart pochette → texte.
+    static let artworkTextGap: CGFloat = 10
+
+    /// Médaillon carré arrondi en coin de la pochette — voir `NowPlayingInfo.badgeArtworkURL`.
+    static let badgeSize: CGFloat = 16
+    static let badgeCornerRadius: CGFloat = 6
+    /// Retrait du médaillon par rapport aux bords bas et droit de la pochette.
+    static let badgeInset: CGFloat = 2
+    /// Écart mini texte → boutons, avant que le fondu ne le masque.
+    static let textControlsGap: CGFloat = 8
+
+    /// Longueur du fondu — même valeur que les noms multiroom (`MultiroomMetrics.nameFade`),
+    /// pour un rendu identique.
+    static let textFade: CGFloat = 14
+    /// Taille de police commune au titre et à l'artiste — l'un et l'autre ne se distinguent
+    /// plus que par le poids et la couleur.
+    static let textSize: CGFloat = 12
+
+    /// Cible tactile d'un bouton de contrôle (play/pause, suivant, stop/relance Radio).
+    static let controlSize: CGFloat = 22
+    static let controlGap: CGFloat = 4
+
+    /// Largeur de la colonne titre/artiste, dimensionnée pour le nombre de boutons RÉELLEMENT
+    /// affichés par la source active — pas un espace fixe dimensionné pour le pire cas. Radio
+    /// (un seul bouton stop/relance) et les récepteurs passifs (aucun bouton : AirPlay, DLNA,
+    /// Qobuz) gagnent donc plus de place pour le titre que Spotify/bibliothèque musicale/CD
+    /// (play-pause + suivant).
+    static func textWidth(controlCount: Int) -> CGFloat {
+        let controlsWidth = controlCount == 0 ? 0
+            : CGFloat(controlCount) * controlSize + CGFloat(controlCount - 1) * controlGap
+        let rowContentWidth = MenuRowMetrics.width - 2 * MenuRowMetrics.contentInset
+        return rowContentWidth - artworkSize - artworkTextGap - textControlsGap - controlsWidth
+    }
+}
+
+/// Bandeau « now playing » : pochette 48×48 à gauche, titre puis artiste au milieu, contrôles
+/// de lecture à droite quand la source active en propose. Affiché entre le titre du panneau et
+/// le slider de volume dès qu'un morceau (ou, pour Radio, une station) est chargé — voir
+/// `MiloStore.nowPlaying` pour le mapping des champs.
+struct NowPlayingRow: View {
+    @Bindable var store: MiloStore
+    let info: NowPlayingInfo
+
+    /// Radio n'a ni vraie pause ni morceau suivant : un seul bouton stop/relance, distinct du
+    /// couple générique play-pause/suivant des autres sources — voir
+    /// `MiloStore.toggleRadioNowPlaying`.
+    private enum Controls {
+        case none
+        case radioToggle
+        case pauseResume(hasNext: Bool)
+
+        var count: Int {
+            switch self {
+            case .none: return 0
+            case .radioToggle: return 1
+            case .pauseResume(let hasNext): return hasNext ? 2 : 1
+            }
+        }
+    }
+
+    private var controls: Controls {
+        if store.state?.activeSource == "radio" { return .radioToggle }
+        guard store.nowPlayingSupportsPauseResume else { return .none }
+        return .pauseResume(hasNext: store.nowPlayingSupportsNext)
+    }
+
+    var body: some View {
+        let textWidth = NowPlayingMetrics.textWidth(controlCount: controls.count)
+
+        HStack(spacing: 0) {
+            NowPlayingArtwork(url: info.artworkURL,
+                              badgeURL: info.badgeArtworkURL,
+                              size: NowPlayingMetrics.artworkSize,
+                              cornerRadius: NowPlayingMetrics.artworkCornerRadius)
+                .padding(.trailing, NowPlayingMetrics.artworkTextGap)
+
+            VStack(alignment: .leading, spacing: 2) {
+                FadingText(text: info.title, weight: .semibold, size: NowPlayingMetrics.textSize,
+                           dimmed: false, width: textWidth, fade: NowPlayingMetrics.textFade)
+
+                if let artist = info.artist {
+                    FadingText(text: artist, weight: .regular, size: NowPlayingMetrics.textSize,
+                               dimmed: true, width: textWidth, fade: NowPlayingMetrics.textFade)
+                }
+            }
+
+            Spacer(minLength: NowPlayingMetrics.textControlsGap)
+
+            HStack(spacing: NowPlayingMetrics.controlGap) {
+                switch controls {
+                case .none:
+                    EmptyView()
+
+                case .radioToggle:
+                    NowPlayingControlButton(
+                        systemName: info.isPlaying ? "stop.fill" : "play.fill",
+                        size: NowPlayingMetrics.controlSize,
+                        action: store.toggleRadioNowPlaying
+                    )
+
+                case .pauseResume(let hasNext):
+                    NowPlayingControlButton(
+                        systemName: info.isPlaying ? "pause.fill" : "play.fill",
+                        size: NowPlayingMetrics.controlSize,
+                        action: store.toggleNowPlayingPause
+                    )
+                    if hasNext {
+                        NowPlayingControlButton(
+                            systemName: "forward.fill",
+                            size: NowPlayingMetrics.controlSize,
+                            action: store.advanceToNextTrack
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, MenuRowMetrics.contentInset)
+        .padding(.vertical, 6)
+        .frame(width: MenuRowMetrics.width, alignment: .leading)
+    }
+}
+
+/// Bouton de contrôle (play/pause, suivant, stop/relance) — même idiome que `MuteButton` de la
+/// sous-section multiroom.
+private struct NowPlayingControlButton: View {
+    let systemName: String
+    let size: CGFloat
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: size, height: size)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Pochette de la ligne « now playing ». Même idiome que `StationFavicon` (chargement direct,
+/// sans cache partagé) : cette vue ne bouge jamais dans l'arbre — elle n'est ni recréée par un
+/// `ForEach` ni échangée entre deux couches de morphing — donc `AsyncImage` ne recharge que
+/// lorsque l'URL change réellement (nouveau morceau), jamais à chaque rendu.
+private struct NowPlayingArtwork: View {
+    let url: URL?
+    /// Logo de la station en médaillon — voir `NowPlayingInfo.badgeArtworkURL`. `nil` partout
+    /// sauf Radio sur un morceau reconnu avec sa propre pochette.
+    let badgeURL: URL?
+    let size: CGFloat
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        artwork
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(alignment: .bottomTrailing) {
+                if let badgeURL {
+                    NowPlayingBadge(url: badgeURL)
+                        .padding(.trailing, NowPlayingMetrics.badgeInset)
+                        .padding(.bottom, NowPlayingMetrics.badgeInset)
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        if let url {
+            AsyncImage(url: url) { phase in
+                if case .success(let image) = phase {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    placeholder
+                }
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    private var placeholder: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color(nsColor: .quaternarySystemFill))
+            .overlay {
+                Image(systemName: "music.note")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.secondary)
+            }
+    }
+}
+
+/// Le logo de la station lui-même, carré arrondi, posé bien centré dans le trou découpé par
+/// `NowPlayingArtwork` — voir `NowPlayingInfo.badgeArtworkURL`.
+private struct NowPlayingBadge: View {
+    let url: URL
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            if case .success(let image) = phase {
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Color(nsColor: .quaternarySystemFill)
+            }
+        }
+        .frame(width: NowPlayingMetrics.badgeSize, height: NowPlayingMetrics.badgeSize)
+        .clipShape(RoundedRectangle(cornerRadius: NowPlayingMetrics.badgeCornerRadius, style: .continuous))
+    }
+}
+
 // MARK: - Volume
 
 struct VolumeRow: View {
@@ -611,7 +832,9 @@ private struct MultiroomRow: View {
             FadingText(
                 text: name,
                 weight: isZone ? .medium : .regular,
-                dimmed: !online
+                dimmed: !online,
+                width: MultiroomMetrics.nameWidth,
+                fade: MultiroomMetrics.nameFade
             )
 
             if controllable {
@@ -747,26 +970,31 @@ private struct MultiroomRow: View {
 private struct FadingText: View {
     let text: String
     let weight: Font.Weight
+    var size: CGFloat = 13
     let dimmed: Bool
+    /// Largeur figée de la colonne de texte — appelant par appelant : les noms multiroom
+    /// s'alignent sur `MultiroomMetrics.nameWidth`, la ligne « en cours » réserve la place des
+    /// boutons play/pause et suivant (voir `NowPlayingRow`).
+    let width: CGFloat
+    /// Longueur du fondu en fin de texte.
+    let fade: CGFloat
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: weight))
+            .font(.system(size: size, weight: weight))
             .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
             .lineLimit(1)
             // Taille NATURELLE (pas de troncature « … »), puis calée dans une largeur fixe et
             // rognée : le texte qui déborde est masqué, et le dégradé le fait disparaître en
             // fondu au lieu d'un bord net.
             .fixedSize(horizontal: true, vertical: false)
-            .frame(width: MultiroomMetrics.nameWidth, alignment: .leading)
+            .frame(width: width, alignment: .leading)
             .clipped()
             .mask(
                 LinearGradient(
                     stops: [
                         .init(color: .black, location: 0),
-                        .init(color: .black,
-                              location: (MultiroomMetrics.nameWidth - MultiroomMetrics.nameFade)
-                                       / MultiroomMetrics.nameWidth),
+                        .init(color: .black, location: (width - fade) / width),
                         .init(color: .clear, location: 1)
                     ],
                     startPoint: .leading,

@@ -219,6 +219,9 @@ struct MiloPanelView: View {
         MenuTitle(text: L("menu.title"))
 
         if store.isConnected {
+            if let info = store.displayedNowPlaying {
+                NowPlayingAccordion(store: store, info: info)
+            }
             VolumeRow(store: store)
 
             let sources = AudioSourceCatalog.ordered(enabledApps: store.enabledApps)
@@ -349,6 +352,38 @@ private struct MultiroomAccordion: View {
             // Cible cliquable seulement une fois franchement ouvert, pour ne pas capter un clic
             // sur des cartes encore quasi refermées.
             .allowsHitTesting(store.multiroomRevealFraction > 0.99)
+    }
+}
+
+/// Repli/déploiement de la ligne « en cours », même mécanique que `MultiroomAccordion` : la
+/// ligne reste montée à sa hauteur naturelle, et un `frame(height:)` multiplié par
+/// `nowPlayingRevealFraction` la montre/masque en douceur — piloté par un timer dans
+/// `MenuBarShell`, jamais par `withAnimation` (voir *Panel height animations* dans CLAUDE.md).
+///
+/// Reçoit `store.displayedNowPlaying`, PAS `store.nowPlaying` : ce dernier retombe à nil dès
+/// que la lecture s'arrête, avant même que le repli n'ait commencé à s'animer — la ligne
+/// perdrait son contenu en même temps qu'elle est censée se refermer dessus.
+private struct NowPlayingAccordion: View {
+    @Bindable var store: MiloStore
+    let info: NowPlayingInfo
+    @State private var naturalHeight: CGFloat = 0
+
+    var body: some View {
+        NowPlayingRow(store: store, info: info)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { naturalHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in naturalHeight = h }
+                }
+            )
+            .frame(height: naturalHeight * store.nowPlayingRevealFraction, alignment: .top)
+            .clipped()
+            .opacity(store.nowPlayingRevealFraction)
+            // Boutons cliquables seulement une fois franchement déployée — même garde que
+            // l'accordéon multiroom, pour ne pas capter un clic pendant le repli.
+            .allowsHitTesting(store.nowPlayingRevealFraction > 0.99)
     }
 }
 

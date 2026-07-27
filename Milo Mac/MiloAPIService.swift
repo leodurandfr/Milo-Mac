@@ -505,6 +505,17 @@ final class MiloAPIService: Sendable {
                        body: ["enabled": enabled])
     }
 
+    /// Transport générique d'une commande de lecture vers la source active — même route que le
+    /// frontend web (`POST /api/audio/control/{source}`). N'émet que des commandes sans
+    /// paramètre (pause/resume/next) : chaque source valide la commande contre sa propre table
+    /// (`COMMANDS` côté Milo) et rejette tout le reste en 400, donc un identifiant de source qui
+    /// ne les supporte pas (AirPlay, DLNA, Qobuz — récepteurs passifs sans télécommande) échoue
+    /// proprement plutôt que d'agir sur la mauvaise source.
+    func sendPlaybackCommand(_ command: String, to source: String) async throws {
+        try await send("/api/audio/control/\(source)", method: "POST",
+                       body: ["command": command, "data": [String: Any]()])
+    }
+
     // MARK: - Settings API
 
     /// Récupère les réglages statiques du device (limites volume + dock apps) en un
@@ -623,6 +634,24 @@ final class MiloAPIService: Sendable {
 
     func stopRadioPlayback() async throws {
         try await send("/api/radio/stop", method: "POST")
+    }
+
+    // MARK: - Now playing
+
+    /// Résout `album_art_url` (ou l'artwork Shazam de Radio) en URL absolue affichable.
+    ///
+    /// Deux formes en sortie du backend (voir `PlaybackMetadata`, côté Milo) : un chemin LOCAL
+    /// que le Pi sert lui-même (AirPlay, DLNA, CD, bibliothèque musicale — ex.
+    /// `/api/dlna/artwork?v=…`), à préfixer d'host:port comme le reste de l'API ; ou une URL déjà
+    /// absolue vers un CDN externe (Spotify, Qobuz, artwork Shazam reconnu par Radio), à utiliser
+    /// telle quelle. `nil` si la métadonnée n'a pas d'illustration.
+    func nowPlayingArtworkURL(for path: String?) -> URL? {
+        guard let path, !path.isEmpty else { return nil }
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        }
+        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
+        return URL(string: "http://\(hostToUse):\(port)\(path)")
     }
 }
 

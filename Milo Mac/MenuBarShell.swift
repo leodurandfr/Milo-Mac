@@ -117,6 +117,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         observeConnection()
         observeMultiroomExpansion()
         observePanelNavigation()
+        observeStateForRepositioning()
         updateIcon()
     }
 
@@ -160,6 +161,94 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
                 self.observeConnection()
             }
         }
+    }
+
+    // MARK: - Contenu piloté par l'état
+
+    /// Vrai si la ligne « en cours » était visible au dernier état observé — pour ne déclencher
+    /// `animateNowPlayingReveal` que sur un vrai changement de PRÉSENCE (musique détectée ou
+    /// non), pas à chaque broadcast qui touche `state` sans y toucher (le volume, par exemple).
+    private var lastNowPlayingPresence = false
+
+    /// Recale le panneau sur la taille réelle de son contenu à chaque nouvel état, tant qu'il
+    /// est ouvert. Même motif de réarmement que `observeConnection`.
+    ///
+    /// Deux cas : la ligne « en cours » apparaît ou disparaît (changement de source, arrêt de
+    /// lecture) — animé en douceur par `animateNowPlayingReveal`, comme l'accordéon multiroom.
+    /// Tout le reste (liste de sources, connexion...) n'a pas de timer dédié : `NSHostingController`
+    /// grandit la fenêtre tout seul quand le contenu s'allonge, mais ne la RÉTRÉCIT jamais quand
+    /// il raccourcit (voir `stepReveal`) — sans ce recalage immédiat, un tel contenu qui rétrécit
+    /// au repos laissait un vide sous le panneau.
+    private func observeStateForRepositioning() {
+        withObservationTracking {
+            _ = store.state
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let isNowPlayingVisible = self.store.nowPlaying != nil
+                if isNowPlayingVisible != self.lastNowPlayingPresence {
+                    self.lastNowPlayingPresence = isNowPlayingVisible
+                    self.animateNowPlayingReveal(to: isNowPlayingVisible ? 1 : 0)
+                } else if self.panel.isVisible {
+                    self.positionPanel()
+                }
+                self.observeStateForRepositioning()
+            }
+        }
+    }
+
+    // MARK: - Ligne « en cours »
+
+    private var nowPlayingRevealTimer: Timer?
+    private var nowPlayingRevealStartFraction: CGFloat = 0
+    private var nowPlayingRevealTargetFraction: CGFloat = 0
+    private var nowPlayingRevealStartTime: CFTimeInterval = 0
+    /// Plus court que l'accordéon multiroom (0,45 s) : une seule ligne à révéler, pas une
+    /// sous-section de cartes — au-delà, l'apparition traînerait.
+    private let nowPlayingRevealDuration: CFTimeInterval = 0.3
+
+    /// Anime `nowPlayingRevealFraction` vers `target`. Même construction que `animateReveal`
+    /// (accordéon multiroom) : un timer à 120 Hz qui recale la fenêtre à chaque pas, jamais
+    /// `withAnimation` (voir *Panel height animations* dans CLAUDE.md).
+    private func animateNowPlayingReveal(to target: CGFloat) {
+        nowPlayingRevealTimer?.invalidate()
+
+        // Panneau masqué : rien à animer, on pose l'état final — comme le morphing de route.
+        guard panel.isVisible else {
+            store.nowPlayingRevealFraction = target
+            return
+        }
+
+        nowPlayingRevealStartFraction = store.nowPlayingRevealFraction
+        nowPlayingRevealTargetFraction = target
+        nowPlayingRevealStartTime = CACurrentMediaTime()
+
+        guard nowPlayingRevealStartFraction != target else {
+            store.nowPlayingRevealFraction = target
+            return
+        }
+
+        nowPlayingRevealTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
+            let running = MainActor.assumeIsolated { self?.stepNowPlayingReveal() ?? false }
+            if !running { timer.invalidate() }
+        }
+    }
+
+    private func stepNowPlayingReveal() -> Bool {
+        let raw = (CACurrentMediaTime() - nowPlayingRevealStartTime) / nowPlayingRevealDuration
+        let t = min(CGFloat(raw), 1)
+        let e = Self.ease(t)
+        store.nowPlayingRevealFraction = nowPlayingRevealStartFraction
+            + (nowPlayingRevealTargetFraction - nowPlayingRevealStartFraction) * e
+        // Voir `stepReveal` : l'auto-dimensionnement de `NSHostingController` grandit la fenêtre
+        // tout seul mais ne la rétrécit jamais — il faut la recaler à chaque pas.
+        if panel.isVisible { positionPanel() }
+
+        guard t >= 1 else { return true }
+        store.nowPlayingRevealFraction = nowPlayingRevealTargetFraction
+        if panel.isVisible { positionPanel() }
+        nowPlayingRevealTimer = nil
+        return false
     }
 
     // MARK: - Accordéon multiroom
@@ -382,6 +471,13 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
 
         store.isPanelOpen = true
         store.refreshPanelData()
+
+        // La ligne « en cours » part de l'état RÉEL, sans animation : on vient d'ouvrir, il n'y
+        // a rien à faire glisser. Seuls les changements survenant PENDANT que le panneau est
+        // ouvert (`observeStateForRepositioning`) sont animés.
+        nowPlayingRevealTimer?.invalidate()
+        lastNowPlayingPresence = store.nowPlaying != nil
+        store.nowPlayingRevealFraction = lastNowPlayingPresence ? 1 : 0
 
         positionPanel()
 
