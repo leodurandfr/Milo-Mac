@@ -144,8 +144,20 @@ final class MiloConnectionManager: NSObject {
     /// `nonisolated` : `IPv4Resolver.resolveAll` (CFHost) bloque, et les sondes TCP prennent
     /// jusqu'à 500 ms chacune — rien de tout ça n'a sa place sur le main actor. L'appelant
     /// n'a qu'à `await`, et récupère la main tout seul.
+    ///
+    /// La résolution est explicitement poussée sur une queue `.utility` : cette méthode est
+    /// appelée depuis `connectToMilo()` sur le main actor, donc le pool coopératif de la
+    /// concurrence structurée hérite d'une QoS `.userInitiated`. `CFHostStartInfoResolution`
+    /// bloque le thread appelant en attendant une réponse résolue en interne à une QoS
+    /// `.default` — sans ce hop, un thread `.userInitiated` attend sur un thread `.default`,
+    /// l'inversion de priorité qu'Instruments signale ("Hang Risk"). `.utility` (< `.default`)
+    /// fait de l'attente une simple donation de priorité descendante, pas une inversion.
     private nonisolated static func resolveBestIPv4(host: String, port: Int) async -> String? {
-        let candidates = IPv4Resolver.resolveAll(host: host)
+        let candidates = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: IPv4Resolver.resolveAll(host: host))
+            }
+        }
         for ip in candidates {
             NSLog("📍 Found IPv4: %@", ip)
         }
