@@ -84,6 +84,8 @@
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "音量滑块";
+"accessibility.volume_decrease" = "降低音量";
+"accessibility.volume_increase" = "提高音量";
 "accessibility.milo_icon" = "Milo";
 
 // MARK: - ROC VAD Settings (enum localization)

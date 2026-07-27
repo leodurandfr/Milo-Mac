@@ -51,6 +51,11 @@ final class GlobalHotkeyManager {
     private var isUpArrowPressed = false
     private var isDownArrowPressed = false
 
+    /// Maintien d'une icône du slider (souris), par opposition au maintien d'une flèche
+    /// (clavier) — les deux pilotent le même `repeatTick`, mais leur condition d'arrêt
+    /// diffère : pas de touche à surveiller ici, juste ce booléen.
+    private var isButtonHeld = false
+
     // MARK: - Constants
     private let repeatInterval: TimeInterval = 0.03  // 30ms tick for smooth acceleration
     private let upArrowKeyCode: UInt16 = 126
@@ -278,7 +283,23 @@ final class GlobalHotkeyManager {
     // MARK: - Volume Actions
     private func checkForVolumeAction(direction: String) {
         guard isRightOptionPressed else { return }
+        beginRepeat(direction: direction)
+    }
 
+    /// Maintien d'une icône du slider — même chemin que le raccourci clavier
+    /// (`beginRepeat`), sans la garde "Option droite enfoncée" qui n'a pas de sens pour
+    /// un bouton de souris : même prédiction locale, même accélération, même HUD.
+    func beginButtonHold(direction: String) {
+        isButtonHeld = true
+        beginRepeat(direction: direction)
+    }
+
+    func endButtonHold() {
+        isButtonHeld = false
+        stopCurrentRepeat()
+    }
+
+    private func beginRepeat(direction: String) {
         guard let connectionManager = connectionManager,
               connectionManager.isConnected,
               connectionManager.apiService != nil else {
@@ -339,9 +360,12 @@ final class GlobalHotkeyManager {
     private func repeatTick() {
         guard let direction = currentRepeatDirection else { return }
 
-        let shouldContinue = isRightOptionPressed &&
-                           ((direction == "up" && isUpArrowPressed) ||
-                            (direction == "down" && isDownArrowPressed))
+        // Pas de touche à surveiller pour un maintien souris : `isButtonHeld` est mis à
+        // jour directement par `beginButtonHold`/`endButtonHold`.
+        let shouldContinue = isButtonHeld ||
+                           (isRightOptionPressed &&
+                            ((direction == "up" && isUpArrowPressed) ||
+                             (direction == "down" && isDownArrowPressed)))
 
         guard shouldContinue else {
             stopCurrentRepeat()
@@ -421,6 +445,7 @@ final class GlobalHotkeyManager {
         currentRepeatDirection = nil
         repeatStartTime = nil
         isActivelyAdjusting = false
+        isButtonHeld = false
         // Only flush final volume if a volume action was actually in progress
         guard wasRepeating else { return }
         if isSendingVolume {

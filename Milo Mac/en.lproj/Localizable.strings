@@ -84,6 +84,8 @@
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "Volume Slider";
+"accessibility.volume_decrease" = "Decrease Volume";
+"accessibility.volume_increase" = "Increase Volume";
 "accessibility.milo_icon" = "Milo";
 
 // MARK: - ROC VAD Settings (enum localization)

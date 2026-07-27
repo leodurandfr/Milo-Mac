@@ -545,7 +545,14 @@ struct VolumeRow: View {
         VolumeSlider(
             valueDb: $store.sliderVolumeDb,
             range: store.volumeLimits,
-            onChange: { store.setVolume($0) }
+            onChange: { store.setVolume($0) },
+            onHoldChange: { increase, isHolding in
+                if isHolding {
+                    store.hotkeyManager?.beginButtonHold(direction: increase ? "up" : "down")
+                } else {
+                    store.hotkeyManager?.endButtonHold()
+                }
+            }
         )
         .padding(.horizontal, MenuRowMetrics.contentInset)
         .padding(.vertical, 4)
