@@ -331,7 +331,14 @@ private enum NowPlayingMetrics {
 
     /// Cible tactile d'un bouton de contrôle (play/pause, suivant, stop/relance Radio).
     static let controlSize: CGFloat = 22
-    static let controlGap: CGFloat = 4
+    static let controlGap: CGFloat = 7
+    /// Taille de police par défaut d'une icône de contrôle (`forward.fill`).
+    static let controlIconSize: CGFloat = 13
+    /// `play.fill`/`pause.fill`/`stop.fill` remplissent moins leur bounding box que
+    /// `forward.fill` (triangle plein contre double-chevron + barre) : à même corps de police,
+    /// ils paraissent nettement plus petits. Corrigé en leur donnant un corps plus grand plutôt
+    /// qu'en changeant la cible tactile (`controlSize`), qui reste identique pour les deux.
+    static let playPauseIconSize: CGFloat = 20
 
     /// Largeur de la colonne titre/artiste, dimensionnée pour le nombre de boutons RÉELLEMENT
     /// affichés par la source active — pas un espace fixe dimensionné pour le pire cas. Radio
@@ -407,6 +414,7 @@ struct NowPlayingRow: View {
                 case .radioToggle:
                     NowPlayingControlButton(
                         systemName: info.isPlaying ? "stop.fill" : "play.fill",
+                        iconSize: NowPlayingMetrics.playPauseIconSize,
                         size: NowPlayingMetrics.controlSize,
                         action: store.toggleRadioNowPlaying
                     )
@@ -414,12 +422,14 @@ struct NowPlayingRow: View {
                 case .pauseResume(let hasNext):
                     NowPlayingControlButton(
                         systemName: info.isPlaying ? "pause.fill" : "play.fill",
+                        iconSize: NowPlayingMetrics.playPauseIconSize,
                         size: NowPlayingMetrics.controlSize,
                         action: store.toggleNowPlayingPause
                     )
                     if hasNext {
                         NowPlayingControlButton(
                             systemName: "forward.fill",
+                            iconSize: NowPlayingMetrics.controlIconSize,
                             size: NowPlayingMetrics.controlSize,
                             action: store.advanceToNextTrack
                         )
@@ -437,13 +447,14 @@ struct NowPlayingRow: View {
 /// sous-section multiroom.
 private struct NowPlayingControlButton: View {
     let systemName: String
+    let iconSize: CGFloat
     let size: CGFloat
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13))
+                .font(.system(size: iconSize))
                 .foregroundStyle(.secondary)
                 .frame(width: size, height: size)
                 .contentShape(Rectangle())
