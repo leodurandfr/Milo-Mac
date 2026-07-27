@@ -14,38 +14,46 @@ struct MiloPanelView: View {
     /// connaît l'écran où le panneau s'ouvre (voir `PanelMetrics.maxContentHeight`).
     var maxContentHeight: CGFloat
 
-    /// Vue courante : racine, ou liste des stations radio. Un panneau n'a pas de sous-menus
-    /// natifs — Radio se déplie donc sur place.
-    @State private var route: Route = .root
+    /// Hauteur de la couche PRIMAIRE : la route affichée au repos, la route SORTANTE pendant une
+    /// transition. Mesurée en continu — c'est elle qui donne la hauteur de départ du morphing.
+    @State private var activeHeight: CGFloat = 0
 
-    private enum Route: Equatable {
-        case root
-        case radioStations
-    }
+    /// Hauteur NATURELLE de la couche entrante (celle en overlay) : la CIBLE du morphing. Nulle
+    /// tant qu'elle n'a pas été mesurée — le morphing tient alors sa hauteur de départ, le temps
+    /// d'une passe de disposition (invisible : la courbe démarre à plat).
+    @State private var incomingHeight: CGFloat = 0
+
+    /// Hauteur affichée à l'instant du clic, figée pour toute la durée du morphing.
+    ///
+    /// Un instantané, et non `activeHeight` lue en direct : dès que la transition s'arme, le
+    /// `fixedSize` de la couche primaire fait sauter sa mesure à sa hauteur NATURELLE (la liste des
+    /// stations, plafonnée à l'écran, mesure d'un coup tout son contenu).
+    @State private var morphFromHeight: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            switch route {
-            case .root:
-                // FIXÉ à sa hauteur naturelle : sans quoi, si la fenêtre est un instant plus
-                // haute que le contenu (léger retard de l'auto-dimensionnement pendant le repli
-                // de l'accordéon multiroom), le VStack distribue le surplus aux lignes rendues
-                // verticalement élastiques par leur bouton-chevron (`.frame(maxHeight: .infinity)`)
-                // — et la ligne Multiroom « gonflait » à la fermeture. Le contenu racine n'a aucun
-                // élément qui doive s'étirer ; on le borne donc à son idéal.
-                VStack(alignment: .leading, spacing: 0) {
-                    rootContent
+        // Pendant la transition, la couche primaire est celle qu'on QUITTE et la couche entrante
+        // est posée en overlay. Ce sens-là, et non l'inverse, préserve l'identité SwiftUI de la vue
+        // qu'on quitte : la liste des stations garde son défilement et ses logos déjà chargés
+        // pendant qu'elle s'efface. (Un overlay ne participe pas à la taille de son hôte — ce qui
+        // tombe bien, la hauteur étant ici pilotée à la main.)
+        let outgoing = store.outgoingPanelRoute
+
+        return layer(outgoing ?? store.panelRoute)
+            .measuringHeight { activeHeight = $0 }
+            .opacity(outgoingOpacity)
+            .overlay(alignment: .top) {
+                if outgoing != nil {
+                    layer(store.panelRoute)
+                        .measuringHeight { incomingHeight = $0 }
+                        .opacity(incomingOpacity)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-            case .radioStations:
-                // PAS de `fixedSize` ici : la ScrollView des stations est l'unique élément
-                // élastique du panneau, elle doit pouvoir rétrécir pour défiler (voir le plafond
-                // `maxHeight` plus bas).
-                radioContent
             }
-        }
-        .frame(width: MenuRowMetrics.width)
-        .padding(.bottom, bottomInset)
+            // Hauteur pilotée à la main PENDANT la transition seulement (nulle au repos, où la
+            // fenêtre suit comme avant la taille naturelle du contenu).
+            .frame(height: morphHeight, alignment: .top)
+            // Rien n'est cliquable pendant la transition : les deux couches sont à l'écran, et un
+            // clic sur une ligne fantôme n'aurait aucun sens.
+            .allowsHitTesting(!store.isRouteMorphing)
         // Le panneau ne peut pas être plus haut que l'écran. La fenêtre suivant la taille
         // intrinsèque du contenu, c'est ici — et non dans `positionPanel` — que la croissance
         // doit être bornée : sinon elle sort par le bas.
@@ -70,21 +78,99 @@ struct MiloPanelView: View {
         // panneau se rouvrirait sur la liste des stations.
         .onChange(of: store.isPanelOpen) { _, isOpen in
             if !isOpen {
-                route = .root
+                // Retour à la racine SANS transition : le panneau n'est plus visible, et on ne veut
+                // pas rouvrir sur une animation à moitié jouée. Même raison pour l'accordéon.
+                store.resetPanelRoute()
+                morphFromHeight = 0
+                incomingHeight = 0
                 store.multiroomExpanded = false
-                // Repli instantané à la fermeture (le panneau n'est plus visible) : on ne veut
-                // pas rouvrir sur une animation à moitié jouée.
                 store.multiroomRevealFraction = 0
             }
         }
         .onChange(of: store.canShowRadioStations) { _, canShow in
-            if !canShow, route == .radioStations { route = .root }
+            if !canShow, store.panelRoute == .radioStations { navigate(to: .root) }
         }
         // Le multiroom a été coupé (ou la liste s'est vidée) pendant que la sous-section
         // était ouverte : on la referme, sinon elle resterait dépliée sur du vide.
         .onChange(of: store.canShowMultiroom) { _, canShow in
             if !canShow { store.multiroomExpanded = false }
         }
+    }
+
+    // MARK: - Couches et transition
+
+    /// Le contenu d'une route, à sa géométrie propre.
+    ///
+    /// Pendant une transition, la couche est FIGÉE à sa hauteur naturelle (`fixedSize`) et c'est le
+    /// cadre extérieur qui la découpe. Sans ça, la ScrollView des stations — seul élément élastique
+    /// du panneau — se laisserait comprimer à la hauteur interpolée, et la mesure de sa hauteur
+    /// naturelle (la CIBLE du morphing) vaudrait toujours la hauteur de départ : le panneau ne
+    /// bougerait jamais. Une liste plus haute que l'écran s'affiche donc pendant la transition
+    /// rognée à son sommet — exactement ce qu'on voit d'une liste défilante au repos.
+    @ViewBuilder
+    private func layer(_ route: PanelRoute) -> some View {
+        Group {
+            switch route {
+            case .root:
+                // FIXÉ à sa hauteur naturelle : sans quoi, si la fenêtre est un instant plus
+                // haute que le contenu (léger retard de l'auto-dimensionnement pendant le repli
+                // de l'accordéon multiroom), le VStack distribue le surplus aux lignes rendues
+                // verticalement élastiques par leur bouton-chevron (`.frame(maxHeight: .infinity)`)
+                // — et la ligne Multiroom « gonflait » à la fermeture. Le contenu racine n'a aucun
+                // élément qui doive s'étirer ; on le borne donc à son idéal.
+                VStack(alignment: .leading, spacing: 0) {
+                    rootContent
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            case .radioStations:
+                // PAS de `fixedSize` propre ici : la ScrollView des stations est l'unique élément
+                // élastique du panneau, elle doit pouvoir rétrécir pour défiler (voir le plafond
+                // `maxHeight` du body).
+                VStack(alignment: .leading, spacing: 0) {
+                    radioContent
+                }
+            }
+        }
+        .frame(width: MenuRowMetrics.width)
+        .padding(.bottom, bottomInset(for: route))
+        .fixedSize(horizontal: false, vertical: store.isRouteMorphing)
+    }
+
+    /// Change de route en armant le morphing (le timer, lui, vit dans `MenuBarShell`).
+    private func navigate(to route: PanelRoute) {
+        // Instantané pris AVANT la bascule, pendant que la mesure de la couche primaire vaut encore
+        // la hauteur AFFICHÉE (voir `morphFromHeight`). `morphHeight` d'abord : si une transition
+        // est déjà en vol, on repart de la hauteur atteinte, sans à-coup.
+        morphFromHeight = morphHeight ?? activeHeight
+        incomingHeight = 0
+        store.navigate(to: route)
+    }
+
+    /// Hauteur imposée au contenu pendant la transition ; `nil` au repos, où la fenêtre suit la
+    /// hauteur naturelle du contenu comme avant.
+    private var morphHeight: CGFloat? {
+        guard store.isRouteMorphing, morphFromHeight > 0 else { return nil }
+        // La cible est la hauteur naturelle de la couche entrante, plafonnée par l'écran —
+        // exactement ce que la disposition élastique lui donnera au repos, si bien que la dernière
+        // image du morphing et l'état final coïncident.
+        let target = incomingHeight > 0 ? min(incomingHeight, maxContentHeight) : morphFromHeight
+        return morphFromHeight + (target - morphFromHeight) * store.routeMorphFraction
+    }
+
+    /// Les deux fondus se croisent à peine : la vue qu'on quitte s'efface d'abord, la nouvelle
+    /// arrive ensuite. Superposées à mi-course, les deux listes rendraient le panneau illisible.
+    ///
+    /// Les seuils portent sur une fraction DÉJÀ lissée (le timer applique la courbe) : ils se
+    /// lisent donc en avancement visuel du morphing, non en temps.
+    private var outgoingOpacity: Double {
+        guard store.isRouteMorphing else { return 1 }
+        return Double(max(0, 1 - store.routeMorphFraction / PanelMetrics.routeFadeOutEnd))
+    }
+
+    private var incomingOpacity: Double {
+        guard store.isRouteMorphing else { return 1 }
+        let start = PanelMetrics.routeFadeInStart
+        return Double(min(1, max(0, (store.routeMorphFraction - start) / (1 - start))))
     }
 
     /// Bascule la sous-section multiroom. À l'ouverture, on force un re-fetch de la structure
@@ -110,7 +196,7 @@ struct MiloPanelView: View {
     /// de son contenu défilant (voir `radioContent`). Posé ici, il aurait arrêté la ScrollView
     /// avant le bord du panneau — et la station coupée par le défilement l'aurait été en
     /// laissant du vide sous elle, au lieu de disparaître sous le bord.
-    private var bottomInset: CGFloat {
+    private func bottomInset(for route: PanelRoute) -> CGFloat {
         switch route {
         case .root:
             store.showsPreferences ? PanelMetrics.bottomInset : PanelMetrics.bottomInsetIconRow
@@ -146,7 +232,7 @@ struct MiloPanelView: View {
                         store: store,
                         source: source,
                         showsChevron: source.id == "radio" && store.canShowRadioStations,
-                        onChevron: { route = .radioStations }
+                        onChevron: { navigate(to: .radioStations) }
                     )
                 }
             }
@@ -198,7 +284,7 @@ struct MiloPanelView: View {
 
     @ViewBuilder
     private var radioContent: some View {
-        RadioBackRow { route = .root }
+        RadioBackRow { navigate(to: .root) }
 
         PanelDivider()
 
@@ -263,6 +349,20 @@ private struct MultiroomAccordion: View {
             // Cible cliquable seulement une fois franchement ouvert, pour ne pas capter un clic
             // sur des cartes encore quasi refermées.
             .allowsHitTesting(store.multiroomRevealFraction > 0.99)
+    }
+}
+
+extension View {
+    /// Rapporte la hauteur de la vue sans influer sur sa disposition — un `background` transparent
+    /// ne propose rien, il se contente d'épouser son hôte. Même motif que `MultiroomAccordion`.
+    func measuringHeight(_ report: @escaping (CGFloat) -> Void) -> some View {
+        background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { report(geo.size.height) }
+                    .onChange(of: geo.size.height) { _, height in report(height) }
+            }
+        )
     }
 }
 

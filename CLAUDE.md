@@ -31,6 +31,8 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 
 `MACOSX_DEPLOYMENT_TARGET = 26.0`: the app runs **only on macOS 26+**. That is not a preference — `NSGlassEffectView` (the panel's background) is macOS 26 API, and there is no fallback path. Don't add `@available` guards hoping to lower the target; the panel has no non-glass rendering.
 
+**macOS 27 (Tahoe's successor):** the app builds cleanly and warning-free under both toolchains — Xcode 26.x (macOS 26.x SDK) and Xcode 27.x (macOS 27.0 SDK) — with the deployment target held at 26.0. Keep it at **26.0**: that is what makes one binary target Tahoe *and* run on 27; raising it would drop Tahoe support for nothing. `SDKROOT = macosx` already means "latest installed SDK", so switching Xcodes needs no project change. The macOS 26 API the panel depends on (`NSGlassEffectView`) is unchanged in the 27 SDK — no deprecation surfaces, nothing to migrate. When building for a specific SDK, point `DEVELOPER_DIR` at the right Xcode (e.g. `/Applications/Xcode-beta.app/Contents/Developer` for the 27 SDK).
+
 The project builds at **`SWIFT_VERSION = 6.0`** with **zero warnings**, in Debug and Release. Keep it that way — see *Concurrency*.
 
 ## Concurrency: the main-thread invariant is compiler-enforced
@@ -70,6 +72,14 @@ An `NSStatusItem` that opens a borderless `NSPanel`, whose content view is an `N
 - **Not the SwiftUI `.glassEffect()` modifier**: inside a transparent `NSPanel` it renders the whole window invisible, content included. The AppKit view is required.
 
 The price of a window is that click-outside-to-dismiss must be re-implemented by hand (a global `NSEvent` monitor), and the panel must be able to become key — otherwise the glass renders in its "inactive", visibly lighter state.
+
+### Panel height animations are timer-driven, never `withAnimation`
+
+Anything that changes the panel's height — the multiroom accordion, the root ↔ radio-stations morph — is animated by a **120 Hz `Timer` in `MenuBarShell`** that writes a concrete fraction into `MiloStore` (`multiroomRevealFraction`, `routeMorphFraction`, both already eased so the view can interpolate them directly). The view turns that fraction into a real height, so at every step `NSHostingController` sees a size it can hand to the window.
+
+`withAnimation` does **not** work here: it reports the *final* size to `NSHostingController` in one go, the window jumps to it, and the content animates inside an already-resized panel. Same reason `toggleMultiroom()` and `navigate(to:)` only flip state and never wrap it in an animation.
+
+The other half of the contract is in the shell: each step calls `positionPanel()`, because `NSHostingController` grows the window on its own but **never shrinks it** — a closing accordion or a morph back to a shorter route would leave the window tall. Purely graphical effects that don't touch layout (the chevron's rotate-and-pulse, the cards' opacity, the two layers' crossfade) are free to use `withAnimation` or read the fraction directly.
 
 ### The panel's measurements are measured
 
@@ -124,7 +134,9 @@ The product is branded **Milō**, with the macron. The Xcode target's `PRODUCT_N
 
 `FeatureCatalog` works the same way for toggles (multiroom, equalizer). Its defaults differ, though: multiroom shows unless disabled (`?? true`), the equalizer only shows if explicitly listed (`?? false`).
 
-A source needing a sub-view (like Radio's station list) is *not* a submenu — the panel has no native flyouts. `MiloPanelView` swaps its `route` in place (`Route.root` / `.radioStations`), and the row shows a chevron.
+A source needing a sub-view (like Radio's station list) is *not* a submenu — the panel has no native flyouts. `MiloPanelView` swaps `store.panelRoute` in place (`PanelRoute.root` / `.radioStations`), and the row shows a chevron.
+
+The swap is a **morph**, driven the same way as the multiroom accordion (see *Panel height animations*): `MiloStore.navigate(to:)` arms it (`outgoingPanelRoute` + `routeMorphFraction`), `MenuBarShell` runs the timer. During the morph the view renders **two layers** — the route being left as the primary, the incoming one as an `overlay` (an overlay doesn't size its host, and this direction keeps the SwiftUI identity of the list you're leaving, so its scroll position and loaded logos survive the fade-out). Both layers are pinned to their natural height (`fixedSize`) so the outer frame can clip them at the interpolated height; without that the stations `ScrollView` would simply shrink to whatever height was proposed and the morph's target measurement would never move. Station logos are cached in memory (`FaviconCache`) because a re-created `AsyncImage` re-renders its placeholder for a frame even when the bytes are in the URL cache — which read as a blink exactly mid-transition.
 
 ## SourceKit / IDE indexing
 

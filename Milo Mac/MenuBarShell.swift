@@ -116,6 +116,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         setupPanel()
         observeConnection()
         observeMultiroomExpansion()
+        observePanelNavigation()
         updateIcon()
     }
 
@@ -209,11 +210,15 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         }
     }
 
+    /// easeInOut cubique, la courbe de toutes les animations de hauteur du panneau.
+    private static func ease(_ t: CGFloat) -> CGFloat {
+        t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+    }
+
     private func stepReveal() -> Bool {
         let raw = (CACurrentMediaTime() - revealStartTime) / revealDuration
         let t = min(CGFloat(raw), 1)
-        // easeInOut cubique.
-        let e = t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+        let e = Self.ease(t)
         store.multiroomRevealFraction = revealStartFraction + (revealTargetFraction - revealStartFraction) * e
         // On recale la fenêtre sur la taille RÉELLE du contenu à ce pas. Indispensable :
         // l'auto-dimensionnement de `NSHostingController` agrandit la fenêtre quand le contenu
@@ -226,6 +231,72 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         store.multiroomRevealFraction = revealTargetFraction
         if panel.isVisible { positionPanel() }
         revealTimer = nil
+        return false
+    }
+
+    // MARK: - Morphing entre routes (racine ↔ stations radio)
+
+    /// Anime la bascule d'une route à l'autre. On observe `outgoingPanelRoute` et non
+    /// `panelRoute` : lui seul distingue une NAVIGATION (clic sur le caret Radio, retour) d'un
+    /// simple retour à la racine à la fermeture du panneau, qu'il ne faut pas animer.
+    /// Même motif de réarmement que `observeConnection`.
+    private func observePanelNavigation() {
+        withObservationTracking {
+            _ = store.outgoingPanelRoute
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.store.isRouteMorphing {
+                    self.animateRouteMorph()
+                } else {
+                    self.routeMorphTimer?.invalidate()
+                    self.routeMorphTimer = nil
+                }
+                self.observePanelNavigation()
+            }
+        }
+    }
+
+    private var routeMorphTimer: Timer?
+    private var routeMorphStartTime: CFTimeInterval = 0
+
+    /// Plus court que l'accordéon multiroom (0,45 s) : celui-ci déplie du contenu sous une ligne
+    /// qu'on vient de désigner, celle-ci CHANGE de vue — au-delà, la navigation traîne.
+    private let routeMorphDuration: CFTimeInterval = 0.34
+
+    private func animateRouteMorph() {
+        routeMorphTimer?.invalidate()
+
+        // Panneau masqué : rien à animer, on pose l'état final.
+        guard panel.isVisible else {
+            store.finishRouteMorph()
+            return
+        }
+
+        store.routeMorphFraction = 0
+        routeMorphStartTime = CACurrentMediaTime()
+
+        // Même idiome que l'accordéon : un timer à 120 Hz plutôt qu'un `withAnimation`, pour que
+        // le contenu SwiftUI ait à chaque pas une hauteur CONCRÈTE que la fenêtre puisse suivre.
+        routeMorphTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
+            let running = MainActor.assumeIsolated { self?.stepRouteMorph() ?? false }
+            if !running { timer.invalidate() }
+        }
+    }
+
+    private func stepRouteMorph() -> Bool {
+        let raw = (CACurrentMediaTime() - routeMorphStartTime) / routeMorphDuration
+        let t = min(CGFloat(raw), 1)
+        store.routeMorphFraction = Self.ease(t)
+        // Comme pour l'accordéon : `NSHostingController` fait GRANDIR la fenêtre tout seul, mais
+        // ne la rétrécit jamais — il faut la recaler à chaque pas sur la hauteur réelle du contenu
+        // (une navigation va aussi bien vers plus haut que vers plus court).
+        if panel.isVisible { positionPanel() }
+
+        guard t >= 1 else { return true }
+        store.finishRouteMorph()
+        if panel.isVisible { positionPanel() }
+        routeMorphTimer = nil
         return false
     }
 

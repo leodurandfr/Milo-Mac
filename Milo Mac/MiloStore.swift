@@ -1,6 +1,13 @@
 import Foundation
 import Observation
 
+/// Ce que le panneau peut afficher. Le panneau n'a pas de sous-menus natifs : la liste des
+/// stations radio n'est pas un flyout, elle remplace le contenu racine sur place.
+enum PanelRoute: Hashable, Sendable {
+    case root
+    case radioStations
+}
+
 /// Source de vérité de l'UI : les vues SwiftUI observent ces propriétés et se re-rendent
 /// seules. Rien ne reconstruit de menu à chaque événement.
 ///
@@ -67,6 +74,54 @@ final class MiloStore {
     /// sur laquelle `MenuBarShell` recale la fenêtre — là où `withAnimation` rapporterait la
     /// taille finale d'un coup à `NSHostingController`, faisant sauter la fenêtre.
     var multiroomRevealFraction: CGFloat = 0
+
+    // MARK: - Navigation du panneau
+
+    /// Vue courante du panneau. Un panneau n'a pas de sous-menus natifs : la liste des stations
+    /// radio remplace le contenu racine sur place.
+    ///
+    /// Dans le store, et non en `@State` local de la vue, pour la même raison que
+    /// `multiroomExpanded` : `MenuBarShell` doit l'observer pour animer la hauteur de la fenêtre.
+    private(set) var panelRoute: PanelRoute = .root
+
+    /// Route qui s'efface pendant la transition ; nil au repos. Sert de discriminateur : c'est
+    /// sa mise à jour (et non celle de `panelRoute`) qui déclenche le morphing dans
+    /// `MenuBarShell`, si bien qu'un retour à la racine à la fermeture du panneau — qui passe par
+    /// `resetPanelRoute()` — n'anime rien.
+    private(set) var outgoingPanelRoute: PanelRoute?
+
+    /// Avancement du morphing d'une route à l'autre : 0 au clic, 1 quand la nouvelle vue est en
+    /// place. Déjà LISSÉE (le timer applique la courbe), donc directement interpolable.
+    ///
+    /// Même idiome que `multiroomRevealFraction`, et pour la même raison : la hauteur du panneau
+    /// change, et seul un timer donne au contenu SwiftUI une taille concrète à chaque pas.
+    var routeMorphFraction: CGFloat = 1
+
+    /// Vrai pendant la transition entre deux routes.
+    var isRouteMorphing: Bool { outgoingPanelRoute != nil }
+
+    /// Navigue vers une route en armant le morphing. L'animation elle-même est pilotée par
+    /// `MenuBarShell`, qui observe `outgoingPanelRoute`.
+    func navigate(to route: PanelRoute) {
+        guard route != panelRoute else { return }
+        outgoingPanelRoute = panelRoute
+        routeMorphFraction = 0
+        panelRoute = route
+    }
+
+    /// Retour immédiat à la racine, sans transition — à la fermeture du panneau, quand il n'y a
+    /// plus rien à animer et qu'on ne veut surtout pas rouvrir sur une animation à moitié jouée.
+    func resetPanelRoute() {
+        panelRoute = .root
+        outgoingPanelRoute = nil
+        routeMorphFraction = 1
+    }
+
+    /// Fin du morphing : la route cible est seule en place.
+    func finishRouteMorph() {
+        outgoingPanelRoute = nil
+        routeMorphFraction = 1
+    }
 
     // MARK: - Dépendances
 

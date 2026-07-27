@@ -198,6 +198,20 @@ enum PanelMetrics {
     /// Marge minimale avec le bord de l'écran.
     static let screenEdgeMargin: CGFloat = 8
 
+    // MARK: Transition entre routes (racine ↔ stations radio)
+    //
+    // Le panneau n'a pas de sous-menus natifs : la liste des stations REMPLACE le contenu racine.
+    // La bascule est donc un morphing — la hauteur du panneau va de l'une à l'autre pendant que
+    // les deux contenus se croisent en fondu. Durée et courbe vivent dans `MenuBarShell`, qui
+    // pilote le timer ; ne restent ici que les seuils du fondu, affaire de vue.
+
+    /// Avancement auquel la vue sortante a fini de s'effacer.
+    static let routeFadeOutEnd: CGFloat = 0.42
+
+    /// Avancement auquel la vue entrante commence à apparaître. Sous `routeFadeOutEnd`, donc :
+    /// les deux se chevauchent d'un cheveu, juste assez pour qu'il n'y ait pas d'instant vide.
+    static let routeFadeInStart: CGFloat = 0.34
+
     /// Hauteur maximale du CONTENU du panneau : tout ce que l'écran peut afficher entre le bas
     /// de la barre des menus et le bord bas de la zone utile (Dock compris, `visibleFrame` le
     /// déduisant déjà), en gardant la même marge qu'ailleurs.
@@ -876,18 +890,37 @@ private struct StationFavicon: View {
     private let size: CGFloat = 32
     private let cornerRadius: CGFloat = 7
 
+    /// Logo déjà chargé par CETTE vue. Le cache partagé sert les vues re-créées, celui-ci évite
+    /// de le relire à chaque passe de rendu.
+    @State private var loaded: Image?
+
     var body: some View {
-        AsyncImage(url: url) { phase in
-            if case .success(let image) = phase {
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                placeholder
+        image
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var image: some View {
+        if let ready = loaded ?? url.flatMap({ FaviconCache.shared.image(for: $0) }) {
+            ready
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } else {
+            AsyncImage(url: url) { phase in
+                if case .success(let image) = phase {
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .onAppear {
+                            if let url { FaviconCache.shared.store(image, for: url) }
+                            loaded = image
+                        }
+                } else {
+                    placeholder
+                }
             }
         }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     private var placeholder: some View {
@@ -899,6 +932,27 @@ private struct StationFavicon: View {
                     .foregroundStyle(.secondary)
             }
     }
+}
+
+/// Logos de stations déjà chargés, gardés en mémoire pour la durée de la session.
+///
+/// Le cache HTTP d'URLSession ne suffit pas : une `AsyncImage` re-créée repart d'une passe de
+/// chargement ASYNCHRONE même quand l'octet est déjà en cache, et affiche donc son placeholder
+/// l'espace d'une image ou deux. Or la liste des stations est re-créée à chaque entrée — et une
+/// fois de plus quand la transition passe la main de son overlay à la couche principale : les
+/// logos clignotaient au moment précis où la bascule doit être lisse. Une image déjà vue est
+/// désormais rendue SYNCHRONEMENT.
+///
+/// Quelques dizaines de vignettes 32 pt : le cache n'a pas besoin d'être borné.
+@MainActor
+private final class FaviconCache {
+    static let shared = FaviconCache()
+
+    private var images: [URL: Image] = [:]
+
+    func image(for url: URL) -> Image? { images[url] }
+
+    func store(_ image: Image, for url: URL) { images[url] = image }
 }
 
 /// Ligne affichée quand Radio n'a aucun favori.
