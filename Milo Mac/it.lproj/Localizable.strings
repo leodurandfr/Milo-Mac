@@ -23,6 +23,17 @@
 // MARK: - Radio
 "radio.noFavorites" = "Nessuna stazione preferita";
 
+// MARK: - Music Library
+"musicLibrary.search.placeholder" = "Cerca artisti, album, brani";
+"musicLibrary.search.prompt" = "Cerca nella tua libreria";
+"musicLibrary.search.noResults" = "Nessun risultato";
+"musicLibrary.search.artists" = "Artisti";
+"musicLibrary.search.albums" = "Album";
+"musicLibrary.search.songs" = "Brani";
+"musicLibrary.search.albumsCount" = "%d album";
+"musicLibrary.artist.noAlbums" = "Nessun album";
+"musicLibrary.album.noSongs" = "Nessun brano";
+
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
 "feature.equalizer" = "Equalizzatore";

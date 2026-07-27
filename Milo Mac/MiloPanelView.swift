@@ -85,10 +85,16 @@ struct MiloPanelView: View {
                 incomingHeight = 0
                 store.multiroomExpanded = false
                 store.multiroomRevealFraction = 0
+                store.clearMusicLibraryBrowsing()
             }
         }
         .onChange(of: store.canShowRadioStations) { _, canShow in
-            if !canShow, store.panelRoute == .radioStations { navigate(to: .root) }
+            if !canShow, store.panelRoute == .radioStations { exitToRoot() }
+        }
+        .onChange(of: store.canShowMusicLibrarySearch) { _, canShow in
+            if !canShow, Self.musicLibraryRoutes.contains(store.panelRoute) {
+                exitMusicLibraryBrowsing()
+            }
         }
         // Le multiroom a été coupé (ou la liste s'est vidée) pendant que la sous-section
         // était ouverte : on la referme, sinon elle resterait dépliée sur du vide.
@@ -129,12 +135,41 @@ struct MiloPanelView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     radioContent
                 }
+            case .musicLibrarySearch:
+                // Même raison qu'au-dessus : la liste de résultats est l'élément élastique.
+                VStack(alignment: .leading, spacing: 0) {
+                    musicLibraryContent
+                }
+            case .musicLibraryArtist:
+                VStack(alignment: .leading, spacing: 0) {
+                    musicLibraryArtistContent
+                }
+            case .musicLibraryAlbum:
+                VStack(alignment: .leading, spacing: 0) {
+                    musicLibraryAlbumContent
+                }
             }
         }
         .frame(width: MenuRowMetrics.width)
         .padding(.bottom, bottomInset(for: route))
         .fixedSize(horizontal: false, vertical: store.isRouteMorphing)
     }
+
+    /// La route vers laquelle le caret d'une ligne source doit naviguer, `nil` si cette source
+    /// n'a pas (ou plus) de sous-niveau à montrer — c'est aussi ce qui décide si le caret
+    /// s'affiche (voir `showsChevron` au site d'appel).
+    private func chevronRoute(for source: AudioSourceDescriptor) -> PanelRoute? {
+        if source.id == "radio", store.canShowRadioStations { return .radioStations }
+        if source.id == "music_library", store.canShowMusicLibrarySearch { return .musicLibrarySearch }
+        return nil
+    }
+
+    /// Les trois routes de navigation de la bibliothèque musicale — utilisé par le garde qui
+    /// force un retour à la racine quand la source cesse d'être active en cours de parcours
+    /// (recherche, page artiste ou page album, peu importe la profondeur).
+    private static let musicLibraryRoutes: Set<PanelRoute> = [
+        .musicLibrarySearch, .musicLibraryArtist, .musicLibraryAlbum,
+    ]
 
     /// Change de route en armant le morphing (le timer, lui, vit dans `MenuBarShell`).
     private func navigate(to route: PanelRoute) {
@@ -144,6 +179,34 @@ struct MiloPanelView: View {
         morphFromHeight = morphHeight ?? activeHeight
         incomingHeight = 0
         store.navigate(to: route)
+    }
+
+    /// Revient à la route parente exacte (album → artiste → recherche), même bascule que
+    /// `navigate(to:)` mais déléguée à `MiloStore.navigateBack()`.
+    private func navigateBack() {
+        morphFromHeight = morphHeight ?? activeHeight
+        incomingHeight = 0
+        store.navigateBack()
+    }
+
+    /// Retour direct à la racine, pile vidée (`MiloStore.exitToRoot`) — pour toute ligne de
+    /// retour qui referme un sous-niveau JUSQU'À LA RACINE (radio, recherche bibliothèque
+    /// musicale), par opposition à `navigateBack()` qui ne remonte que d'un cran (pages artiste/
+    /// album). Un simple `navigate(to: .root)` empilerait la route quittée pour rien : rien ne la
+    /// dépilerait jamais depuis la racine, et la pile grossirait sans fin au fil des allers-
+    /// retours d'une session.
+    private func exitToRoot() {
+        morphFromHeight = morphHeight ?? activeHeight
+        incomingHeight = 0
+        store.exitToRoot()
+    }
+
+    /// Comme `exitToRoot()`, et efface en plus tout l'état de recherche/pages de la bibliothèque
+    /// musicale — utilisé quand la source cesse d'être active en cours de parcours, où il n'y a
+    /// de toute façon plus de route parente valide à retrouver.
+    private func exitMusicLibraryBrowsing() {
+        exitToRoot()
+        store.clearMusicLibraryBrowsing()
     }
 
     /// Hauteur imposée au contenu pendant la transition ; `nil` au repos, où la fenêtre suit la
@@ -202,6 +265,12 @@ struct MiloPanelView: View {
             store.showsPreferences ? PanelMetrics.bottomInset : PanelMetrics.bottomInsetIconRow
         case .radioStations:
             stations.isEmpty ? PanelMetrics.bottomInset : 0
+        case .musicLibrarySearch:
+            store.musicLibrarySearchResults.isEmpty ? PanelMetrics.bottomInset : 0
+        case .musicLibraryArtist:
+            store.musicLibraryArtistAlbums.isEmpty ? PanelMetrics.bottomInset : 0
+        case .musicLibraryAlbum:
+            store.musicLibraryAlbumSongs.isEmpty ? PanelMetrics.bottomInset : 0
         }
     }
 
@@ -231,11 +300,12 @@ struct MiloPanelView: View {
 
                 // L'ordre vient d'enabled_apps (backend) — jamais codé en dur ici.
                 ForEach(sources) { source in
+                    let route = chevronRoute(for: source)
                     SourceRow(
                         store: store,
                         source: source,
-                        showsChevron: source.id == "radio" && store.canShowRadioStations,
-                        onChevron: { navigate(to: .radioStations) }
+                        showsChevron: route != nil,
+                        onChevron: { if let route { navigate(to: route) } }
                     )
                 }
             }
@@ -287,7 +357,7 @@ struct MiloPanelView: View {
 
     @ViewBuilder
     private var radioContent: some View {
-        RadioBackRow { navigate(to: .root) }
+        PanelBackRow(title: L("source.radio")) { exitToRoot() }
 
         PanelDivider()
 
@@ -316,6 +386,46 @@ struct MiloPanelView: View {
             // alors qu'il n'y a rien à faire défiler.
             .scrollBounceBehavior(.basedOnSize)
         }
+    }
+
+    // MARK: - Recherche bibliothèque musicale
+
+    @ViewBuilder
+    private var musicLibraryContent: some View {
+        PanelBackRow(title: L("source.music_library")) {
+            store.clearMusicLibraryBrowsing()
+            exitToRoot()
+        }
+
+        PanelDivider()
+
+        MusicLibrarySearchField(store: store)
+
+        PanelDivider()
+
+        MusicLibrarySearchResultsList(store: store)
+    }
+
+    // MARK: - Page artiste (bibliothèque musicale)
+
+    @ViewBuilder
+    private var musicLibraryArtistContent: some View {
+        PanelBackRow(title: store.musicLibraryViewedArtist?.name ?? "") { navigateBack() }
+
+        PanelDivider()
+
+        MusicLibraryArtistAlbumsList(store: store)
+    }
+
+    // MARK: - Page album (bibliothèque musicale)
+
+    @ViewBuilder
+    private var musicLibraryAlbumContent: some View {
+        PanelBackRow(title: store.musicLibraryViewedAlbum?.name ?? "") { navigateBack() }
+
+        PanelDivider()
+
+        MusicLibraryAlbumSongsList(store: store)
     }
 }
 

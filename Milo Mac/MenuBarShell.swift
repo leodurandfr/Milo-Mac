@@ -118,6 +118,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         observeMultiroomExpansion()
         observePanelNavigation()
         observeStateForRepositioning()
+        observeMusicLibrarySearchForRepositioning()
         updateIcon()
     }
 
@@ -193,6 +194,36 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
                     self.positionPanel()
                 }
                 self.observeStateForRepositioning()
+            }
+        }
+    }
+
+    /// Recale le panneau à chaque nouvelle frappe de recherche OU nouvelle page artiste/album,
+    /// indépendamment de toute transition de route : contrairement à la liste des stations radio
+    /// (qui ne change de forme qu'à l'ouverture/fermeture de sa route, gérée par le morphing),
+    /// ce contenu change de forme APRÈS être entré dans la route (une frappe modifie les
+    /// résultats ; la page artiste/album arrive vide - chargement - puis se peuple une fois la
+    /// réponse réseau revenue) — retirer du texte, ou voir une liste se peupler après coup, peut
+    /// RÉTRÉCIR/grandir sans qu'aucune route ne change, et `NSHostingController` ne rétrécit
+    /// jamais la fenêtre de lui-même.
+    ///
+    /// Le garde `!isRouteMorphing` évite de se battre avec les `positionPanel()` du timer de
+    /// morphing pendant l'entrée/sortie de la route elle-même.
+    private func observeMusicLibrarySearchForRepositioning() {
+        withObservationTracking {
+            _ = store.musicLibrarySearchResults
+            _ = store.musicLibrarySearchLoading
+            _ = store.musicLibraryArtistAlbums
+            _ = store.musicLibraryArtistAlbumsLoading
+            _ = store.musicLibraryAlbumSongs
+            _ = store.musicLibraryAlbumSongsLoading
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.panel.isVisible, !self.store.isRouteMorphing {
+                    self.positionPanel()
+                }
+                self.observeMusicLibrarySearchForRepositioning()
             }
         }
     }

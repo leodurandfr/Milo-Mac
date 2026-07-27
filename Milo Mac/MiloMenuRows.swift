@@ -1083,7 +1083,8 @@ struct RadioStationRow: View {
 
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: toggle) {
-            StationFavicon(url: store.radioFaviconURL(for: station.favicon))
+            MenuThumbnail(url: store.radioFaviconURL(for: station.favicon),
+                          fallbackSystemImage: "dot.radiowaves.left.and.right")
 
             Text(station.name)
                 .font(.system(size: 13))
@@ -1119,17 +1120,19 @@ struct RadioStationRow: View {
     }
 }
 
-/// Logo d'une station, à gauche de son nom : 32×32 à coins arrondis, avec un
-/// fallback pour les favoris sans favicon (beaucoup n'en ont pas). L'image se
-/// recadre en `.fill` puis est rognée au carré arrondi, comme la grille de
+/// Vignette 32×32 à coins arrondis pour une ligne de sous-niveau (station radio, artiste/album/
+/// morceau de la bibliothèque musicale…), avec un repli SF Symbol pour les entrées sans image
+/// (beaucoup de favoris radio n'en ont pas ; tous les résultats de recherche n'ont pas de
+/// pochette). L'image se recadre en `.fill` puis est rognée au carré arrondi, comme la grille de
 /// favoris du frontend Milō.
-private struct StationFavicon: View {
+private struct MenuThumbnail: View {
     let url: URL?
+    let fallbackSystemImage: String
 
     private let size: CGFloat = 32
     private let cornerRadius: CGFloat = 7
 
-    /// Logo déjà chargé par CETTE vue. Le cache partagé sert les vues re-créées, celui-ci évite
+    /// Image déjà chargée par CETTE vue. Le cache partagé sert les vues re-créées, celui-ci évite
     /// de le relire à chaque passe de rendu.
     @State private var loaded: Image?
 
@@ -1166,14 +1169,15 @@ private struct StationFavicon: View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(Color(nsColor: .quaternarySystemFill))
             .overlay {
-                Image(systemName: "dot.radiowaves.left.and.right")
+                Image(systemName: fallbackSystemImage)
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
     }
 }
 
-/// Logos de stations déjà chargés, gardés en mémoire pour la durée de la session.
+/// Vignettes de `MenuThumbnail` déjà chargées, gardées en mémoire pour la durée de la session —
+/// logos de stations radio comme pochettes de résultats de recherche.
 ///
 /// Le cache HTTP d'URLSession ne suffit pas : une `AsyncImage` re-créée repart d'une passe de
 /// chargement ASYNCHRONE même quand l'octet est déjà en cache, et affiche donc son placeholder
@@ -1203,6 +1207,318 @@ struct RadioEmptyRow: View {
             .padding(.horizontal, MenuRowMetrics.contentInset)
             .padding(.vertical, 5)
             .frame(width: MenuRowMetrics.width, alignment: .leading)
+    }
+}
+
+// MARK: - Recherche bibliothèque musicale
+
+/// Champ de recherche : icône loupe + `TextField`, sans le chrome par défaut de macOS (bordure,
+/// fond) puisque c'est le verre du panneau qui sert de fond ici. Prend le focus dès l'entrée
+/// dans la route, comme une recherche Spotlight — le panneau force déjà `canBecomeKey`/
+/// `makeKey()` (`MenuBarShell`), donc rien de plus à faire côté fenêtre pour que ça marche.
+struct MusicLibrarySearchField: View {
+    @Bindable var store: MiloStore
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+
+            TextField(
+                "",
+                text: Binding(
+                    get: { store.musicLibrarySearchTerm },
+                    set: { store.updateMusicLibrarySearchTerm($0) }
+                ),
+                prompt: Text(L("musicLibrary.search.placeholder")).foregroundStyle(.tertiary)
+            )
+            .textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .focused($isFocused)
+        }
+        .padding(.horizontal, MenuRowMetrics.textInset)
+        .padding(.vertical, MenuRowMetrics.textRowVerticalPadding)
+        .frame(width: MenuRowMetrics.width, alignment: .leading)
+        .onAppear { isFocused = true }
+    }
+}
+
+/// Ligne d'état statique (invite avant recherche, "aucun résultat") — même habillage que
+/// `RadioEmptyRow`.
+private struct MusicLibraryStatusRow: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, MenuRowMetrics.contentInset)
+            .padding(.vertical, 5)
+            .frame(width: MenuRowMetrics.width, alignment: .leading)
+    }
+}
+
+private struct MusicLibraryLoadingRow: View {
+    var body: some View {
+        HStack {
+            Spacer(minLength: 0)
+            ProgressView()
+                .controlSize(.small)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+        .frame(width: MenuRowMetrics.width)
+    }
+}
+
+/// Le corps du sous-niveau recherche : le champ vit à part (`MiloPanelView.musicLibraryContent`),
+/// cette vue ne porte que ce qui suit — invite / chargement / aucun résultat / les trois
+/// sections de résultats. Même arbitrage de précédence que `SearchView.vue` : le chargement
+/// masque d'éventuels résultats précédents plutôt que de les laisser en arrière-plan pendant le
+/// debounce suivant.
+struct MusicLibrarySearchResultsList: View {
+    @Bindable var store: MiloStore
+
+    private var results: MusicLibrarySearchResults { store.musicLibrarySearchResults }
+
+    private var hasQuery: Bool {
+        !store.musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        if !hasQuery {
+            MusicLibraryStatusRow(text: L("musicLibrary.search.prompt"))
+        } else if store.musicLibrarySearchLoading {
+            MusicLibraryLoadingRow()
+        } else if results.isEmpty {
+            MusicLibraryStatusRow(text: L("musicLibrary.search.noResults"))
+        } else {
+            // Comme `radioContent` : la ScrollView est le seul élément élastique du sous-niveau,
+            // elle porte donc elle-même le retrait bas (voir `bottomInset(for:)`).
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    if !results.artists.isEmpty {
+                        MenuSectionHeader(text: L("musicLibrary.search.artists"))
+                        ForEach(results.artists) { artist in
+                            MusicLibraryArtistRow(store: store, artist: artist)
+                        }
+                    }
+                    if !results.albums.isEmpty {
+                        MenuSectionHeader(text: L("musicLibrary.search.albums"))
+                        ForEach(results.albums) { album in
+                            MusicLibraryAlbumRow(store: store, album: album)
+                        }
+                    }
+                    if !results.songs.isEmpty {
+                        MenuSectionHeader(text: L("musicLibrary.search.songs"))
+                        ForEach(results.songs) { song in
+                            MusicLibrarySongRow(store: store, song: song, context: results.songs)
+                        }
+                    }
+                }
+            }
+            .contentMargins(.bottom, PanelMetrics.bottomInset, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+/// Liste des albums de la page artiste (`MiloPanelView.musicLibraryArtistContent`) — même
+/// arbitrage chargement/vide/liste que `MusicLibrarySearchResultsList`, mais sans invite (on
+/// arrive déjà sur une intention explicite, pas un champ vide à remplir).
+struct MusicLibraryArtistAlbumsList: View {
+    @Bindable var store: MiloStore
+
+    var body: some View {
+        if store.musicLibraryArtistAlbumsLoading {
+            MusicLibraryLoadingRow()
+        } else if store.musicLibraryArtistAlbums.isEmpty {
+            MusicLibraryStatusRow(text: L("musicLibrary.artist.noAlbums"))
+        } else {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(store.musicLibraryArtistAlbums) { album in
+                        MusicLibraryAlbumRow(store: store, album: album)
+                    }
+                }
+            }
+            .contentMargins(.bottom, PanelMetrics.bottomInset, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+/// Liste des morceaux de la page album (`MiloPanelView.musicLibraryAlbumContent`) — même
+/// construction que `MusicLibraryArtistAlbumsList`. Ces morceaux (et non ceux d'une éventuelle
+/// recherche en cours) forment le CONTEXTE de lecture passé à chaque `MusicLibrarySongRow`.
+struct MusicLibraryAlbumSongsList: View {
+    @Bindable var store: MiloStore
+
+    var body: some View {
+        if store.musicLibraryAlbumSongsLoading {
+            MusicLibraryLoadingRow()
+        } else if store.musicLibraryAlbumSongs.isEmpty {
+            MusicLibraryStatusRow(text: L("musicLibrary.album.noSongs"))
+        } else {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(store.musicLibraryAlbumSongs) { song in
+                        MusicLibrarySongRow(store: store, song: song, context: store.musicLibraryAlbumSongs)
+                    }
+                }
+            }
+            .contentMargins(.bottom, PanelMetrics.bottomInset, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+/// Ligne d'artiste — tappable : mène à la page de l'artiste (ses albums), même caret que la
+/// ligne « Bibliothèque musicale » elle-même. Contrairement à `SourceRow`/Radio, le corps de la
+/// ligne n'a pas de second rôle à protéger (activer la source, etc.) : toute la ligne navigue,
+/// le chevron n'est qu'un repère visuel du sens de la navigation.
+struct MusicLibraryArtistRow: View {
+    @Bindable var store: MiloStore
+    let artist: MusicLibraryArtist
+
+    @State private var isHovering = false
+
+    var body: some View {
+        MenuRowContainer(isHovering: $isHovering, action: { store.showMusicLibraryArtist(artist) }) {
+            MenuThumbnail(url: store.musicLibraryCoverURL(for: artist.coverArt),
+                          fallbackSystemImage: "music.mic")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(artist.name)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+
+                if let albumCount = artist.albumCount {
+                    Text(L("musicLibrary.search.albumsCount", albumCount))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            ChevronCircle()
+        }
+    }
+}
+
+/// Ligne d'album — tappable, même raison que `MusicLibraryArtistRow` : mène à la page de
+/// l'album (ses morceaux), qu'on l'affiche depuis une recherche ou depuis la page d'un artiste.
+struct MusicLibraryAlbumRow: View {
+    @Bindable var store: MiloStore
+    let album: MusicLibraryAlbum
+
+    @State private var isHovering = false
+
+    var body: some View {
+        MenuRowContainer(isHovering: $isHovering, action: { store.showMusicLibraryAlbum(album) }) {
+            MenuThumbnail(url: store.musicLibraryCoverURL(for: album.coverArt),
+                          fallbackSystemImage: "square.stack")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(album.name)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+
+                if let artist = album.artist {
+                    Text(artist)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            ChevronCircle()
+        }
+    }
+}
+
+/// Ligne de morceau — la SEULE des trois dont le tap agit directement plutôt que de naviguer :
+/// il lance la lecture (`play_context` avec `context`, démarré à l'index du morceau touché),
+/// remplaçant ce qui joue déjà, comme un tap sur une station radio. `context` est la liste
+/// d'où vient le tap — les résultats de recherche, ou les morceaux de l'album ouvert — pas
+/// toujours `store.musicLibrarySearchResults.songs`.
+///
+/// Quand CE morceau est celui actuellement chargé par la bibliothèque musicale, l'icône de
+/// droite bascule sur play/pause (au lieu du simple repère au survol) et le tap bascule play/
+/// pause au lieu de relancer `play_context` depuis le début — même bouton, même geste que la
+/// ligne « en cours » de la racine (`NowPlayingRow`/`toggleNowPlayingPause`).
+struct MusicLibrarySongRow: View {
+    @Bindable var store: MiloStore
+    let song: MusicLibrarySong
+    let context: [MusicLibrarySong]
+
+    @State private var isHovering = false
+
+    private var isLoading: Bool { store.musicLibrarySongLoadingId == song.id }
+    private var isCurrent: Bool { store.isCurrentMusicLibrarySong(song) }
+    private var isPlayingNow: Bool { isCurrent && (store.nowPlaying?.isPlaying ?? false) }
+
+    /// Même empreinte pour spinner et icône play/pause que `RadioStationRow`, pour la même
+    /// raison : qu'ils tombent exactement à la même position.
+    private let trailingIconSize: CGFloat = 20
+
+    var body: some View {
+        MenuRowContainer(isHovering: $isHovering, action: handleTap) {
+            MenuThumbnail(url: store.musicLibraryCoverURL(for: song.coverArt),
+                          fallbackSystemImage: "music.note")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(song.title)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+
+                if let artist = song.artist {
+                    Text(artist)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.8)
+                } else if isPlayingNow {
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else if isCurrent {
+                    // Chargé mais en pause : l'icône invite à relancer, comme la ligne
+                    // « en cours » de la racine.
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else if isHovering {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: trailingIconSize, height: trailingIconSize)
+        }
+    }
+
+    private func handleTap() {
+        if isCurrent {
+            store.toggleNowPlayingPause()
+        } else {
+            store.playMusicLibrarySong(song, from: context)
+        }
     }
 }
 
@@ -1355,7 +1671,7 @@ private struct RowIcon: View {
 }
 
 
-// MARK: - Retour depuis la liste radio
+// MARK: - Retour depuis un sous-niveau
 
 /// Ligne de TITRE, mais cliquable : elle se cale sur `textInset` / `titleTopInset` et pèse le
 /// même semibold qu'un `MenuTitle` — pas de pastille, donc pas de `MenuRowContainer`, dont les
@@ -1368,7 +1684,11 @@ private struct RowIcon: View {
 ///
 /// Le texte, lui, ne bouge pas : la boîte s'étend de `textRowVerticalPadding` au-dessus de lui,
 /// qu'on retranche donc du retrait haut.
-struct RadioBackRow: View {
+///
+/// Partagée par tous les sous-niveaux du panneau (stations radio, recherche bibliothèque
+/// musicale…) — seul `title` change au site d'appel.
+struct PanelBackRow: View {
+    let title: String
     let onBack: () -> Void
     @State private var isHovering = false
 
@@ -1377,7 +1697,7 @@ struct RadioBackRow: View {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 11, weight: .semibold))
-                Text(L("source.radio"))
+                Text(title)
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
             }

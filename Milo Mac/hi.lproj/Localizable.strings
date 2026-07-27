@@ -23,6 +23,17 @@
 // MARK: - Radio
 "radio.noFavorites" = "कोई पसंदीदा स्टेशन नहीं";
 
+// MARK: - Music Library
+"musicLibrary.search.placeholder" = "कलाकार, एल्बम, गाने खोजें";
+"musicLibrary.search.prompt" = "अपनी लाइब्रेरी खोजें";
+"musicLibrary.search.noResults" = "कोई परिणाम नहीं";
+"musicLibrary.search.artists" = "कलाकार";
+"musicLibrary.search.albums" = "एल्बम";
+"musicLibrary.search.songs" = "गाने";
+"musicLibrary.search.albumsCount" = "%d एल्बम";
+"musicLibrary.artist.noAlbums" = "कोई एल्बम नहीं";
+"musicLibrary.album.noSongs" = "कोई गाना नहीं";
+
 // MARK: - Features
 "feature.multiroom" = "मल्टीरूम";
 "feature.equalizer" = "इक्वलाइज़र";

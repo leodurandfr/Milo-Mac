@@ -23,6 +23,17 @@
 // MARK: - Radio
 "radio.noFavorites" = "Aucune station favorite";
 
+// MARK: - Music Library
+"musicLibrary.search.placeholder" = "Rechercher artistes, albums, morceaux";
+"musicLibrary.search.prompt" = "Rechercher dans votre bibliothèque";
+"musicLibrary.search.noResults" = "Aucun résultat";
+"musicLibrary.search.artists" = "Artistes";
+"musicLibrary.search.albums" = "Albums";
+"musicLibrary.search.songs" = "Morceaux";
+"musicLibrary.search.albumsCount" = "%d albums";
+"musicLibrary.artist.noAlbums" = "Aucun album";
+"musicLibrary.album.noSongs" = "Aucun morceau";
+
 // MARK: - Features
 "feature.multiroom" = "Multiroom";
 "feature.equalizer" = "Égaliseur";

@@ -105,6 +105,86 @@ private struct RadioStationsResponse: Decodable {
     let stations: [RadioStation]
 }
 
+// MARK: - Music Library
+
+/// Morceau tel que servi par `/api/music-library/search` (dict Subsonic `song`, passé par
+/// `search3`). `raw` garde le dict TEL QUEL : `play_context` (voir `playMusicLibraryContext`)
+/// l'exige en retour, verbatim, comme contexte de file de lecture — le réduire à `id`/`title`/
+/// `artist`/`coverArt` perdrait des champs que le backend attend.
+struct MusicLibrarySong: Sendable, Identifiable {
+    let id: String
+    let title: String
+    let artist: String?
+    let coverArt: String?
+    let raw: [String: any Sendable]
+
+    init?(json: [String: Any]) {
+        guard let id = json["id"] as? String else { return nil }
+        self.id = id
+        title = json["title"] as? String ?? ""
+        artist = json["artist"] as? String
+        coverArt = json["coverArt"] as? String
+        raw = JSONSendable.dictionary(json)
+    }
+}
+
+/// Album tel que servi par `/api/music-library/search` (dict Subsonic `album`). Affiché en
+/// lecture seule ici — pas de vue de navigation par album dans cette app.
+struct MusicLibraryAlbum: Sendable, Identifiable {
+    let id: String
+    let name: String
+    let artist: String?
+    let coverArt: String?
+
+    init?(json: [String: Any]) {
+        guard let id = json["id"] as? String else { return nil }
+        self.id = id
+        name = json["name"] as? String ?? json["title"] as? String ?? ""
+        artist = json["artist"] as? String
+        coverArt = json["coverArt"] as? String
+    }
+}
+
+/// Artiste tel que servi par `/api/music-library/search` (dict Subsonic `artist`). Affiché en
+/// lecture seule ici — pas de vue de navigation par artiste dans cette app.
+struct MusicLibraryArtist: Sendable, Identifiable {
+    let id: String
+    let name: String
+    let albumCount: Int?
+    let coverArt: String?
+
+    init?(json: [String: Any]) {
+        guard let id = json["id"] as? String else { return nil }
+        self.id = id
+        name = json["name"] as? String ?? ""
+        albumCount = json["albumCount"] as? Int
+        coverArt = json["coverArt"] as? String ?? json["artistImageUrl"] as? String
+    }
+}
+
+/// Résultat complet d'une recherche (`search3` : artistes/albums/morceaux fuzzy-matchés).
+struct MusicLibrarySearchResults: Sendable {
+    let artists: [MusicLibraryArtist]
+    let albums: [MusicLibraryAlbum]
+    let songs: [MusicLibrarySong]
+
+    static let empty = MusicLibrarySearchResults(artists: [], albums: [], songs: [])
+
+    var isEmpty: Bool { artists.isEmpty && albums.isEmpty && songs.isEmpty }
+
+    init(artists: [MusicLibraryArtist], albums: [MusicLibraryAlbum], songs: [MusicLibrarySong]) {
+        self.artists = artists
+        self.albums = albums
+        self.songs = songs
+    }
+
+    init(json: [String: Any]) {
+        artists = (json["artists"] as? [[String: Any]] ?? []).compactMap(MusicLibraryArtist.init)
+        albums = (json["albums"] as? [[String: Any]] ?? []).compactMap(MusicLibraryAlbum.init)
+        songs = (json["songs"] as? [[String: Any]] ?? []).compactMap(MusicLibrarySong.init)
+    }
+}
+
 // MARK: - Multiroom
 
 /// Un client multiroom — un haut-parleur milo-client, ou le client local du Pi — tel que
@@ -634,6 +714,73 @@ final class MiloAPIService: Sendable {
 
     func stopRadioPlayback() async throws {
         try await send("/api/radio/stop", method: "POST")
+    }
+
+    // MARK: - Music Library API
+
+    /// Recherche fuzzy artistes/albums/morceaux (`search3`). Une requête vide renvoie trois
+    /// listes vides en 200, pas une erreur — le backend le garantit.
+    ///
+    /// `URLComponents` (et non une concaténation à la main, comme pour `favorites_only=true`
+    /// plus haut) : un terme de recherche, contrairement à un littéral fixe, a vraiment besoin
+    /// d'être pourcent-encodé (espaces, accents…).
+    func searchMusicLibrary(query: String) async throws -> MusicLibrarySearchResults {
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "query", value: query)]
+        let json = try await fetchJSON("/api/music-library/search?\(components.percentEncodedQuery ?? "")")
+        return MusicLibrarySearchResults(json: json)
+    }
+
+    /// Lance la lecture d'une file de morceaux (`play_context`), à partir de l'index `startIndex`
+    /// — même route générique que `sendPlaybackCommand`, mais avec des données, d'où une méthode à
+    /// part plutôt qu'un paramètre optionnel de plus sur celle-ci.
+    ///
+    /// `[String: any Sendable]` (et non `[String: Any]`) : ce paramètre franchit la frontière
+    /// d'isolation depuis le main actor (voir `MusicLibrarySong.raw`) — `Any` ferait échouer la
+    /// vérification stricte de concurrence à l'appel. La conversion vers `Any` (ce que
+    /// `JSONSerialization` exige) reste locale à cette méthode, qui ne franchit plus rien après.
+    func playMusicLibraryContext(tracks: [[String: any Sendable]], startIndex: Int) async throws {
+        let jsonTracks = tracks.map { $0.mapValues { $0 as Any } }
+        try await send("/api/audio/control/music_library", method: "POST",
+                       body: ["command": "play_context",
+                              "data": ["tracks": jsonTracks, "start_index": startIndex, "shuffle": false]])
+    }
+
+    /// Résout l'identifiant de pochette Subsonic (`coverArt`) d'un résultat de recherche en URL
+    /// affichable, via le proxy `/api/music-library/cover/{id}` (voir `nowPlayingArtworkURL` pour
+    /// le même principe de résolution IP).
+    func musicLibraryCoverURL(for coverId: String?, size: Int = 64) -> URL? {
+        guard let coverId, !coverId.isEmpty else { return nil }
+        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
+        var comps = URLComponents(string: "http://\(hostToUse):\(port)/api/music-library/cover/\(coverId)")
+        comps?.queryItems = [URLQueryItem(name: "size", value: String(size))]
+        return comps?.url
+    }
+
+    /// Albums d'un artiste (`getArtist`), pour la page artiste de la bibliothèque musicale.
+    /// Mêmes objets « album » que ceux de la recherche (le backend passe les deux par
+    /// `merge_albums`), donc `MusicLibraryAlbum` se réutilise tel quel. Le backend les range
+    /// sous la clé Subsonic `"album"` (singulier), imbriquée sous `"artist"`.
+    func fetchMusicLibraryArtistAlbums(artistId: String) async throws -> [MusicLibraryAlbum] {
+        guard let encodedId = artistId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            throw APIError.invalidURL
+        }
+        let json = try await fetchJSON("/api/music-library/artist/\(encodedId)")
+        let artist = json["artist"] as? [String: Any] ?? [:]
+        return (artist["album"] as? [[String: Any]] ?? []).compactMap(MusicLibraryAlbum.init)
+    }
+
+    /// Morceaux d'un album (`getAlbum`), pour la page album de la bibliothèque musicale. `id`
+    /// peut être le synthétique `mdisc:…` d'un album multi-disque fusionné — le backend l'étend
+    /// (concatène les morceaux des disques membres) de façon transparente, rien à faire ici. La
+    /// clé Subsonic du côté morceaux est `"song"` (singulier), imbriquée sous `"album"`.
+    func fetchMusicLibraryAlbumSongs(albumId: String) async throws -> [MusicLibrarySong] {
+        guard let encodedId = albumId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            throw APIError.invalidURL
+        }
+        let json = try await fetchJSON("/api/music-library/album/\(encodedId)")
+        let album = json["album"] as? [String: Any] ?? [:]
+        return (album["song"] as? [[String: Any]] ?? []).compactMap(MusicLibrarySong.init)
     }
 
     // MARK: - Now playing

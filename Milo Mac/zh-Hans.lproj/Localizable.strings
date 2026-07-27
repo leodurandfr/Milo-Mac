@@ -23,6 +23,17 @@
 // MARK: - Radio
 "radio.noFavorites" = "没有收藏的电台";
 
+// MARK: - Music Library
+"musicLibrary.search.placeholder" = "搜索艺术家、专辑、歌曲";
+"musicLibrary.search.prompt" = "搜索您的音乐库";
+"musicLibrary.search.noResults" = "无结果";
+"musicLibrary.search.artists" = "艺术家";
+"musicLibrary.search.albums" = "专辑";
+"musicLibrary.search.songs" = "歌曲";
+"musicLibrary.search.albumsCount" = "%d 张专辑";
+"musicLibrary.artist.noAlbums" = "没有专辑";
+"musicLibrary.album.noSongs" = "没有歌曲";
+
 // MARK: - Features
 "feature.multiroom" = "多房间";
 "feature.equalizer" = "均衡器";

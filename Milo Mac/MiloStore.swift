@@ -6,10 +6,18 @@ import Observation
 enum PanelRoute: Hashable, Sendable {
     case root
     case radioStations
+    case musicLibrarySearch
+    case musicLibraryArtist
+    case musicLibraryAlbum
 }
 
 /// Morceau affiché par `NowPlayingRow`, tous sources confondues — voir `MiloStore.nowPlaying`.
 struct NowPlayingInfo: Equatable {
+    /// Identifiant Subsonic du morceau (`track_id`), pour l'instant seulement pour la
+    /// bibliothèque musicale (`nil` partout ailleurs, radio compris) — sert à savoir si UNE
+    /// ligne précise de résultat de recherche/album est celle en cours (voir
+    /// `MiloStore.isCurrentMusicLibrarySong`).
+    let id: String?
     let title: String
     let artist: String?
     let artworkURL: URL?
@@ -57,6 +65,34 @@ final class MiloStore {
     private(set) var volume: VolumeStatus?
     private(set) var enabledApps: [String]?
     private(set) var radioFavorites: [RadioStation]?
+
+    /// Terme tapé dans le champ de recherche de la bibliothèque musicale. Vide au repos —
+    /// c'est cette valeur (pas encore débattue) qu'affiche le `TextField`.
+    private(set) var musicLibrarySearchTerm = ""
+    private(set) var musicLibrarySearchResults: MusicLibrarySearchResults = .empty
+    /// Vrai le temps d'un aller-retour réseau — PAS le temps du debounce, qui lui ne pose rien
+    /// (voir `updateMusicLibrarySearchTerm`).
+    private(set) var musicLibrarySearchLoading = false
+    /// Vrai dès la première recherche non vide envoyée — distingue « pas encore cherché »
+    /// (ligne d'invite) de « cherché, zéro résultat » (ligne « aucun résultat »).
+    private(set) var musicLibrarySearchHasSearched = false
+    /// Morceau dont la mise en lecture est en vol : sa ligne affiche un spinner.
+    private(set) var musicLibrarySongLoadingId: String?
+    private var musicLibrarySearchTask: Task<Void, Never>?
+
+    /// Artiste dont on visite la page (albums) — `nil` hors de cette route. Posé par
+    /// `showMusicLibraryArtist(_:)`, qui charge aussi `musicLibraryArtistAlbums`.
+    private(set) var musicLibraryViewedArtist: MusicLibraryArtist?
+    private(set) var musicLibraryArtistAlbums: [MusicLibraryAlbum] = []
+    private(set) var musicLibraryArtistAlbumsLoading = false
+
+    /// Album dont on visite la page (morceaux) — `nil` hors de cette route. Posé par
+    /// `showMusicLibraryAlbum(_:)`, qui charge aussi `musicLibraryAlbumSongs`. Ce sont CES
+    /// morceaux (et non ceux de la recherche) que `play_context` reçoit comme file quand on
+    /// lance la lecture depuis cette page — voir `playMusicLibrarySong(_:from:)`.
+    private(set) var musicLibraryViewedAlbum: MusicLibraryAlbum?
+    private(set) var musicLibraryAlbumSongs: [MusicLibrarySong] = []
+    private(set) var musicLibraryAlbumSongsLoading = false
 
     /// Dernier morceau détecté, tous sources confondues — alimente `NowPlayingAccordion`, PAS
     /// `nowPlaying` directement : contrairement à ce dernier, il reste peuplé un instant après
@@ -127,6 +163,12 @@ final class MiloStore {
     /// `multiroomExpanded` : `MenuBarShell` doit l'observer pour animer la hauteur de la fenêtre.
     private(set) var panelRoute: PanelRoute = .root
 
+    /// Routes déjà quittées, la plus proche en dernier — permet à `navigateBack()` de remonter
+    /// d'un cran exact (album → artiste → recherche), plutôt que de toujours retomber à la
+    /// racine comme le ferait un simple `navigate(to: .root)`. Radio n'a qu'un seul sous-niveau,
+    /// donc n'en a jamais eu besoin ; la bibliothèque musicale en empile jusqu'à trois.
+    private(set) var panelRouteStack: [PanelRoute] = []
+
     /// Route qui s'efface pendant la transition ; nil au repos. Sert de discriminateur : c'est
     /// sa mise à jour (et non celle de `panelRoute`) qui déclenche le morphing dans
     /// `MenuBarShell`, si bien qu'un retour à la racine à la fermeture du panneau — qui passe par
@@ -143,19 +185,45 @@ final class MiloStore {
     /// Vrai pendant la transition entre deux routes.
     var isRouteMorphing: Bool { outgoingPanelRoute != nil }
 
-    /// Navigue vers une route en armant le morphing. L'animation elle-même est pilotée par
+    /// Navigue vers une route en armant le morphing, et empile la route quittée pour que
+    /// `navigateBack()` puisse y revenir précisément. L'animation elle-même est pilotée par
     /// `MenuBarShell`, qui observe `outgoingPanelRoute`.
     func navigate(to route: PanelRoute) {
         guard route != panelRoute else { return }
+        panelRouteStack.append(panelRoute)
         outgoingPanelRoute = panelRoute
         routeMorphFraction = 0
         panelRoute = route
+    }
+
+    /// Revient à la route parente exacte (dépile), et non systématiquement à la racine — c'est
+    /// ce qu'appelle la ligne de retour de chaque sous-niveau de la bibliothèque musicale.
+    func navigateBack() {
+        let previous = panelRouteStack.popLast() ?? .root
+        guard previous != panelRoute else { return }
+        outgoingPanelRoute = panelRoute
+        routeMorphFraction = 0
+        panelRoute = previous
+    }
+
+    /// Retour à la racine en vidant TOUTE la pile, animé — contrairement à `navigateBack()`, qui
+    /// ne remonte que d'un cran. Utilisé quand la capacité qui justifiait tout le fil de
+    /// navigation en cours disparaît (la source active change pendant qu'on parcourt artiste →
+    /// album de la bibliothèque musicale) : il n'y a alors plus de parent valide à retrouver, on
+    /// saute directement à la racine.
+    func exitToRoot() {
+        panelRouteStack = []
+        guard panelRoute != .root else { return }
+        outgoingPanelRoute = panelRoute
+        routeMorphFraction = 0
+        panelRoute = .root
     }
 
     /// Retour immédiat à la racine, sans transition — à la fermeture du panneau, quand il n'y a
     /// plus rien à animer et qu'on ne veut surtout pas rouvrir sur une animation à moitié jouée.
     func resetPanelRoute() {
         panelRoute = .root
+        panelRouteStack = []
         outgoingPanelRoute = nil
         routeMorphFraction = 1
     }
@@ -535,6 +603,7 @@ final class MiloStore {
 
         guard let title, !title.isEmpty else { return nil }
         return NowPlayingInfo(
+            id: state.metadata["track_id"] as? String,
             title: title,
             artist: (artist?.isEmpty == false) ? artist : nil,
             artworkURL: connectionManager.apiService?.nowPlayingArtworkURL(for: artworkPath),
@@ -569,6 +638,7 @@ final class MiloStore {
         let badgeArtworkURL = trackArtworkURL != nil ? stationArtworkURL : nil
 
         return NowPlayingInfo(
+            id: nil,
             title: title,
             artist: (artist?.isEmpty == false) ? artist : nil,
             artworkURL: trackArtworkURL ?? stationArtworkURL,
@@ -663,6 +733,158 @@ final class MiloStore {
                 NSLog("❌ Failed to load radio favorites: %@", error.localizedDescription)
                 radioFavorites = nil
             }
+        }
+    }
+
+    // MARK: - Bibliothèque musicale
+
+    /// Vrai quand la source Bibliothèque musicale est posée : la recherche se fait à la demande,
+    /// il n'y a donc rien d'équivalent à `radioFavorites != nil` à attendre ici.
+    var canShowMusicLibrarySearch: Bool {
+        state?.activeSource == "music_library"
+            && ["waiting", "active"].contains(state?.sourceState.lowercased() ?? "")
+    }
+
+    /// Résout une pochette de résultat de recherche — même indirection que `radioFaviconURL`.
+    func musicLibraryCoverURL(for coverId: String?) -> URL? {
+        connectionManager.apiService?.musicLibraryCoverURL(for: coverId)
+    }
+
+    /// Met à jour le terme tapé et (re)programme la recherche débattue. Un terme vide efface
+    /// immédiatement — pas de debounce à payer pour revenir à l'invite, comme côté frontend web
+    /// (`onInput` y court-circuite `store.clearSearch()` de la même façon).
+    func updateMusicLibrarySearchTerm(_ term: String) {
+        musicLibrarySearchTerm = term
+        musicLibrarySearchTask?.cancel()
+
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            musicLibrarySearchResults = .empty
+            musicLibrarySearchHasSearched = false
+            musicLibrarySearchLoading = false
+            return
+        }
+
+        musicLibrarySearchLoading = true
+        musicLibrarySearchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.performMusicLibrarySearch(query: trimmed)
+        }
+    }
+
+    private func performMusicLibrarySearch(query: String) async {
+        guard let apiService = connectionManager.apiService else { return }
+        do {
+            let results = try await apiService.searchMusicLibrary(query: query)
+            // Une réponse en retard sur un terme déjà remplacé/effacé ne doit pas écraser
+            // l'affichage courant.
+            guard musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
+            musicLibrarySearchResults = results
+            musicLibrarySearchHasSearched = true
+        } catch {
+            NSLog("❌ Music library search failed: %@", error.localizedDescription)
+        }
+        musicLibrarySearchLoading = false
+    }
+
+    /// Efface tout l'état de navigation de la bibliothèque musicale (recherche ET pages
+    /// artiste/album) — à la sortie complète vers la racine, à la fermeture du panneau, ou quand
+    /// la source cesse d'être affichable (voir `MiloPanelView`). PAS appelé par la navigation
+    /// interne (album → artiste → recherche) : chaque page garde ses propres données tant qu'on
+    /// reste dans le fil de navigation, `showMusicLibraryArtist`/`showMusicLibraryAlbum` les
+    /// écrasant de toute façon à chaque nouvelle visite.
+    func clearMusicLibraryBrowsing() {
+        musicLibrarySearchTask?.cancel()
+        musicLibrarySearchTerm = ""
+        musicLibrarySearchResults = .empty
+        musicLibrarySearchHasSearched = false
+        musicLibrarySearchLoading = false
+
+        musicLibraryViewedArtist = nil
+        musicLibraryArtistAlbums = []
+        musicLibraryArtistAlbumsLoading = false
+
+        musicLibraryViewedAlbum = nil
+        musicLibraryAlbumSongs = []
+        musicLibraryAlbumSongsLoading = false
+    }
+
+    /// Ouvre la page d'un artiste (ses albums) — accessible depuis la section Artistes d'une
+    /// recherche. Charge en tâche de fond ; le garde après l'`await` évite qu'une réponse en
+    /// retard (l'utilisateur a déjà rouvert un AUTRE artiste entre-temps) n'écrase le bon
+    /// affichage.
+    func showMusicLibraryArtist(_ artist: MusicLibraryArtist) {
+        musicLibraryViewedArtist = artist
+        musicLibraryArtistAlbums = []
+        musicLibraryArtistAlbumsLoading = true
+        navigate(to: .musicLibraryArtist)
+
+        guard let apiService = connectionManager.apiService else {
+            musicLibraryArtistAlbumsLoading = false
+            return
+        }
+        Task {
+            do {
+                let albums = try await apiService.fetchMusicLibraryArtistAlbums(artistId: artist.id)
+                guard musicLibraryViewedArtist?.id == artist.id else { return }
+                musicLibraryArtistAlbums = albums
+            } catch {
+                NSLog("❌ Music library artist albums failed: %@", error.localizedDescription)
+            }
+            if musicLibraryViewedArtist?.id == artist.id { musicLibraryArtistAlbumsLoading = false }
+        }
+    }
+
+    /// Ouvre la page d'un album (ses morceaux) — accessible depuis la section Albums d'une
+    /// recherche OU depuis la page d'un artiste. Même garde anti-réponse-en-retard que
+    /// `showMusicLibraryArtist`.
+    func showMusicLibraryAlbum(_ album: MusicLibraryAlbum) {
+        musicLibraryViewedAlbum = album
+        musicLibraryAlbumSongs = []
+        musicLibraryAlbumSongsLoading = true
+        navigate(to: .musicLibraryAlbum)
+
+        guard let apiService = connectionManager.apiService else {
+            musicLibraryAlbumSongsLoading = false
+            return
+        }
+        Task {
+            do {
+                let songs = try await apiService.fetchMusicLibraryAlbumSongs(albumId: album.id)
+                guard musicLibraryViewedAlbum?.id == album.id else { return }
+                musicLibraryAlbumSongs = songs
+            } catch {
+                NSLog("❌ Music library album songs failed: %@", error.localizedDescription)
+            }
+            if musicLibraryViewedAlbum?.id == album.id { musicLibraryAlbumSongsLoading = false }
+        }
+    }
+
+    /// Vrai si CE morceau est celui actuellement chargé par la bibliothèque musicale (en lecture
+    /// OU en pause) — distingue la ligne « en cours » des autres dans une liste de résultats/
+    /// d'album, pour lui afficher play/pause plutôt que le survol générique.
+    func isCurrentMusicLibrarySong(_ song: MusicLibrarySong) -> Bool {
+        state?.activeSource == "music_library" && nowPlaying?.id == song.id
+    }
+
+    /// Lance la lecture d'un morceau : la file envoyée au backend est la liste COMPLÈTE des
+    /// morceaux du CONTEXTE d'où vient le tap (résultats de recherche, ou morceaux de l'album
+    /// ouvert), démarrée à l'index de celui touché — même geste que `playContext(songs, idx)`
+    /// côté frontend web.
+    func playMusicLibrarySong(_ song: MusicLibrarySong, from context: [MusicLibrarySong]) {
+        guard let apiService = connectionManager.apiService,
+              let index = context.firstIndex(where: { $0.id == song.id }) else { return }
+
+        let tracks = context.map { $0.raw }
+        musicLibrarySongLoadingId = song.id
+        Task {
+            do {
+                try await apiService.playMusicLibraryContext(tracks: tracks, startIndex: index)
+            } catch {
+                NSLog("❌ Music library play_context failed: %@", error.localizedDescription)
+            }
+            musicLibrarySongLoadingId = nil
         }
     }
 
