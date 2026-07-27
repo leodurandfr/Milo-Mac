@@ -367,30 +367,29 @@ struct SourceRow: View {
                 }
             }
 
+            Spacer(minLength: 4)
+
             if !isLoading, showsChevron {
                 // La ligne Radio porte DEUX commandes : activer la source (le corps de la
-                // ligne) et ouvrir les stations (la droite). La seconde ne se limite pas à
-                // l'encre du chevron — elle prend tout ce qui reste à droite du libellé, jusqu'au
-                // bord, pour offrir une cible large à une commande qu'on utilise autant que la
-                // ligne elle-même.
+                // ligne) et ouvrir les stations (le caret). Contrairement à Multiroom, activer
+                // Radio alors qu'elle l'est déjà ne fait rien (voir le garde de
+                // `MiloStore.selectSource`) — donc le caret doit rester la SEULE cible pour
+                // ouvrir les stations ; lui laisser tout le vide à droite du libellé ferait
+                // naviguer accidentellement au moindre clic sur la ligne.
                 //
-                // Le Spacer est DANS le bouton : c'est lui qui l'étire, et `contentShape` rend
-                // tout ce vide cliquable. Imbriquer un bouton dans un bouton fonctionne — le
-                // plus intérieur gagne dans sa propre zone.
+                // Imbriquer un bouton dans un bouton fonctionne — le plus intérieur gagne dans
+                // sa propre zone — mais ici sa zone reste celle du chevron (plus un peu de marge
+                // de confort), pas tout le reste de la ligne.
                 Button { onChevron?() } label: {
-                    HStack(spacing: 0) {
-                        Spacer(minLength: 4)
-                        ChevronCircle()
-                    }
-                    // Sans ça, le bouton se moule sur le chevron et sa zone ne fait que sa
-                    // hauteur d'encre. On l'étire sur la hauteur de la ligne, que fixe la
-                    // pastille de la source (26 pt).
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
+                    ChevronCircle()
+                        .padding(.horizontal, 6)
+                        // Sans ça, le bouton se moule sur le chevron et sa zone ne fait que sa
+                        // hauteur d'encre. On l'étire sur la hauteur de la ligne, que fixe la
+                        // pastille de la source (26 pt).
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-            } else {
-                Spacer(minLength: 4)
             }
         }
         .opacity(needsSetup ? 0.55 : 1)
