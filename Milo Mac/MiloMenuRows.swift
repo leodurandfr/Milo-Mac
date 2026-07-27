@@ -849,6 +849,11 @@ struct RadioStationRow: View {
     private var isPlaying: Bool { store.playingRadioStationId == station.id }
     private var isLoading: Bool { store.radioStationLoadingId == station.id }
 
+    /// Même empreinte pour les trois états (spinner, stop, play) afin qu'ils tombent
+    /// exactement à la même position — sinon le spinner (mis à l'échelle) et le
+    /// symbole SF (dimensionné par sa police) ne se centrent pas au même endroit.
+    private let trailingIconSize: CGFloat = 20
+
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: toggle) {
             StationFavicon(url: store.radioFaviconURL(for: station.favicon))
@@ -859,15 +864,22 @@ struct RadioStationRow: View {
 
             Spacer(minLength: 8)
 
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
-            } else if isPlaying {
-                Image(systemName: "stop.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+            Group {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.8)
+                } else if isPlaying {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                } else if isHovering {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
             }
+            .frame(width: trailingIconSize, height: trailingIconSize)
         }
     }
 
