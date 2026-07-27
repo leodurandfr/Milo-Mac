@@ -187,7 +187,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     private var revealStartFraction: CGFloat = 0
     private var revealTargetFraction: CGFloat = 0
     private var revealStartTime: CFTimeInterval = 0
-    private let revealDuration: CFTimeInterval = 0.28
+    private let revealDuration: CFTimeInterval = 0.45
 
     private func animateReveal(to target: CGFloat) {
         revealTimer?.invalidate()

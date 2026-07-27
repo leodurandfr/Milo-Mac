@@ -99,11 +99,6 @@ enum MenuRowMetrics {
 
     static let iconSize: CGFloat = 26
 
-    /// Pastille du caret « voir les stations », à droite de la ligne Radio. Franchement plus
-    /// petite que la pastille d'icône (26 pt) : c'est une commande secondaire, pas l'identité
-    /// de la ligne.
-    static let chevronCircleSize: CGFloat = 17
-
     /// Couleur de la pastille active.
     ///
     /// `Color.accentColor` seul rend trop foncé : mesuré à travers le verre sur fond blanc,
@@ -360,10 +355,10 @@ struct SourceRow: View {
 
             if !isLoading, showsChevron {
                 // La ligne Radio porte DEUX commandes : activer la source (le corps de la
-                // ligne) et ouvrir les stations (la droite). La seconde ne se limite pas à sa
-                // pastille — elle prend tout ce qui reste à droite du libellé, jusqu'au bord.
-                // Une cible de 17 pt serait sinon bien trop chiche pour une commande qu'on
-                // utilise autant que la ligne elle-même.
+                // ligne) et ouvrir les stations (la droite). La seconde ne se limite pas à
+                // l'encre du chevron — elle prend tout ce qui reste à droite du libellé, jusqu'au
+                // bord, pour offrir une cible large à une commande qu'on utilise autant que la
+                // ligne elle-même.
                 //
                 // Le Spacer est DANS le bouton : c'est lui qui l'étire, et `contentShape` rend
                 // tout ce vide cliquable. Imbriquer un bouton dans un bouton fonctionne — le
@@ -373,9 +368,9 @@ struct SourceRow: View {
                         Spacer(minLength: 4)
                         ChevronCircle()
                     }
-                    // Sans ça, le bouton se moule sur la pastille et sa zone ne fait que
-                    // 17 pt de haut — large mais plate. On l'étire sur la hauteur de la ligne,
-                    // que fixe la pastille de la source (26 pt). Mesuré : 159,5 × 26.
+                    // Sans ça, le bouton se moule sur le chevron et sa zone ne fait que sa
+                    // hauteur d'encre. On l'étire sur la hauteur de la ligne, que fixe la
+                    // pastille de la source (26 pt).
                     .frame(maxHeight: .infinity)
                     .contentShape(Rectangle())
                 }
@@ -971,42 +966,66 @@ private struct MenuRowContainer<Content: View>: View {
     }
 }
 
-/// Caret « voir les stations », dans sa pastille.
+/// Caret « voir les stations » de la ligne Radio.
 ///
-/// Une pastille, et non un caret nu : nu, il se lisait comme un ornement de la ligne — un
-/// simple « il y a une suite » — alors que c'est une commande à part, qui mène ailleurs que le
-/// clic sur la ligne. Le disque le dit. Il reprend le gris des pastilles inactives (`.tertiary`),
-/// pour ne pas se disputer la vedette avec la pastille de la source, deux fois plus grande.
+/// Visuellement IDENTIQUE au caret Multiroom (`ExpandChevron`) au repos : un chevron nu, non
+/// pastillé, à la même taille et la même teinte. La seule différence est le comportement — celui-ci
+/// est statique et pointe toujours à droite (il MÈNE AILLEURS, vers la liste des stations), là où
+/// celui du Multiroom bascule en dépliant sur place.
 private struct ChevronCircle: View {
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(.tertiary)
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: MenuRowMetrics.chevronCircleSize,
-               height: MenuRowMetrics.chevronCircleSize)
+        Image(systemName: "chevron.right")
+            // RELEVÉ AU PIXEL sur le caret « AirPods Pro » du panneau « Son » (capture 2×) : encre
+            // ~10,5 × 6 pt, trait ~1,5 pt — un chevron FIN (`.regular`), pas dense. C'est le poids,
+            // pas la taille, qui le distingue ; `.semibold` le rendait lourd et sombre.
+            .font(.system(size: 11, weight: .regular))
+            .foregroundStyle(.secondary)
+            .padding(.trailing, 2)
     }
 }
 
 /// Chevron d'expansion de la ligne Multiroom.
 ///
-/// Nu et non pastillé, contrairement au caret Radio : Radio MÈNE AILLEURS (une autre vue),
-/// là où celui-ci déplie sur PLACE. C'est exactement le langage du panneau « Son » sous
-/// AirPods — un chevron qui pointe à droite fermé, vers le bas ouvert.
+/// Même chevron nu que la ligne Radio (`ChevronCircle`), mais animé : Radio MÈNE AILLEURS (une
+/// autre vue) et reste figé à droite, là où celui-ci déplie sur PLACE. C'est exactement le langage
+/// du panneau « Son » sous AirPods — un chevron qui pointe à droite fermé, vers le bas ouvert.
 private struct ExpandChevron: View {
     let isExpanded: Bool
 
+    /// La rotation et la « pulsation » (scale + opacity) sont un état LOCAL, purement graphique :
+    /// aucune n'affecte la taille de la ligne, donc pas de risque de faire sauter la fenêtre
+    /// (contrairement à un `withAnimation` sur `multiroomExpanded`, cf. `toggleMultiroom`).
+    @State private var rotated = false
+    @State private var faded = false
+
     var body: some View {
         Image(systemName: "chevron.right")
-            .font(.system(size: 12, weight: .semibold))
+            // Identique au caret Radio (`ChevronCircle`) : chevron fin `.regular` relevé sur le
+            // caret « AirPods Pro » du panneau « Son ».
+            .font(.system(size: 11, weight: .regular))
             .foregroundStyle(.secondary)
             // +90° horaire : « > » fermé bascule sur « ⌄ » ouvert.
-            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .rotationEffect(.degrees(rotated ? 90 : 0))
+            // Le caret rétrécit + s'efface, change de sens hors-champ, puis regrandit + réapparaît
+            // à sa nouvelle position — plutôt qu'une rotation nue en place.
+            .scaleEffect(faded ? 0.4 : 1)
+            .opacity(faded ? 0 : 1)
             .padding(.trailing, 2)
+            .onAppear { rotated = isExpanded }
+            .onChange(of: isExpanded) { _, newValue in
+                // Deux phases ENCHAÎNÉES, pas superposées : le `completion:` garantit que la phase 2
+                // ne part qu'une fois la phase 1 finie. Sans lui, SwiftUI verrait `faded` passer à
+                // `true` puis `false` dans la même passe et n'animerait jamais le fade-out.
+                //   Phase 1 : rétrécir + s'effacer.
+                //   Phase 2 : basculer le sens HORS-CHAMP (le caret est invisible), puis regrandir +
+                //   réapparaître — le nouveau caret « arrive » donc déjà tourné.
+                withAnimation(.easeIn(duration: 0.18)) {
+                    faded = true
+                } completion: {
+                    rotated = newValue
+                    withAnimation(.spring(duration: 0.45)) { faded = false }
+                }
+            }
     }
 }
 
