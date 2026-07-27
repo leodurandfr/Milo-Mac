@@ -25,6 +25,12 @@
     </array>
     <key>CFBundleGetInfoString</key>
     <string>Milo Mac Audio Controller</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Milō a besoin du réseau local pour découvrir et contrôler votre appareil Milō (milo.local).</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_http._tcp</string>
+    </array>
     <key>UIAppFonts</key>
     <array>
         <string>Fonts/SpaceMono-Regular.ttf</string>
