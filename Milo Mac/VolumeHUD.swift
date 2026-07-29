@@ -81,6 +81,11 @@ final class VolumeHUD {
 
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) + 1)
         window.backgroundColor = NSColor.clear
+        // Le fond du HUD (matériau .hudWindow + overlay sombre) reste visuellement
+        // sombre quel que soit le mode système. Sans forcer l'apparence, les couleurs
+        // dynamiques comme secondaryLabelColor se résolvent pour un fond clair en light
+        // mode et rendent le texte "-XX dB" quasi noir sur ce fond sombre.
+        window.appearance = NSAppearance(named: .darkAqua)
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = false
