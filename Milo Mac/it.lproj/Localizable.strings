@@ -12,7 +12,7 @@
 "source.spotify" = "Spotify";
 "source.bluetooth" = "Bluetooth";
 "source.mac" = "macOS";
-"source.radio" = "Radio via Internet";
+"source.radio" = "Web radio";
 "source.podcast" = "Podcast";
 "source.airplay" = "AirPlay";
 "source.cd" = "Lettore CD";
