@@ -111,6 +111,15 @@ enum MenuRowMetrics {
     static let activeCircleColor = Color.accentColor
         .mix(with: Color(red: 0.2, green: 1, blue: 1), by: 0.18)
 
+    /// Couleur de la pastille inactive (grise).
+    ///
+    /// `.tertiary` (un style de PREMIER PLAN, pensé pour du texte) composite du NOIR à ~25 %
+    /// en apparence claire une fois utilisé comme fond — nettement plus sombre que la pastille
+    /// grise de « Son », qui est un simple remplissage système, pas du texte estompé. On prend
+    /// donc `tertiarySystemFill`, du même registre que `rowHoverFill` (`secondarySystemFill`)
+    /// juste en dessous, et qui bascule lui aussi tout seul entre clair et sombre.
+    static let inactiveCircleFill = Color(nsColor: .tertiarySystemFill)
+
     /// Fond d'une ligne survolée.
     ///
     /// Et non `.selection`, qui est teinté d'accent (bleu) : ce n'est pas ce que font Son ni
@@ -1666,19 +1675,25 @@ private struct RowIcon: View {
     let isActive: Bool
     var isLoading: Bool = false
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
             Circle()
                 .fill(isActive ? AnyShapeStyle(MenuRowMetrics.activeCircleColor)
-                               : AnyShapeStyle(.tertiary))
+                               : AnyShapeStyle(MenuRowMetrics.inactiveCircleFill))
 
             if isLoading {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.85)
-                    // Blanc sur la pastille active (bleue) pour le contraste ; teinte par
-                    // défaut sur la pastille grise, déjà lisible.
-                    .tint(isActive ? .white : nil)
+                    // `.tint` ne change rien ici : le spinneur tournant d'AppKit
+                    // (`NSProgressIndicator` style `.spinning`) ignore la teinte et se dessine
+                    // toujours selon l'apparence effective — noir en clair, blanc en sombre.
+                    // Sur la pastille active (bleue) il faut du blanc dans les DEUX apparences,
+                    // donc on force le sous-arbre en apparence sombre pour obtenir ce blanc ;
+                    // sur la pastille grise, le noir/blanc par défaut reste déjà lisible.
+                    .colorScheme(isActive ? .dark : colorScheme)
             } else {
                 icon.image
                     .foregroundStyle(isActive ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
