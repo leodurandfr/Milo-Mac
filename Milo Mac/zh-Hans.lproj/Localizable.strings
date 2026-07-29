@@ -12,7 +12,7 @@
 "source.spotify" = "Spotify";
 "source.bluetooth" = "蓝牙";
 "source.mac" = "macOS";
-"source.radio" = "广播";
+"source.radio" = "网络电台";
 "source.podcast" = "播客";
 "source.airplay" = "AirPlay";
 "source.cd" = "CD 播放器";
