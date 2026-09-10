@@ -10,3 +10,8 @@ Control remotely Milō from your Mac like it has always been here.
 
 [WIP...]
 
+## License
+
+[GPL-3.0](LICENSE)
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
