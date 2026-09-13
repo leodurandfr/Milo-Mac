@@ -120,7 +120,7 @@ See *Concurrency* for the serialization rule on `RocVADDevice` — it is the one
 
 ## Localization
 
-Always use `L("key")` (`LocalizationHelper.swift`) — never `NSLocalizedString` directly. Any new string must be added to **all 8** `*.lproj/Localizable.strings` (`en`, `fr`, `de`, `es`, `it`, `pt-PT`, `hi`, `zh-Hans`). English and French are authoritative and kept in lockstep (identical line count — currently 92).
+Always use `L("key")` (`LocalizationHelper.swift`) — never `NSLocalizedString` directly. Any new string must be added to **all 8** `*.lproj/Localizable.strings` (`en`, `fr`, `de`, `es`, `it`, `pt-PT`, `hi`, `zh-Hans`). English and French are authoritative and kept in lockstep (identical line count — currently 112).
 
 The product is branded **Milō**, with the macron. The Xcode target's `PRODUCT_NAME` is `Milo` (so the Swift module is `Milo`, which is what the tests `@testable import`), the bundle is `Milō.app`, the bundle id is `leodurand.Milo-Mac`, and the repo folder is `Milo Mac`. One scheme: `Milo Mac`. Don't strip the macron from user-facing text.
 

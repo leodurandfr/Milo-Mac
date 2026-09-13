@@ -58,6 +58,7 @@ enum AudioSourceCatalog {
         .init(id: "cd",        titleKey: "source.cd",        icon: .asset("cd-icon")),
         .init(id: "dlna",      titleKey: "source.dlna",      icon: .asset("dlna-icon")),
         .init(id: "qobuz",     titleKey: "source.qobuz",     icon: .asset("qobuz-icon")),
+        .init(id: "tidal",     titleKey: "source.tidal",     icon: .asset("tidal-icon")),
         .init(id: "music_library", titleKey: "source.music_library", icon: .asset("music-library-icon"))
     ]
 

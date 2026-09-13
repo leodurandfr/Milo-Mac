@@ -18,6 +18,7 @@
 "source.cd" = "CD Player";
 "source.dlna" = "DLNA";
 "source.qobuz" = "Qobuz";
+"source.tidal" = "TIDAL";
 "source.music_library" = "Music Library";
 
 // MARK: - Radio

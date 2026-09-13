@@ -352,7 +352,7 @@ private enum NowPlayingMetrics {
     /// Largeur de la colonne titre/artiste, dimensionnée pour le nombre de boutons RÉELLEMENT
     /// affichés par la source active — pas un espace fixe dimensionné pour le pire cas. Radio
     /// (un seul bouton stop/relance) et les récepteurs passifs (aucun bouton : AirPlay, DLNA,
-    /// Qobuz) gagnent donc plus de place pour le titre que Spotify/bibliothèque musicale/CD
+    /// Qobuz) gagnent donc plus de place pour le titre que Spotify/bibliothèque musicale/CD/TIDAL
     /// (play-pause + suivant).
     static func textWidth(controlCount: Int) -> CGFloat {
         let controlsWidth = controlCount == 0 ? 0

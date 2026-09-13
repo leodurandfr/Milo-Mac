@@ -38,9 +38,15 @@ struct NowPlayingInfo: Equatable {
 /// `COMMANDS` est vide côté backend, et lui envoyer pause/next échouerait en 400 : elles
 /// n'apparaissent dans aucune des deux listes. Podcast n'a pas de notion d'épisode suivant
 /// (pas de commande `next` dans sa table), d'où son absence de `nextSources`.
+///
+/// TIDAL, en revanche, est un lecteur ACTIF comme Spotify malgré son statut de récepteur
+/// Connect : le daemon tisoc expose pause/resume/next/prev (`COMMANDS` de
+/// `backend/sources/tidal/source.py`), donc la source figure dans les deux listes. Seul `seek`
+/// lui manque — le protocole contrôleur ne l'expose pas —, ce qui ne change rien ici : le
+/// panneau n'offre pas de barre de progression cliquable.
 private enum NowPlayingControls {
-    static let pauseResumeSources: Set<String> = ["spotify", "music_library", "cd", "podcast"]
-    static let nextSources: Set<String> = ["spotify", "music_library", "cd"]
+    static let pauseResumeSources: Set<String> = ["spotify", "music_library", "cd", "podcast", "tidal"]
+    static let nextSources: Set<String> = ["spotify", "music_library", "cd", "tidal"]
 }
 
 /// Source de vérité de l'UI : les vues SwiftUI observent ces propriétés et se re-rendent
