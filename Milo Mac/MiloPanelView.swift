@@ -410,7 +410,13 @@ struct MiloPanelView: View {
 
     @ViewBuilder
     private var musicLibraryArtistContent: some View {
-        PanelBackRow(title: store.musicLibraryViewedArtist?.name ?? "") { navigateBack() }
+        // Pas de bouton tant qu'aucun album n'est chargé : il n'y aurait aucune file à bâtir,
+        // et un bouton qui ne fait rien vaut moins qu'un bouton qui n'est pas encore là.
+        PanelBackRow(title: store.musicLibraryViewedArtist?.name ?? "",
+                     play: store.musicLibraryArtistAlbums.isEmpty ? nil : .init(
+                        isLoading: store.isMusicLibraryArtistPlayLoading,
+                        isPlaying: store.isMusicLibraryArtistPlaying,
+                        action: { store.playMusicLibraryArtist() })) { navigateBack() }
 
         PanelDivider()
 
@@ -421,7 +427,11 @@ struct MiloPanelView: View {
 
     @ViewBuilder
     private var musicLibraryAlbumContent: some View {
-        PanelBackRow(title: store.musicLibraryViewedAlbum?.name ?? "") { navigateBack() }
+        PanelBackRow(title: store.musicLibraryViewedAlbum?.name ?? "",
+                     play: store.musicLibraryAlbumSongs.isEmpty ? nil : .init(
+                        isLoading: store.isMusicLibraryAlbumPlayLoading,
+                        isPlaying: store.isMusicLibraryAlbumPlaying,
+                        action: { store.playMusicLibraryAlbum() })) { navigateBack() }
 
         PanelDivider()
 

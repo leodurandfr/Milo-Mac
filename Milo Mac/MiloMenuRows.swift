@@ -1761,21 +1761,108 @@ private struct RowIcon: View {
 ///
 /// Partagée par tous les sous-niveaux du panneau (stations radio, recherche bibliothèque
 /// musicale…) — seul `title` change au site d'appel.
+/// Bouton de lecture posé à droite du titre d'un sous-niveau, quand ce sous-niveau a quelque
+/// chose à lancer EN ENTIER : les pages artiste et album de la bibliothèque musicale. `nil`
+/// ailleurs (liste des stations, recherche), où le titre ne désigne aucune file.
+struct PanelBackPlayAction {
+    /// La file est en train d'être assemblée : spinner à la place de l'icône.
+    var isLoading: Bool
+    /// Ce que l'icône ANNONCE, c'est-à-dire ce que le clic va faire — `true` montre donc pause.
+    var isPlaying: Bool
+    var action: () -> Void
+}
+
 struct PanelBackRow: View {
     let title: String
+    /// Avant `onBack` dans la liste des paramètres, et pas après : la fermeture finale est celle
+    /// que les sites d'appel passent en trailing closure, ce qui n'est vrai que du DERNIER
+    /// paramètre. Défaut `nil`, donc les sous-niveaux sans lecture globale n'écrivent rien.
+    var play: PanelBackPlayAction? = nil
     let onBack: () -> Void
     @State private var isHovering = false
+
+    /// Même largeur que les icônes de fin de ligne de `MusicLibrarySongRow` — l'en-tête
+    /// surplombe justement leur colonne, spinner et symbole doivent y tomber au même endroit.
+    private let trailingIconSize: CGFloat = 20
+
+    /// Écart entre la fin du titre et l'icône de lecture, à l'image du `textControlsGap` de la
+    /// ligne « en cours » : le fondu meurt là, il ne lèche jamais l'icône.
+    private let titleIconGap: CGFloat = 4
+
+    /// Longueur du fondu de fin de titre — même valeur que la ligne « en cours »
+    /// (`NowPlayingMetrics.textFade`) et que les noms multiroom (`MultiroomMetrics.nameFade`),
+    /// pour un rendu identique d'un bout à l'autre du panneau.
+    private let titleFade: CGFloat = 14
 
     var body: some View {
         Button(action: onBack) {
             HStack(spacing: 4) {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 11, weight: .semibold))
+
+                // Le titre prend TOUTE la place restante, au lieu de sa largeur naturelle suivie
+                // d'un `Spacer` : c'est cette largeur que le fondu vient mordre. Un nom d'album
+                // ou d'artiste est arbitrairement long, et se faire couper par « … » jurerait
+                // avec le reste du panneau, où tout déborde en dégradé.
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                Spacer()
+                    .lineLimit(1)
+                    // Taille NATURELLE puis rognée dans la place disponible — même construction
+                    // que `FadingText`, à ceci près qu'ici la largeur n'est pas connue d'avance
+                    // (elle dépend du chevron et de la présence de l'icône), d'où un masque à
+                    // fondu de longueur fixe plutôt que ses `stops` proportionnels.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .clipped()
+                    .mask(
+                        HStack(spacing: 0) {
+                            Rectangle()
+                            LinearGradient(colors: [.black, .clear],
+                                           startPoint: .leading, endPoint: .trailing)
+                                .frame(width: titleFade)
+                        }
+                    )
+                    // L'icône est posée en overlay, donc elle ne réserve aucune place : c'est ce
+                    // retrait qui la lui garde, et qui fait finir le fondu avant elle.
+                    .padding(.trailing, play == nil ? 0 : trailingIconSize + titleIconGap)
             }
-            .padding(.horizontal, MenuRowMetrics.textInset - MenuRowMetrics.highlightInset)
+            // En overlay, et NON dans la HStack : un overlay ne dimensionne pas son hôte, donc
+            // l'icône ne peut pas rendre cet en-tête plus haut que ceux des sous-niveaux qui
+            // n'en ont pas — ni le faire tressauter quand elle laisse la place au spinner, qui
+            // ne fait pas la même taille. La ligne reste calée sur son texte, toujours.
+            .overlay(alignment: .trailing) {
+                if let play {
+                    // Un bouton DANS le bouton de la ligne : le plus intérieur gagne dans sa
+                    // propre zone, exactement comme le caret de `SourceRow`. Ici cette zone se
+                    // limite à l'icône, le reste de la ligne continue de revenir en arrière.
+                    Button(action: play.action) {
+                        Group {
+                            if play.isLoading {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: play.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(width: trailingIconSize)
+                        // Toute la hauteur de la ligne comme cible, sans en dicter aucune :
+                        // dans un overlay, `.infinity` se règle sur l'hôte.
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L(play.isPlaying ? "accessibility.pause" : "accessibility.play"))
+                }
+            }
+            .padding(.leading, MenuRowMetrics.textInset - MenuRowMetrics.highlightInset)
+            // Le titre s'aligne sur la grille du TEXTE (15 pt), mais l'icône de lecture s'aligne
+            // sur la colonne des icônes de fin de ligne (8 pt du bord de ligne, voir
+            // `MenuRowContainer`) : elle coiffe la colonne play/pause des morceaux juste en
+            // dessous, un retrait de titre l'en décalerait de 2 pt.
+            .padding(.trailing, play == nil ? MenuRowMetrics.textInset - MenuRowMetrics.highlightInset : 8)
             .padding(.vertical, MenuRowMetrics.textRowVerticalPadding)
             .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
                    alignment: .leading)

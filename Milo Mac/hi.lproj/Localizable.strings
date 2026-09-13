@@ -87,6 +87,8 @@
 "accessibility.volume_slider" = "वॉल्यूम स्लाइडर";
 "accessibility.volume_decrease" = "वॉल्यूम कम करें";
 "accessibility.volume_increase" = "वॉल्यूम बढ़ाएं";
+"accessibility.play" = "चलाएँ";
+"accessibility.pause" = "रोकें";
 "accessibility.milo_icon" = "Milo";
 
 // MARK: - ROC VAD Settings (enum localization)

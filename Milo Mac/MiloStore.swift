@@ -84,6 +84,23 @@ final class MiloStore {
     private(set) var musicLibrarySearchHasSearched = false
     /// Morceau dont la mise en lecture est en vol : sa ligne affiche un spinner.
     private(set) var musicLibrarySongLoadingId: String?
+    /// Artiste dont le bouton d'en-tête a lancé la file en cours. Le backend ne publie PAS ce
+    /// qu'est la file — seulement le morceau du moment — donc rien ne permet de redécouvrir
+    /// après coup qu'« on écoute cet artiste ». C'est une mémoire d'affichage, pas un état du
+    /// système : elle s'efface dès qu'une autre mise en lecture prend la main (un morceau, un
+    /// album) ou qu'on rouvre une page artiste, où le bouton repart donc sur play.
+    ///
+    /// L'album, lui, n'a pas besoin de cette béquille : sa liste de morceaux est affichée, donc
+    /// `isCurrentMusicLibraryAlbum` peut le DÉDUIRE du morceau en cours, et survit à un
+    /// aller-retour hors de la page.
+    private(set) var musicLibraryPlayingArtistId: String?
+
+    /// Album ou artiste dont la FILE est en train d'être assemblée par le bouton de lecture de
+    /// l'en-tête : son icône laisse la place à un spinner. Distinct de
+    /// `musicLibrarySongLoadingId` — lancer un artiste demande un fetch d'album par sortie et
+    /// peut durer, là où un morceau part en une requête, et les deux spinners ne visent pas la
+    /// même ligne.
+    private(set) var musicLibraryContextLoadingId: String?
     private var musicLibrarySearchTask: Task<Void, Never>?
 
     /// Artiste dont on visite la page (albums) — `nil` hors de cette route. Posé par
@@ -839,6 +856,9 @@ final class MiloStore {
         musicLibraryViewedAlbum = nil
         musicLibraryAlbumSongs = []
         musicLibraryAlbumSongsLoading = false
+
+        musicLibraryContextLoadingId = nil
+        musicLibraryPlayingArtistId = nil
     }
 
     /// Ouvre la page d'un artiste (ses albums) — accessible depuis la section Artistes d'une
@@ -846,6 +866,10 @@ final class MiloStore {
     /// retard (l'utilisateur a déjà rouvert un AUTRE artiste entre-temps) n'écrase le bon
     /// affichage.
     func showMusicLibraryArtist(_ artist: MusicLibraryArtist) {
+        // Rouvrir une page artiste — la même ou une autre — repart d'un bouton play, comme une
+        // page qu'on découvre. Un aller-retour vers un de ses albums, lui, ne passe pas par ici
+        // et garde donc la mémoire de la file.
+        musicLibraryPlayingArtistId = nil
         musicLibraryViewedArtist = artist
         musicLibraryArtistAlbums = []
         musicLibraryArtistAlbumsLoading = true
@@ -908,6 +932,8 @@ final class MiloStore {
               let index = context.firstIndex(where: { $0.id == song.id }) else { return }
 
         let tracks = context.map { $0.raw }
+        // Cette file remplace celle qu'avait lancée une page artiste, le cas échéant.
+        musicLibraryPlayingArtistId = nil
         musicLibrarySongLoadingId = song.id
         Task {
             do {
@@ -916,6 +942,128 @@ final class MiloStore {
                 NSLog("❌ Music library play_context failed: %@", error.localizedDescription)
             }
             musicLibrarySongLoadingId = nil
+        }
+    }
+
+    /// Vrai si le morceau en cours sort de l'album ouvert — donc si le bouton de lecture de son
+    /// en-tête doit basculer play/pause plutôt que relancer la file depuis la première piste.
+    ///
+    /// On teste l'appartenance du morceau en cours à la liste affichée, et non un « id d'album
+    /// en cours » : le backend n'en publie pas, et un album multi-disque fusionné porte un id
+    /// synthétique (`mdisc:…`) que ses morceaux, eux, ne portent pas — la comparaison d'ids
+    /// échouerait précisément sur les albums que le backend a recollés.
+    var isCurrentMusicLibraryAlbum: Bool {
+        guard state?.activeSource == "music_library", let currentId = nowPlaying?.id else { return false }
+        return musicLibraryAlbumSongs.contains { $0.id == currentId }
+    }
+
+    /// Vrai quand l'album ouvert est en train de jouer (et non simplement chargé) : c'est ce qui
+    /// décide si l'en-tête montre pause ou play.
+    var isMusicLibraryAlbumPlaying: Bool {
+        isCurrentMusicLibraryAlbum && (nowPlaying?.isPlaying ?? false)
+    }
+
+    /// Vrai quand la file en cours est celle qu'a lancée la page artiste ouverte — donc quand
+    /// son bouton doit basculer play/pause au lieu de rebâtir la file depuis le début.
+    var isMusicLibraryArtistQueued: Bool {
+        guard state?.activeSource == "music_library", let artist = musicLibraryViewedArtist else { return false }
+        return musicLibraryPlayingArtistId == artist.id
+    }
+
+    /// Vrai quand cette file joue vraiment (et n'est pas simplement en pause) : ce qui décide si
+    /// l'en-tête artiste montre pause ou play.
+    var isMusicLibraryArtistPlaying: Bool {
+        isMusicLibraryArtistQueued && (nowPlaying?.isPlaying ?? false)
+    }
+
+    /// Vrai quand c'est la file de CETTE page qui s'assemble — et pas celle de l'autre page du
+    /// fil de navigation, dont le spinner ne regarde pas celle-ci.
+    var isMusicLibraryArtistPlayLoading: Bool {
+        musicLibraryViewedArtist.map { musicLibraryContextLoadingId == $0.id } ?? false
+    }
+
+    var isMusicLibraryAlbumPlayLoading: Bool {
+        musicLibraryViewedAlbum.map { musicLibraryContextLoadingId == $0.id } ?? false
+    }
+
+    /// Lance l'album ouvert depuis sa première piste — ou bascule play/pause s'il est déjà celui
+    /// qui joue, même geste que la ligne de son morceau en cours (`MusicLibrarySongRow`).
+    ///
+    /// La file envoyée est la liste AFFICHÉE : un album multi-disque part donc déjà concaténé
+    /// dans l'ordre où on le lit, sans rien à recoller ici (le backend l'a fait en servant
+    /// `mdisc:…`).
+    func playMusicLibraryAlbum() {
+        if isCurrentMusicLibraryAlbum {
+            toggleNowPlayingPause()
+            return
+        }
+
+        guard let apiService = connectionManager.apiService,
+              let album = musicLibraryViewedAlbum,
+              !musicLibraryAlbumSongs.isEmpty else { return }
+
+        let tracks = musicLibraryAlbumSongs.map(\.raw)
+        musicLibraryPlayingArtistId = nil
+        musicLibraryContextLoadingId = album.id
+        Task {
+            defer { if musicLibraryContextLoadingId == album.id { musicLibraryContextLoadingId = nil } }
+            do {
+                try await apiService.playMusicLibraryContext(tracks: tracks, startIndex: 0)
+            } catch {
+                NSLog("❌ Music library album play_context failed: %@", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Lance TOUT l'artiste ouvert, ses albums bout à bout dans l'ordre de la page.
+    ///
+    /// La charge utile `getArtist` ne contient aucune piste (elle ne liste que des albums), donc
+    /// la file s'assemble ici : un fetch par album, tous en parallèle, puis remis dans l'ordre
+    /// d'affichage — c'est le geste de `playAll()` du frontend web (ArtistView.vue), y compris sa
+    /// tolérance aux albums qui échouent (ils sont sautés, on ne perd pas toute la file pour un).
+    func playMusicLibraryArtist() {
+        if isMusicLibraryArtistQueued {
+            toggleNowPlayingPause()
+            return
+        }
+
+        guard let apiService = connectionManager.apiService,
+              let artist = musicLibraryViewedArtist,
+              !musicLibraryArtistAlbums.isEmpty else { return }
+
+        let albumIds = musicLibraryArtistAlbums.map(\.id)
+        musicLibraryContextLoadingId = artist.id
+        Task {
+            defer { if musicLibraryContextLoadingId == artist.id { musicLibraryContextLoadingId = nil } }
+
+            var songsByAlbum: [Int: [MusicLibrarySong]] = [:]
+            await withTaskGroup(of: (Int, [MusicLibrarySong]).self) { group in
+                for (index, albumId) in albumIds.enumerated() {
+                    group.addTask {
+                        (index, (try? await apiService.fetchMusicLibraryAlbumSongs(albumId: albumId)) ?? [])
+                    }
+                }
+                for await (index, songs) in group { songsByAlbum[index] = songs }
+            }
+
+            // L'utilisateur a pu ouvrir un autre artiste pendant les fetchs : lancer maintenant
+            // démarrerait une file qu'il a déjà laissée derrière lui (même garde que le web, et
+            // que `showMusicLibraryArtist`).
+            guard musicLibraryViewedArtist?.id == artist.id else { return }
+
+            // Les tâches se terminent dans le désordre : c'est l'index qui rétablit l'ordre des
+            // albums tel que la page les montre.
+            let tracks = albumIds.indices.flatMap { songsByAlbum[$0] ?? [] }.map(\.raw)
+            guard !tracks.isEmpty else { return }
+
+            do {
+                try await apiService.playMusicLibraryContext(tracks: tracks, startIndex: 0)
+                // Après l'envoi seulement : un échec doit laisser le bouton sur play, sans quoi
+                // il proposerait de mettre en pause une file qui n'a jamais démarré.
+                musicLibraryPlayingArtistId = artist.id
+            } catch {
+                NSLog("❌ Music library artist play_context failed: %@", error.localizedDescription)
+            }
         }
     }
 

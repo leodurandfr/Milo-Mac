@@ -87,6 +87,8 @@
 "accessibility.volume_slider" = "Lautstärkeregler";
 "accessibility.volume_decrease" = "Lautstärke verringern";
 "accessibility.volume_increase" = "Lautstärke erhöhen";
+"accessibility.play" = "Wiedergabe";
+"accessibility.pause" = "Pause";
 "accessibility.milo_icon" = "Milo";
 
 // MARK: - ROC VAD Settings (enum localization)
