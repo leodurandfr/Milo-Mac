@@ -92,9 +92,7 @@ struct MiloPanelView: View {
             if !canShow, store.panelRoute == .radioStations { exitToRoot() }
         }
         .onChange(of: store.canShowMusicLibrarySearch) { _, canShow in
-            if !canShow, Self.musicLibraryRoutes.contains(store.panelRoute) {
-                exitMusicLibraryBrowsing()
-            }
+            if !canShow, store.panelRoute.isMusicLibrary { exitToRoot() }
         }
         // Le multiroom a été coupé (ou la liste s'est vidée) pendant que la sous-section
         // était ouverte : on la referme, sinon elle resterait dépliée sur du vide.
@@ -164,13 +162,6 @@ struct MiloPanelView: View {
         return nil
     }
 
-    /// Les trois routes de navigation de la bibliothèque musicale — utilisé par le garde qui
-    /// force un retour à la racine quand la source cesse d'être active en cours de parcours
-    /// (recherche, page artiste ou page album, peu importe la profondeur).
-    private static let musicLibraryRoutes: Set<PanelRoute> = [
-        .musicLibrarySearch, .musicLibraryArtist, .musicLibraryAlbum,
-    ]
-
     /// Change de route en armant le morphing (le timer, lui, vit dans `MenuBarShell`).
     private func navigate(to route: PanelRoute) {
         // Instantané pris AVANT la bascule, pendant que la mesure de la couche primaire vaut encore
@@ -199,14 +190,6 @@ struct MiloPanelView: View {
         morphFromHeight = morphHeight ?? activeHeight
         incomingHeight = 0
         store.exitToRoot()
-    }
-
-    /// Comme `exitToRoot()`, et efface en plus tout l'état de recherche/pages de la bibliothèque
-    /// musicale — utilisé quand la source cesse d'être active en cours de parcours, où il n'y a
-    /// de toute façon plus de route parente valide à retrouver.
-    private func exitMusicLibraryBrowsing() {
-        exitToRoot()
-        store.clearMusicLibraryBrowsing()
     }
 
     /// Hauteur imposée au contenu pendant la transition ; `nil` au repos, où la fenêtre suit la
@@ -392,10 +375,7 @@ struct MiloPanelView: View {
 
     @ViewBuilder
     private var musicLibraryContent: some View {
-        PanelBackRow(title: L("source.music_library")) {
-            store.clearMusicLibraryBrowsing()
-            exitToRoot()
-        }
+        PanelBackRow(title: L("source.music_library")) { exitToRoot() }
 
         PanelDivider()
 

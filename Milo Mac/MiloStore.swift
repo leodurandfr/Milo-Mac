@@ -9,6 +9,16 @@ enum PanelRoute: Hashable, Sendable {
     case musicLibrarySearch
     case musicLibraryArtist
     case musicLibraryAlbum
+
+    /// Les routes du fil « bibliothèque musicale » : y circuler garde recherche et pages, en
+    /// sortir les efface (voir `MiloStore.finishRouteMorph`). Un `switch` exhaustif plutôt qu'un
+    /// `Set` littéral — une route ajoutée plus tard ne pourra pas oublier de se positionner.
+    var isMusicLibrary: Bool {
+        switch self {
+        case .musicLibrarySearch, .musicLibraryArtist, .musicLibraryAlbum: true
+        case .root, .radioStations: false
+        }
+    }
 }
 
 /// Morceau affiché par `NowPlayingRow`, tous sources confondues — voir `MiloStore.nowPlaying`.
@@ -255,6 +265,17 @@ final class MiloStore {
     func finishRouteMorph() {
         outgoingPanelRoute = nil
         routeMorphFraction = 1
+
+        // Le fil bibliothèque musicale ne se vide qu'ICI, à la toute fin de la transition, et
+        // jamais au clic : la couche qu'on quitte reste affichée pendant tout le morphing, donc
+        // l'effacer au clic donnait à voir la recherche se réinitialiser en plein fondu — le
+        // terme disparaissait et l'invite « Rechercher dans votre bibliothèque » revenait sous
+        // les yeux de l'utilisateur, en guise d'adieu.
+        //
+        // Effet de bord voulu : revenir sur ses pas pendant la transition (re-cliquer sur la
+        // source avant la fin) retrouve la recherche intacte, puisque la route d'arrivée est de
+        // nouveau celle du fil.
+        if !panelRoute.isMusicLibrary { clearMusicLibraryBrowsing() }
     }
 
     // MARK: - Dépendances
