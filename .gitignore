@@ -30,3 +30,7 @@ Pods/
 buildServer.json
 .bsp/
 
+
+# Claude Code : settings.json est partagé, settings.local.json est personnel
+# (allowlist de permissions propre à chaque machine, chemins absolus compris).
+.claude/settings.local.json

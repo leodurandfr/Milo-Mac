@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill -f 'snapcast/bin/snapclient')",
+      "Bash(pkill -9 -f 'snapcast/bin/snapclient')",
+      "Bash(DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer xcodebuild -project \"Milo Mac.xcodeproj\" -scheme \"Milo Mac\" -configuration Debug -derivedDataPath \"/private/tmp/claude-501/-Users-leo-Developer-Milo-Mac/90830258-ec8b-4f09-a966-8732f09c5a36/scratchpad/dd-main\" build CODE_SIGNING_ALLOWED=NO)"
+    ]
+  }
+}
