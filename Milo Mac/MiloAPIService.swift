@@ -35,11 +35,23 @@ enum JSONSendable {
 
 struct MiloState: Sendable {
     let activeSource: String
-    let sourceState: String       // "starting", "waiting", "active", "error"
+    let sourceState: String       // "starting", "ready", "active", "error"
     let transitioning: Bool       // true pendant un changement de source
     let multiroomEnabled: Bool
     let equalizerEnabled: Bool
     let metadata: [String: any Sendable]
+
+    /// Vrai quand la source est POSÉE : son moteur tourne et plus rien n'est en vol — le
+    /// préalable à l'affichage de tout sous-niveau (stations radio, recherche bibliothèque).
+    ///
+    /// `ready` est le nom actuel de cet état côté backend (`SourceState.READY`). `waiting`
+    /// est celui qu'il portait avant le renommage : on l'accepte encore parce qu'un Milō
+    /// pas mis à jour le renvoie toujours, et que les deux désignent le même état (moteur
+    /// debout, session vide). Ne pas réduire à `ready` tant que le backend déployé peut être
+    /// ancien : c'est exactement ce décalage qui avait fait disparaître les deux carets.
+    var isSourceSettled: Bool {
+        ["ready", "waiting", "active"].contains(sourceState.lowercased())
+    }
 
     /// Décodage unique du payload backend — partagé entre le fetch HTTP
     /// (/api/audio/state) et le `full_state` des événements WebSocket,

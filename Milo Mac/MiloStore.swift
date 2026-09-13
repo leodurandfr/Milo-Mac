@@ -727,7 +727,7 @@ final class MiloStore {
     /// Vrai quand la source Radio est posée et que ses favoris peuvent s'afficher.
     var canShowRadioStations: Bool {
         state?.activeSource == "radio"
-            && ["waiting", "active"].contains(state?.sourceState.lowercased() ?? "")
+            && state?.isSourceSettled == true
             && radioFavorites != nil
     }
 
@@ -773,7 +773,7 @@ final class MiloStore {
     /// il n'y a donc rien d'équivalent à `radioFavorites != nil` à attendre ici.
     var canShowMusicLibrarySearch: Bool {
         state?.activeSource == "music_library"
-            && ["waiting", "active"].contains(state?.sourceState.lowercased() ?? "")
+            && state?.isSourceSettled == true
     }
 
     /// Résout une pochette de résultat de recherche — même indirection que `radioFaviconURL`.
