@@ -127,6 +127,18 @@ final class MiloStore {
     private(set) var musicLibraryAlbumSongs: [MusicLibrarySong] = []
     private(set) var musicLibraryAlbumSongsLoading = false
 
+    /// Ce qu'affiche le sous-niveau recherche tant que le champ est vide : les albums écoutés
+    /// récemment — à défaut, ajoutés récemment (voir `loadMusicLibraryShowcase()`), ce que dit
+    /// `musicLibraryShowcaseIsRecentlyAdded`.
+    private(set) var musicLibraryShowcaseAlbums: [MusicLibraryAlbum] = []
+    private(set) var musicLibraryShowcaseLoading = false
+    private(set) var musicLibraryShowcaseIsRecentlyAdded = false
+    private var musicLibraryShowcaseTask: Task<Void, Never>?
+
+    /// Taille de la vitrine. Le panneau est plafonné à la hauteur de l'écran et la liste défile,
+    /// donc ce nombre borne le transfert, pas l'affichage.
+    private static let musicLibraryShowcaseSize = 20
+
     /// Dernier morceau détecté, tous sources confondues — alimente `NowPlayingAccordion`, PAS
     /// `nowPlaying` directement : contrairement à ce dernier, il reste peuplé un instant après
     /// l'arrêt de la lecture, le temps que `MenuBarShell` anime le repli de la ligne à zéro
@@ -227,6 +239,11 @@ final class MiloStore {
         outgoingPanelRoute = panelRoute
         routeMorphFraction = 0
         panelRoute = route
+
+        // Entrer dans la recherche charge sa vitrine. C'est le SEUL déclencheur : revenir depuis
+        // une page artiste/album passe par `navigateBack()`, qui retrouve celle déjà chargée —
+        // la recharger ferait clignoter un spinner sur un retour en arrière.
+        if route == .musicLibrarySearch { loadMusicLibraryShowcase() }
     }
 
     /// Revient à la route parente exacte (dépile), et non systématiquement à la racine — c'est
@@ -857,6 +874,62 @@ final class MiloStore {
         musicLibrarySearchLoading = false
     }
 
+    /// Charge la vitrine montrée tant que le champ de recherche est vide : les albums ÉCOUTÉS
+    /// récemment (`getAlbumList2` `type=recent`), à défaut les albums AJOUTÉS récemment
+    /// (`type=newest`).
+    ///
+    /// Le repli n'est pas une précaution de principe : Navidrome ne compte une lecture que sur un
+    /// `scrobble` (`submission=true`), jamais sur l'endpoint `stream`. Le backend Milō scrobble
+    /// depuis le 13/09/2026 seulement — avant ça `recent`, `frequent` et `starred` revenaient
+    /// vides (mesuré sur l'appareil), et une install dont l'historique est encore vierge les
+    /// retrouve vides. `newest`, lui, dérive de la date d'import et répond toujours.
+    ///
+    /// Un album remonte en tête dès qu'UNE de ses pistes franchit le seuil de scrobble (la
+    /// moitié de sa durée, ou 4 minutes) : Navidrome propage la date de lecture de la piste à
+    /// son album, et c'est sur cette date que `recent` trie. Écouter un album entier n'est donc
+    /// pas nécessaire — vérifié sur l'appareil, un album de 9 pistes classé après une seule.
+    ///
+    /// Les deux requêtes sont en série et non en parallèle : la seconde ne sert que si la
+    /// première ne rapporte rien, ce qui sera le cas de moins en moins souvent.
+    func loadMusicLibraryShowcase() {
+        guard let apiService = connectionManager.apiService else { return }
+        musicLibraryShowcaseTask?.cancel()
+        musicLibraryShowcaseLoading = true
+        let size = Self.musicLibraryShowcaseSize
+        musicLibraryShowcaseTask = Task { [weak self] in
+            var albums: [MusicLibraryAlbum] = []
+            var isRecentlyAdded = false
+            do {
+                albums = try await apiService.fetchMusicLibraryAlbums(type: "recent", size: size)
+                if albums.isEmpty {
+                    albums = try await apiService.fetchMusicLibraryAlbums(type: "newest", size: size)
+                    isRecentlyAdded = true
+                }
+            } catch {
+                NSLog("❌ Music library showcase failed: %@", error.localizedDescription)
+            }
+            // Annulée = une autre entrée dans la route a pris la main (ou on en est sorti) :
+            // l'état appartient à celle-là, on ne l'écrase pas.
+            guard let self, !Task.isCancelled else { return }
+            musicLibraryShowcaseAlbums = albums
+            musicLibraryShowcaseIsRecentlyAdded = isRecentlyAdded
+            musicLibraryShowcaseLoading = false
+        }
+    }
+
+    /// Vrai quand le sous-niveau recherche rend une ScrollView plutôt qu'une ligne unique
+    /// (vitrine, chargement, invite, « aucun résultat ») — c'est elle qui porte alors le retrait
+    /// bas du panneau, voir `MiloPanelView.bottomInset(for:)`. Reproduit exactement l'arbitrage
+    /// de `MusicLibrarySearchResultsList`, y compris sa précédence chargement > résultats : des
+    /// résultats encore à l'écran pendant le debounce suivant sont masqués par le spinner, et
+    /// c'est bien une ligne unique qui est rendue à ce moment-là.
+    var musicLibrarySearchShowsList: Bool {
+        guard !musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return !musicLibraryShowcaseLoading && !musicLibraryShowcaseAlbums.isEmpty
+        }
+        return !musicLibrarySearchLoading && !musicLibrarySearchResults.isEmpty
+    }
+
     /// Efface tout l'état de navigation de la bibliothèque musicale (recherche ET pages
     /// artiste/album) — à la sortie complète vers la racine, à la fermeture du panneau, ou quand
     /// la source cesse d'être affichable (voir `MiloPanelView`). PAS appelé par la navigation
@@ -869,6 +942,11 @@ final class MiloStore {
         musicLibrarySearchResults = .empty
         musicLibrarySearchHasSearched = false
         musicLibrarySearchLoading = false
+
+        musicLibraryShowcaseTask?.cancel()
+        musicLibraryShowcaseAlbums = []
+        musicLibraryShowcaseLoading = false
+        musicLibraryShowcaseIsRecentlyAdded = false
 
         musicLibraryViewedArtist = nil
         musicLibraryArtistAlbums = []

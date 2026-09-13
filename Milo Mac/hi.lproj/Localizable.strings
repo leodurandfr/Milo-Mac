@@ -34,6 +34,8 @@
 "musicLibrary.search.albumsCount" = "%d एल्बम";
 "musicLibrary.artist.noAlbums" = "कोई एल्बम नहीं";
 "musicLibrary.album.noSongs" = "कोई गाना नहीं";
+"musicLibrary.showcase.played" = "हाल ही में चलाए गए";
+"musicLibrary.showcase.added" = "हाल ही में जोड़े गए";
 
 // MARK: - Features
 "feature.multiroom" = "मल्टीरूम";

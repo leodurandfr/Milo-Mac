@@ -249,7 +249,7 @@ struct MiloPanelView: View {
         case .radioStations:
             stations.isEmpty ? PanelMetrics.bottomInset : 0
         case .musicLibrarySearch:
-            store.musicLibrarySearchResults.isEmpty ? PanelMetrics.bottomInset : 0
+            store.musicLibrarySearchShowsList ? 0 : PanelMetrics.bottomInset
         case .musicLibraryArtist:
             store.musicLibraryArtistAlbums.isEmpty ? PanelMetrics.bottomInset : 0
         case .musicLibraryAlbum:

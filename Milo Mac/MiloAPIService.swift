@@ -795,6 +795,19 @@ final class MiloAPIService: Sendable {
         return (album["song"] as? [[String: Any]] ?? []).compactMap(MusicLibrarySong.init)
     }
 
+    /// Une page d'albums d'une liste Subsonic (`getAlbumList2`) : `recent` (écoutés récemment),
+    /// `newest` (ajoutés récemment), `random`… Le backend valide le type contre sa liste blanche
+    /// `ALBUM_LIST_TYPES` et répond 400 s'il n'en fait pas partie, d'où l'absence de garde ici —
+    /// les seuls appelants passent des littéraux.
+    ///
+    /// Ce sont les mêmes objets « album » que ceux de la recherche et de la page artiste (le
+    /// backend passe les trois par `merge_albums`), donc `MusicLibraryAlbum` se réutilise tel
+    /// quel. Pas d'encodage à faire : ni le type ni la taille ne viennent d'une saisie.
+    func fetchMusicLibraryAlbums(type: String, size: Int) async throws -> [MusicLibraryAlbum] {
+        let json = try await fetchJSON("/api/music-library/albums?type=\(type)&size=\(size)")
+        return (json["albums"] as? [[String: Any]] ?? []).compactMap(MusicLibraryAlbum.init)
+    }
+
     // MARK: - Now playing
 
     /// Résout `album_art_url` (ou l'artwork Shazam de Radio) en URL absolue affichable.

@@ -34,6 +34,8 @@
 "musicLibrary.search.albumsCount" = "%d albums";
 "musicLibrary.artist.noAlbums" = "Aucun album";
 "musicLibrary.album.noSongs" = "Aucun morceau";
+"musicLibrary.showcase.played" = "Écoutés récemment";
+"musicLibrary.showcase.added" = "Ajoutés récemment";
 
 // MARK: - Features
 "feature.multiroom" = "Multiroom";

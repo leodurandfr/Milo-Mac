@@ -1355,9 +1355,35 @@ struct MusicLibrarySearchResultsList: View {
         !store.musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Ce que montre le sous-niveau tant que rien n'est tapé : les albums récents, à défaut
+    /// l'invite d'origine — bibliothèque vide, ou backend qui n'a pas (encore) répondu. Même
+    /// arbitrage chargement > vide > liste que les résultats de recherche, et la ScrollView
+    /// porte le même retrait bas.
+    @ViewBuilder
+    private var showcase: some View {
+        if store.musicLibraryShowcaseLoading {
+            MusicLibraryLoadingRow()
+        } else if store.musicLibraryShowcaseAlbums.isEmpty {
+            MusicLibraryStatusRow(text: L("musicLibrary.search.prompt"))
+        } else {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 0) {
+                    MenuSectionHeader(text: L(store.musicLibraryShowcaseIsRecentlyAdded
+                                              ? "musicLibrary.showcase.added"
+                                              : "musicLibrary.showcase.played"))
+                    ForEach(store.musicLibraryShowcaseAlbums) { album in
+                        MusicLibraryAlbumRow(store: store, album: album)
+                    }
+                }
+            }
+            .contentMargins(.bottom, PanelMetrics.bottomInset, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
     var body: some View {
         if !hasQuery {
-            MusicLibraryStatusRow(text: L("musicLibrary.search.prompt"))
+            showcase
         } else if store.musicLibrarySearchLoading {
             MusicLibraryLoadingRow()
         } else if results.isEmpty {
