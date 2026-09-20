@@ -77,7 +77,6 @@ enum VolumeDefaults {
 struct VolumeStatus {
     let volumeDb: Double          // Volume en dB (-80 à 0)
     let multiroomEnabled: Bool
-    let dspAvailable: Bool
     let limitMinDb: Double        // Limite min configurée
     let limitMaxDb: Double        // Limite max configurée
 
@@ -86,7 +85,6 @@ struct VolumeStatus {
     func withLimits(minDb: Double, maxDb: Double) -> VolumeStatus {
         VolumeStatus(volumeDb: volumeDb,
                      multiroomEnabled: multiroomEnabled,
-                     dspAvailable: dspAvailable,
                      limitMinDb: minDb,
                      limitMaxDb: maxDb)
     }
@@ -487,10 +485,27 @@ final class MiloAPIService: Sendable {
         }
     }
 
+    /// Origine HTTP du Pi : l'IPv4 résolue si on l'a, le hostname sinon.
+    ///
+    /// Point unique de la règle d'hôte, partagé entre `buildURL` — donc toute la surface `send`
+    /// — et les trois constructeurs d'URL d'IMAGE de ce fichier (`radioFaviconURL`,
+    /// `musicLibraryCoverURL`, `nowPlayingArtworkURL`).
+    ///
+    /// Ces trois-là ne passent PAS par `send`, et c'est voulu : ils n'émettent aucune requête.
+    /// Ils rendent une URL que `AsyncImage` ira chercher lui-même, avec la session partagée de
+    /// SwiftUI — d'où ni le timeout de 3 s de `send` (trop court pour une pochette qu'un Pi tire
+    /// d'une carte SD), ni ses erreurs typées (l'échec d'une image, c'est le placeholder de la
+    /// vue, pas une `APIError` à remonter), ni son cache désactivé (une pochette, on veut
+    /// justement la garder — voir aussi `FaviconCache`). La seule chose que ces URL doivent à
+    /// `send`, c'est l'hôte : c'est exactement ce que cette propriété leur donne.
+    private var baseURL: String {
+        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
+        return "http://\(hostToUse):\(port)"
+    }
+
     /// Construit l'URL en utilisant l'IP IPv4 si disponible
     private func buildURL(path: String) -> URL? {
-        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
-        return URL(string: "http://\(hostToUse):\(port)\(path)")
+        URL(string: baseURL + path)
     }
 
     // MARK: - Requête générique
@@ -533,6 +548,32 @@ final class MiloAPIService: Sendable {
         return json
     }
 
+    /// Comme `send`, mais valide EN PLUS le `status` du corps — la seconde moitié du contrat,
+    /// pour toute MUTATION.
+    ///
+    /// Un 200 ne suffit pas à conclure : Milō sert délibérément certains échecs en
+    /// 200 + `{"status": "error"}` — `POST /api/audio/source/{id}` quand la transition échoue,
+    /// `PUT /api/equalizer/target/{t}/enabled` quand la cible refuse. C'est un invariant d'API
+    /// documenté côté backend, pas un oubli : il ne changera pas, c'est donc à l'appelant de
+    /// lire le corps. Sans ça, un toggle qui a échoué s'affiche comme réussi.
+    ///
+    /// Appliqué à TOUTES les mutations, et pas aux seules routes connues pour le faire : le coût
+    /// est le parse de quelques octets, et une route qui adopterait l'enveloppe plus tard n'aurait
+    /// pas à être redécouverte par un bouton qui ment. Un corps sans clé `status` (ou qui n'est
+    /// pas du JSON) passe : ces routes-là signalent par le statut HTTP, déjà validé par `send`.
+    @discardableResult
+    private func sendCommand(_ path: String,
+                             method: String,
+                             body: [String: Any]? = nil,
+                             long: Bool = false) async throws -> Data {
+        let data = try await send(path, method: method, body: body, long: long)
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let status = json["status"] as? String, status != "success" {
+            throw APIError.backendError(status)
+        }
+        return data
+    }
+
     // MARK: - Audio API
 
     func fetchState() async throws -> MiloState {
@@ -540,35 +581,47 @@ final class MiloAPIService: Sendable {
     }
 
     func changeSource(_ source: String) async throws {
-        let data = try await send("/api/audio/source/\(source)", method: "POST")
-
-        // Le backend répond 200 avec {"status": "error"} quand la transition
-        // échoue — l'échec est dans le corps, pas dans le statut HTTP.
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let status = json["status"] as? String, status != "success" {
-            throw APIError.backendError(status)
-        }
+        try await sendCommand("/api/audio/source/\(source)", method: "POST")
     }
 
     func setMultiroom(_ enabled: Bool) async throws {
         // Le backend bloque jusqu'à la fin complète de la transition (~20 s max).
-        try await send("/api/routing/multiroom", method: "PUT",
-                       body: ["enabled": enabled], long: true)
+        try await sendCommand("/api/routing/multiroom", method: "PUT",
+                              body: ["enabled": enabled], long: true)
     }
 
     // MARK: - Volume API
+
+    /// Lit le `data` de `/api/volume/state` — l'unique route de volume en lecture, partagée
+    /// par le volume global et par le volume multiroom.
+    ///
+    /// Elle porte l'enveloppe `{"status", "data"}`, et le backend y sert ses échecs en
+    /// 200 + `{"status": "error", "message": …}` (même invariant que pour les mutations, voir
+    /// `sendCommand`). Il faut donc la lire : sans ça, l'échec se présente comme un `data`
+    /// absent, c'est-à-dire un état VIDE — 0 dB pour le volume global, zéro client pour le
+    /// multiroom. Des valeurs plausibles et fausses, là où une erreur laisse l'appelant garder
+    /// la dernière valeur connue.
+    private func fetchVolumeStateData() async throws -> [String: Any] {
+        let json = try await fetchJSON("/api/volume/state")
+        if let status = json["status"] as? String, status != "success" {
+            throw APIError.backendError(json["message"] as? String ?? status)
+        }
+        guard let data = json["data"] as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+        return data
+    }
 
     /// Lit la valeur de volume + le mode en direct. Les limites proviennent du
     /// cache amorcé par fetchBulkSettings() à la connexion. Le step n'est plus
     /// porté : le pas du raccourci clavier est un réglage local
     /// (GlobalHotkeyManager.volumeDeltaDb).
     func getVolumeStatus() async throws -> VolumeStatus {
-        let json = try await fetchJSON("/api/volume/state")
+        let dataDict = try await fetchVolumeStateData()
 
         // Pas de valeur par défaut ici : un payload sans global_volume_db
         // fabriquerait 0 dB (le maximum) — on préfère échouer proprement.
-        guard let dataDict = json["data"] as? [String: Any],
-              let volumeDb = (dataDict["global_volume_db"] as? Double)
+        guard let volumeDb = (dataDict["global_volume_db"] as? Double)
                 ?? (dataDict["global_volume_db"] as? Int).map(Double.init) else {
             throw APIError.invalidResponse
         }
@@ -579,22 +632,21 @@ final class MiloAPIService: Sendable {
         return VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: mode == "multiroom",
-            dspAvailable: true,
             limitMinDb: limits.minDb,
             limitMaxDb: limits.maxDb
         )
     }
 
     func adjustVolumeDb(_ deltaDb: Double) async throws {
-        try await send("/api/volume/adjust", method: "POST",
-                       body: ["delta_db": deltaDb, "show_bar": true])
+        try await sendCommand("/api/volume/adjust", method: "POST",
+                              body: ["delta_db": deltaDb, "show_bar": true])
     }
 
     // MARK: - DSP API
 
     func setEqualizer(_ enabled: Bool) async throws {
-        try await send("/api/equalizer/target/local/enabled", method: "PUT",
-                       body: ["enabled": enabled])
+        try await sendCommand("/api/equalizer/target/local/enabled", method: "PUT",
+                              body: ["enabled": enabled])
     }
 
     /// Transport générique d'une commande de lecture vers la source active — même route que le
@@ -604,8 +656,8 @@ final class MiloAPIService: Sendable {
     /// ne les supporte pas (AirPlay, DLNA, Qobuz — récepteurs passifs sans télécommande) échoue
     /// proprement plutôt que d'agir sur la mauvaise source.
     func sendPlaybackCommand(_ command: String, to source: String) async throws {
-        try await send("/api/audio/control/\(source)", method: "POST",
-                       body: ["command": command, "data": [String: Any]()])
+        try await sendCommand("/api/audio/control/\(source)", method: "POST",
+                              body: ["command": command, "data": [String: Any]()])
     }
 
     // MARK: - Settings API
@@ -658,8 +710,7 @@ final class MiloAPIService: Sendable {
     /// `/api/volume/state`. Amorce les sliders de la sous-section avant que le premier
     /// `volume/volume_changed` ne prenne le relais.
     func fetchMultiroomVolume() async throws -> MultiroomVolume {
-        let json = try await fetchJSON("/api/volume/state")
-        return MultiroomVolume(state: json["data"] as? [String: Any] ?? [:])
+        MultiroomVolume(state: try await fetchVolumeStateData())
     }
 
     /// Le backend indexe les clients par MAC AVEC deux-points ; l'URL les veut SANS.
@@ -669,14 +720,14 @@ final class MiloAPIService: Sendable {
 
     /// Fixe le volume ABSOLU d'un client (dB). `PATCH /api/volume/client/mac/{mac}`.
     func setClientVolume(mac: String, volumeDb: Double) async throws {
-        try await send("/api/volume/client/mac/\(Self.macURL(mac))", method: "PATCH",
-                       body: ["volume_db": volumeDb])
+        try await sendCommand("/api/volume/client/mac/\(Self.macURL(mac))", method: "PATCH",
+                              body: ["volume_db": volumeDb])
     }
 
     /// Bascule le mute d'un client. `PATCH /api/volume/client/mac/{mac}/mute`.
     func setClientMute(mac: String, muted: Bool) async throws {
-        try await send("/api/volume/client/mac/\(Self.macURL(mac))/mute", method: "PATCH",
-                       body: ["mute": muted])
+        try await sendCommand("/api/volume/client/mac/\(Self.macURL(mac))/mute", method: "PATCH",
+                              body: ["mute": muted])
     }
 
     /// Applique un DELTA de volume à toute une zone. `PATCH /api/volume/zone/{id}`.
@@ -685,8 +736,8 @@ final class MiloAPIService: Sendable {
     /// rediffuse la nouvelle moyenne. C'est pourquoi le slider de zone travaille en relatif
     /// (voir `MultiroomZoneRow`), là où celui d'un client est absolu.
     func setZoneVolumeDelta(zoneId: String, deltaDb: Double) async throws {
-        try await send("/api/volume/zone/\(zoneId)", method: "PATCH",
-                       body: ["delta_db": deltaDb])
+        try await sendCommand("/api/volume/zone/\(zoneId)", method: "PATCH",
+                              body: ["delta_db": deltaDb])
     }
 
     // MARK: - Radio API
@@ -709,8 +760,7 @@ final class MiloAPIService: Sendable {
     /// n'a pas de logo — l'appelant affiche alors son fallback.
     func radioFaviconURL(for favicon: String?) -> URL? {
         guard let favicon, !favicon.isEmpty else { return nil }
-        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
-        let base = "http://\(hostToUse):\(port)"
+        let base = baseURL
         if favicon.hasPrefix("/api/radio/images/") {
             return URL(string: base + favicon)
         }
@@ -720,12 +770,12 @@ final class MiloAPIService: Sendable {
     }
 
     func playRadioStation(_ stationId: String) async throws {
-        try await send("/api/radio/play", method: "POST",
-                       body: ["station_id": stationId])
+        try await sendCommand("/api/radio/play", method: "POST",
+                              body: ["station_id": stationId])
     }
 
     func stopRadioPlayback() async throws {
-        try await send("/api/radio/stop", method: "POST")
+        try await sendCommand("/api/radio/stop", method: "POST")
     }
 
     // MARK: - Music Library API
@@ -753,9 +803,9 @@ final class MiloAPIService: Sendable {
     /// `JSONSerialization` exige) reste locale à cette méthode, qui ne franchit plus rien après.
     func playMusicLibraryContext(tracks: [[String: any Sendable]], startIndex: Int) async throws {
         let jsonTracks = tracks.map { $0.mapValues { $0 as Any } }
-        try await send("/api/audio/control/music_library", method: "POST",
-                       body: ["command": "play_context",
-                              "data": ["tracks": jsonTracks, "start_index": startIndex, "shuffle": false]])
+        try await sendCommand("/api/audio/control/music_library", method: "POST",
+                              body: ["command": "play_context",
+                                     "data": ["tracks": jsonTracks, "start_index": startIndex, "shuffle": false]])
     }
 
     /// Résout l'identifiant de pochette Subsonic (`coverArt`) d'un résultat de recherche en URL
@@ -763,8 +813,7 @@ final class MiloAPIService: Sendable {
     /// le même principe de résolution IP).
     func musicLibraryCoverURL(for coverId: String?, size: Int = 64) -> URL? {
         guard let coverId, !coverId.isEmpty else { return nil }
-        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
-        var comps = URLComponents(string: "http://\(hostToUse):\(port)/api/music-library/cover/\(coverId)")
+        var comps = URLComponents(string: "\(baseURL)/api/music-library/cover/\(coverId)")
         comps?.queryItems = [URLQueryItem(name: "size", value: String(size))]
         return comps?.url
     }
@@ -822,8 +871,7 @@ final class MiloAPIService: Sendable {
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
             return URL(string: path)
         }
-        let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
-        return URL(string: "http://\(hostToUse):\(port)\(path)")
+        return URL(string: baseURL + path)
     }
 }
 

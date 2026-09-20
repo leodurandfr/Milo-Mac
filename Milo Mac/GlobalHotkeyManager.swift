@@ -385,8 +385,7 @@ final class GlobalHotkeyManager {
             name: .volumeChangedViaHotkey,
             object: VolumeStatus(
                 volumeDb: localVolumeDb, multiroomEnabled: false,
-                dspAvailable: false, limitMinDb: limitMinDb,
-                limitMaxDb: limitMaxDb
+                limitMinDb: limitMinDb, limitMaxDb: limitMaxDb
             ),
             userInfo: ["animationDuration": animationDuration]
         )

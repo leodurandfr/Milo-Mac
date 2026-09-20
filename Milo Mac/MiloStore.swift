@@ -1139,7 +1139,17 @@ final class MiloStore {
             await withTaskGroup(of: (Int, [MusicLibrarySong]).self) { group in
                 for (index, albumId) in albumIds.enumerated() {
                     group.addTask {
-                        (index, (try? await apiService.fetchMusicLibraryAlbumSongs(albumId: albumId)) ?? [])
+                        do {
+                            return (index, try await apiService.fetchMusicLibraryAlbumSongs(albumId: albumId))
+                        } catch {
+                            // L'album est sauté, pas toute la file (comme le web). Mais il est
+                            // tracé : une file amputée est indiscernable d'un album vide à
+                            // l'écran, et c'est ici qu'un Pi qui bronche sous N fetchs
+                            // simultanés se voit.
+                            NSLog("⚠️ Music library artist play: album %@ skipped: %@",
+                                  albumId, error.localizedDescription)
+                            return (index, [])
+                        }
                     }
                 }
                 for await (index, songs) in group { songsByAlbum[index] = songs }

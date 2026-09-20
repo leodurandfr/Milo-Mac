@@ -334,7 +334,6 @@ final class WebSocketService: NSObject {
         return .volume(VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: multiroomEnabled,
-            dspAvailable: true,
             limitMinDb: 0,
             limitMaxDb: 0
         ), multiroom: multiroom)
