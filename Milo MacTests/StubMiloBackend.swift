@@ -20,6 +20,11 @@ final class StubMiloBackend: Sendable {
     static let limitMaxDb = -15.0
     static let enabledApps = ["radio", "spotify"]
 
+    /// Le client multiroom servi par `/api/multiroom/state` et `/api/volume/state` : un seul
+    /// suffit à distinguer « volume chargé » de « volume vidé ».
+    static let clientMac = "aa:bb:cc:dd:ee:ff"
+    static let clientVolumeDb = -33.0
+
     private struct State {
         /// Nombre d'appels `/api/settings/bulk` encore à faire échouer (503).
         /// `.max` = échoue toujours ; 0 = répond normalement.
@@ -28,6 +33,17 @@ final class StubMiloBackend: Sendable {
         var bulkHits = 0
         /// Port éphémère attribué par le noyau au démarrage.
         var port = 0
+        /// Sert `/api/audio/state` multiroom ACTIF — le store charge alors, de lui-même,
+        /// la structure multiroom et les volumes par client.
+        var multiroomEnabled = false
+        /// Fait répondre `/api/volume/state` en 200 + {"status":"error"} : l'enveloppe que
+        /// Milō sert sur exception (backend/api/volume.py), et non un statut HTTP d'échec.
+        var volumeStateFails = false
+        /// Nombre d'appels servis sur `/api/volume/state`, erreurs comprises.
+        var volumeStateHits = 0
+        /// Fait répondre `PUT /api/equalizer/target/local/enabled` en 200 + {"status":"error"} :
+        /// ce que le backend renvoie quand la cible refuse (backend/api/equalizer.py).
+        var equalizerRefuses = false
     }
 
     private let state = Mutex(State())
@@ -40,6 +56,23 @@ final class StubMiloBackend: Sendable {
     var bulkHits: Int { state.withLock { $0.bulkHits } }
 
     var port: Int { state.withLock { $0.port } }
+
+    var multiroomEnabled: Bool {
+        get { state.withLock { $0.multiroomEnabled } }
+        set { state.withLock { $0.multiroomEnabled = newValue } }
+    }
+
+    var volumeStateFails: Bool {
+        get { state.withLock { $0.volumeStateFails } }
+        set { state.withLock { $0.volumeStateFails = newValue } }
+    }
+
+    var volumeStateHits: Int { state.withLock { $0.volumeStateHits } }
+
+    var equalizerRefuses: Bool {
+        get { state.withLock { $0.equalizerRefuses } }
+        set { state.withLock { $0.equalizerRefuses = newValue } }
+    }
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "stub.milo.backend")
@@ -123,13 +156,41 @@ final class StubMiloBackend: Sendable {
                 """)
 
         case "/api/audio/state":
+            let multiroom = state.withLock { $0.multiroomEnabled }
             return Self.http(json: """
                 {"active_source":"spotify","source_state":"active","transitioning":false,\
-                "multiroom_enabled":false,"equalizer_effects_enabled":true,"metadata":{}}
+                "multiroom_enabled":\(multiroom),"equalizer_effects_enabled":true,"metadata":{}}
                 """)
 
         case "/api/volume/state":
-            return Self.http(json: #"{"data":{"global_volume_db":-30,"mode":"direct"}}"#)
+            let (fails, multiroomMode) = state.withLock { state -> (Bool, Bool) in
+                state.volumeStateHits += 1
+                return (state.volumeStateFails, state.multiroomEnabled)
+            }
+            // 200 avec status:error — c'est bien l'enveloppe, et non le statut HTTP, qui
+            // porte l'échec de cette route.
+            if fails {
+                return Self.http(json: #"{"status":"error","message":"volume service unavailable"}"#)
+            }
+            return Self.http(json: """
+                {"status":"success","data":{"global_volume_db":-30,\
+                "mode":"\(multiroomMode ? "multiroom" : "direct")",\
+                "clients":{"\(Self.clientMac)":{"volume_db":\(Self.clientVolumeDb),\
+                "mute":false,"available":true}},"zones":{}}}
+                """)
+
+        case "/api/multiroom/state":
+            return Self.http(json: """
+                {"clients":{"\(Self.clientMac)":{"mac_id":"\(Self.clientMac)","name":"Salon",\
+                "online":true,"volume_db":\(Self.clientVolumeDb),"mute":false,\
+                "volume_control":true,"ip":"192.168.1.42"}},"zones":{}}
+                """)
+
+        case "/api/equalizer/target/local/enabled":
+            let refuses = state.withLock { $0.equalizerRefuses }
+            return Self.http(json: refuses
+                ? #"{"status":"error","target":"local","enabled":false}"#
+                : #"{"status":"success","target":"local","enabled":false}"#)
 
         default:
             return Self.http(status: "404 Not Found", json: "{}")
