@@ -1,6 +1,6 @@
 /*
    Localizable.strings (English)
-   Milo Mac
+   Milō Mac
 */
 
 // MARK: - Menu Sections
@@ -16,24 +16,25 @@
 "source.podcast" = "Podcasts";
 "source.airplay" = "AirPlay";
 "source.cd" = "CD Player";
-"source.dlna" = "DLNA";
+"source.dlna" = "DLNA/UPnP";
 "source.qobuz" = "Qobuz";
 "source.tidal" = "TIDAL";
 "source.music_library" = "Music Library";
 
 // MARK: - Radio
-"radio.noFavorites" = "No favorite station";
+"radio.noFavorites" = "No favorite stations";
 
 // MARK: - Music Library
-"musicLibrary.search.placeholder" = "Search artists, albums, songs";
+"musicLibrary.search.placeholder" = "Artists, albums, tracks";
 "musicLibrary.search.prompt" = "Search your library";
 "musicLibrary.search.noResults" = "No results";
 "musicLibrary.search.artists" = "Artists";
 "musicLibrary.search.albums" = "Albums";
-"musicLibrary.search.songs" = "Songs";
+"musicLibrary.search.songs" = "Tracks";
+// Pluriel géré par Localizable.stringsdict — cette valeur est le repli.
 "musicLibrary.search.albumsCount" = "%d albums";
 "musicLibrary.artist.noAlbums" = "No albums";
-"musicLibrary.album.noSongs" = "No songs";
+"musicLibrary.album.noSongs" = "No tracks";
 "musicLibrary.showcase.played" = "Recently played";
 "musicLibrary.showcase.added" = "Recently added";
 
@@ -45,19 +46,19 @@
 "multiroom.offline" = "Offline";
 
 // MARK: - Configuration Menu
-"config.settings" = "Settings...";
+"config.settings" = "Settings…";
 "config.quit" = "Quit";
 
 // MARK: - Settings Window
-"settings.title" = "Milo Mac Settings";
-"settings.general" = "General";
-"settings.mac_audio" = "macOS Audio (ROC-VAD)";
+"settings.title" = "Milō Mac Settings";
 
 // General section
+"settings.general" = "General";
+"settings.mac_audio" = "macOS Audio (roc-vad)";
 "settings.hotkeys" = "Volume Shortcuts (⌥↑/↓)";
-"settings.volume_increment" = "Volume Increment";
+"settings.volume_increment" = "Volume step";
 "settings.launch_at_login" = "Launch at Mac Startup";
-"settings.volume_hud_all_changes" = "Show volume notification on every change, even external to Milo Mac";
+"settings.volume_hud_all_changes" = "Show volume notification on every change, even external to Milō Mac";
 
 // Mac Audio section
 "settings.preset" = "Preset";
@@ -68,7 +69,7 @@
 "settings.fec_source" = "FEC Source Packets";
 "settings.fec_repair" = "FEC Repair Packets";
 "settings.interleaving" = "Packet Interleaving";
-"settings.reset" = "Reset Defaults";
+"settings.reset" = "Reset";
 "settings.apply" = "Apply";
 
 // MARK: - Connection Status
@@ -78,20 +79,20 @@
 "setup.installation.title" = "Milō Mac Installation";
 
 // MARK: - Installation Progress Messages
-"progress.preparing" = "Preparing installation...";
-"progress.downloading" = "Downloading and installing dependencies (roc-vad)...";
-"progress.verifying" = "Verifying installation...";
+"progress.preparing" = "Preparing installation…";
+"progress.downloading" = "Downloading and installing dependencies (roc-vad)…";
+"progress.verifying" = "Verifying installation…";
 "progress.installation_complete" = "Installation completed successfully";
-"progress.reconfiguring_device" = "Reconfiguring Milō audio device...";
-"progress.creating_device" = "Creating Milō audio device...";
+"progress.reconfiguring_device" = "Reconfiguring the Milō audio device…";
+"progress.creating_device" = "Creating the Milō audio device…";
 
 // MARK: - Accessibility
-"accessibility.volume_slider" = "Volume Slider";
-"accessibility.volume_decrease" = "Decrease Volume";
-"accessibility.volume_increase" = "Increase Volume";
+"accessibility.volume_slider" = "Volume slider";
+"accessibility.volume_decrease" = "Decrease volume";
+"accessibility.volume_increase" = "Increase volume";
 "accessibility.play" = "Play";
 "accessibility.pause" = "Pause";
-"accessibility.milo_icon" = "Milo";
+"accessibility.milo_icon" = "Milō";
 
 // MARK: - ROC VAD Settings (enum localization)
 "config.rocvad.fec.rs8m" = "Standard (RS8M)";
@@ -105,10 +106,10 @@
 "config.rocvad.preset.balanced" = "Balanced";
 "config.rocvad.preset.high_quality" = "High Quality";
 "config.rocvad.preset.custom" = "Custom";
-"progress.applying_settings" = "Applying audio settings...";
+"progress.applying_settings" = "Applying audio settings…";
 
 // MARK: - Mac audio (roc-vad)
-"settings.rocvad.description" = "The “Mac” source sends your Mac’s audio to Milō. It requires the roc-vad audio driver.";
+"settings.rocvad.description" = "The “Mac” source sends your Mac's audio to Milō. It requires the roc-vad audio driver.";
 "settings.rocvad.install" = "Install driver";
 "settings.rocvad.installing" = "Installing…";
 "settings.rocvad.restart_required" = "Restart your Mac to enable the Milō audio output.";

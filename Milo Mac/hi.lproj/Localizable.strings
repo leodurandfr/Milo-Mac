@@ -1,39 +1,40 @@
 /*
    Localizable.strings (Hindi)
-   Milo Mac
+   Milō Mac
 */
 
 // MARK: - Menu Sections
 "menu.title" = "Milō";
 "menu.audio_sources.title" = "आउटपुट";
-"menu.features.title" = "सुविधाएं";
+"menu.features.title" = "सुविधाएँ";
 
 // MARK: - Audio Sources
 "source.spotify" = "Spotify";
-"source.bluetooth" = "Bluetooth";
+"source.bluetooth" = "ब्लूटूथ";
 "source.mac" = "macOS";
 "source.radio" = "इंटरनेट रेडियो";
 "source.podcast" = "पॉडकास्ट";
 "source.airplay" = "AirPlay";
 "source.cd" = "सीडी प्लेयर";
-"source.dlna" = "DLNA";
+"source.dlna" = "DLNA/UPnP";
 "source.qobuz" = "Qobuz";
 "source.tidal" = "TIDAL";
-"source.music_library" = "म्यूज़िक लाइब्रेरी";
+"source.music_library" = "लाइब्रेरी";
 
 // MARK: - Radio
 "radio.noFavorites" = "कोई पसंदीदा स्टेशन नहीं";
 
 // MARK: - Music Library
-"musicLibrary.search.placeholder" = "कलाकार, एल्बम, गाने खोजें";
+"musicLibrary.search.placeholder" = "कलाकार, एल्बम, ट्रैक";
 "musicLibrary.search.prompt" = "अपनी लाइब्रेरी खोजें";
 "musicLibrary.search.noResults" = "कोई परिणाम नहीं";
 "musicLibrary.search.artists" = "कलाकार";
 "musicLibrary.search.albums" = "एल्बम";
-"musicLibrary.search.songs" = "गाने";
+"musicLibrary.search.songs" = "ट्रैक";
+// Pluriel géré par Localizable.stringsdict — cette valeur est le repli.
 "musicLibrary.search.albumsCount" = "%d एल्बम";
 "musicLibrary.artist.noAlbums" = "कोई एल्बम नहीं";
-"musicLibrary.album.noSongs" = "कोई गाना नहीं";
+"musicLibrary.album.noSongs" = "कोई ट्रैक नहीं";
 "musicLibrary.showcase.played" = "हाल ही में चलाए गए";
 "musicLibrary.showcase.added" = "हाल ही में जोड़े गए";
 
@@ -45,19 +46,19 @@
 "multiroom.offline" = "ऑफ़लाइन";
 
 // MARK: - Configuration Menu
-"config.settings" = "सेटिंग्स...";
+"config.settings" = "सेटिंग्स…";
 "config.quit" = "बाहर निकलें";
 
 // MARK: - Settings Window
-"settings.title" = "Milo Mac सेटिंग्स";
-"settings.general" = "सामान्य";
-"settings.mac_audio" = "macOS ऑडियो (ROC-VAD)";
+"settings.title" = "Milō Mac सेटिंग्स";
 
 // General section
+"settings.general" = "सामान्य";
+"settings.mac_audio" = "macOS ऑडियो (roc-vad)";
 "settings.hotkeys" = "वॉल्यूम शॉर्टकट (⌥↑/↓)";
-"settings.volume_increment" = "वॉल्यूम वृद्धि";
+"settings.volume_increment" = "वॉल्यूम परिवर्तन";
 "settings.launch_at_login" = "Mac स्टार्टअप पर लॉन्च करें";
-"settings.volume_hud_all_changes" = "हर बदलाव पर वॉल्यूम सूचना दिखाएं, Milo Mac के बाहरी बदलाव सहित";
+"settings.volume_hud_all_changes" = "हर बदलाव पर वॉल्यूम सूचना दिखाएँ, Milō Mac के बाहरी बदलाव सहित";
 
 // Mac Audio section
 "settings.preset" = "प्रीसेट";
@@ -68,7 +69,7 @@
 "settings.fec_source" = "FEC स्रोत पैकेट";
 "settings.fec_repair" = "FEC मरम्मत पैकेट";
 "settings.interleaving" = "पैकेट इंटरलीविंग";
-"settings.reset" = "डिफ़ॉल्ट पर रीसेट";
+"settings.reset" = "रीसेट करें";
 "settings.apply" = "लागू करें";
 
 // MARK: - Connection Status
@@ -78,20 +79,20 @@
 "setup.installation.title" = "Milō Mac इंस्टॉलेशन";
 
 // MARK: - Installation Progress Messages
-"progress.preparing" = "इंस्टॉलेशन की तैयारी...";
-"progress.downloading" = "डिपेंडेंसी डाउनलोड और इंस्टॉल हो रही हैं (roc-vad)...";
-"progress.verifying" = "इंस्टॉलेशन सत्यापित हो रहा है...";
+"progress.preparing" = "इंस्टॉलेशन की तैयारी हो रही है…";
+"progress.downloading" = "डिपेंडेंसी डाउनलोड और इंस्टॉल हो रही हैं (roc-vad)…";
+"progress.verifying" = "इंस्टॉलेशन सत्यापित हो रहा है…";
 "progress.installation_complete" = "इंस्टॉलेशन सफलतापूर्वक पूर्ण";
-"progress.reconfiguring_device" = "Milō ऑडियो डिवाइस पुनः कॉन्फ़िगर हो रहा है...";
-"progress.creating_device" = "Milō ऑडियो डिवाइस बन रहा है...";
+"progress.reconfiguring_device" = "Milō ऑडियो डिवाइस पुनः कॉन्फ़िगर हो रहा है…";
+"progress.creating_device" = "Milō ऑडियो डिवाइस बन रहा है…";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "वॉल्यूम स्लाइडर";
 "accessibility.volume_decrease" = "वॉल्यूम कम करें";
-"accessibility.volume_increase" = "वॉल्यूम बढ़ाएं";
+"accessibility.volume_increase" = "वॉल्यूम बढ़ाएँ";
 "accessibility.play" = "चलाएँ";
 "accessibility.pause" = "रोकें";
-"accessibility.milo_icon" = "Milo";
+"accessibility.milo_icon" = "Milō";
 
 // MARK: - ROC VAD Settings (enum localization)
 "config.rocvad.fec.rs8m" = "मानक (RS8M)";
@@ -105,10 +106,10 @@
 "config.rocvad.preset.balanced" = "संतुलित";
 "config.rocvad.preset.high_quality" = "उच्च गुणवत्ता";
 "config.rocvad.preset.custom" = "कस्टम";
-"progress.applying_settings" = "ऑडियो सेटिंग्स लागू हो रही हैं...";
+"progress.applying_settings" = "ऑडियो सेटिंग्स लागू हो रही हैं…";
 
 // MARK: - Mac audio (roc-vad)
-"settings.rocvad.description" = "“Mac” स्रोत आपके Mac का ऑडियो Milō पर भेजता है। इसके लिए roc-vad ऑडियो ड्राइवर आवश्यक है।";
+"settings.rocvad.description" = "\"Mac\" स्रोत आपके Mac का ऑडियो Milō पर भेजता है। इसके लिए roc-vad ऑडियो ड्राइवर आवश्यक है।";
 "settings.rocvad.install" = "ड्राइवर इंस्टॉल करें";
 "settings.rocvad.installing" = "इंस्टॉल हो रहा है…";
 "settings.rocvad.restart_required" = "Milō ऑडियो आउटपुट सक्षम करने के लिए अपना Mac पुनरारंभ करें।";

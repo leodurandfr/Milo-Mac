@@ -120,7 +120,20 @@ See *Concurrency* for the serialization rule on `RocVADDevice` — it is the one
 
 ## Localization
 
-Always use `L("key")` (`LocalizationHelper.swift`) — never `NSLocalizedString` directly. Any new string must be added to **all 8** `*.lproj/Localizable.strings` (`en`, `fr`, `de`, `es`, `it`, `pt-PT`, `hi`, `zh-Hans`). English and French are authoritative and kept in lockstep (identical line count — currently 112).
+Always use `L("key")` (`LocalizationHelper.swift`) — never `NSLocalizedString` directly. Any new string must be added to **all 8** `*.lproj/Localizable.strings` (`en`, `fr`, `de`, `es`, `it`, `pt-PT`, `hi`, `zh-Hans`). The 8 files are kept byte-aligned: same keys, same order, same `// MARK:` sections, same line numbers (currently 117 lines each). A key-parity diff across them should come back empty.
+
+**The Milō web frontend is the reference for wording.** `leodurandfr/Milo` → `frontend/src/locales/*.json` (same 8 languages: `english`, `french`, `german`, `spanish`, `italian`, `portuguese`, `hindi`, `chinese`). When a string names something the web UI also names — a source, a feature, a music-library section, a settings label — reuse the frontend's translation verbatim rather than inventing one. Its conventions apply here too:
+
+- **`Milō`, always with the macron**, everywhere including window titles and VoiceOver labels. There is not a single bare `Milo` in the frontend locales, and there must not be one here.
+- **Typographic ellipsis `…`**, never `...`.
+- **Straight apostrophe `'`**, never `’` (this is the frontend's choice, and it keeps the two corpora greppable as one).
+- **Locale-specific double quotes**: `“…”` (en), `« … »` with non-breaking spaces (fr), `„…“` (de), `«…»` (es, it, pt-PT), `"…"` (hi), `「…」` (zh-Hans).
+- **Formal register throughout**: vous / Sie / usted / Lei / você. No tutoiement, no `tú`, no `tu` in Italian.
+- **French says `pilote`, never `driver`** — for roc-vad and for anything else. `es`/`pt-PT` say *controlador*, `de` *Treiber*; `en` and `it` legitimately keep *driver*, which is the standard term in both.
+
+A few divergences from a literal translation are deliberate because the frontend chose them: `es` says *Multizona* for multiroom and *Desconectado* for offline, `pt-PT` says *Configurações* (not *Definições*), `fr`/`de`/`es`/`it`/`pt-PT` keep *Preset* untranslated, `zh-Hans` uses 音质 for audio quality. Don't "fix" these.
+
+**Plurals live in `Localizable.stringsdict`**, one per `.lproj`, not in the `.strings` file. Only `musicLibrary.search.albumsCount` needs one today. The `.strings` entry stays as the fallback, which is also what keeps the key-parity check meaningful. This works only because `L(_:_:)` formats with `Locale.current` — plain `String(format:)` copies `%#@albums@` through verbatim instead of expanding it.
 
 The product is branded **Milō**, with the macron. The Xcode target's `PRODUCT_NAME` is `Milo` (so the Swift module is `Milo`, which is what the tests `@testable import`), the bundle is `Milō.app`, the bundle id is `leodurand.Milo-Mac`, and the repo folder is `Milo Mac`. One scheme: `Milo Mac`. Don't strip the macron from user-facing text.
 
