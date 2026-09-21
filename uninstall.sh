@@ -19,7 +19,12 @@ fi
 
 # Stop Milo Mac if it is running
 echo "1. Stopping Milo Mac..."
-killall "Milo Mac" 2>/dev/null && echo "   Milo Mac stopped" || echo "   Milo Mac was not running"
+# "Milo" is the current process name; "Milo Mac" is the one used before 0.1.0
+if killall "Milo" 2>/dev/null || killall "Milo Mac" 2>/dev/null; then
+    echo "   Milo Mac stopped"
+else
+    echo "   Milo Mac was not running"
+fi
 
 # Check whether roc-vad is installed
 if command -v roc-vad &> /dev/null || [ -f "/usr/local/bin/roc-vad" ]; then
@@ -42,10 +47,17 @@ fi
 echo ""
 echo "3. Removing the Milo Mac application..."
 
-if [ -d "/Applications/Milo Mac.app" ]; then
-    rm -rf "/Applications/Milo Mac.app"
-    echo "   Application removed from /Applications/"
-else
+removed_app=false
+# "Milō.app" is the current bundle name; the others were used before 0.1.0
+for app in "/Applications/Milō.app" "/Applications/Milo Mac.app" "/Applications/Milo.app"; do
+    if [ -d "$app" ]; then
+        rm -rf "$app"
+        echo "   Removed: $app"
+        removed_app=true
+    fi
+done
+
+if [ "$removed_app" = false ]; then
     echo "   Application not found in /Applications/"
 fi
 
@@ -71,7 +83,9 @@ if [ -d ~/Library/Application\ Support/Milo\ Mac/ ]; then
     echo "   Support folder removed"
 fi
 
-# Clean up the LaunchAgents (automatic startup)
+# Clean up the LaunchAgents (automatic startup).
+# Launch at login now goes through SMAppService, which the removal of the bundle
+# takes care of; this only clears agents left behind by older versions.
 find ~/Library/LaunchAgents/ -name "*Milo*Mac*" -type f 2>/dev/null | while read file; do
     rm -f "$file"
     echo "   Startup agent removed: $(basename "$file")"
