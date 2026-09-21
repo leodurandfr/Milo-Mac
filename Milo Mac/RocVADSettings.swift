@@ -105,9 +105,9 @@ enum ResamplerProfile: String, CaseIterable {
 
 /// Configuration settings for ROC VAD sender.
 ///
-/// Equatable est synthétisé : tous les champs sont de la config driver, donc tous
-/// comptent (`matchingPreset(for:)` en dépend). N'ajouter ici que ce qui pilote roc-vad —
-/// l'état d'UI va dans DefaultsKey.
+/// Equatable is synthesized: every field is driver configuration, so all of them count
+/// (`matchingPreset(for:)` depends on it). Only add things here that drive roc-vad —
+/// UI state goes into DefaultsKey.
 struct RocVADSettings: Equatable {
 
     // MARK: - Main Options
@@ -175,9 +175,9 @@ struct RocVADSettings: Equatable {
 
     // MARK: - UserDefaults Keys
 
-    // Cette struct ne porte QUE de la configuration driver. L'état déplié de la section
-    // « Audio Mac » est de l'UI : il vit dans DefaultsKey.macAudioExpanded, sinon un
-    // saveToUserDefaults() réécrirait la valeur lue au lancement par-dessus l'actuelle.
+    // This struct carries ONLY driver configuration. The expanded state of the
+    // "Mac Audio" section is UI: it lives in DefaultsKey.macAudioExpanded, otherwise a
+    // saveToUserDefaults() would write the value read at launch over the current one.
     private enum Keys {
         static let deviceBuffer = "RocVAD.DeviceBuffer"
         static let fecEncoding = "RocVAD.FECEncoding"

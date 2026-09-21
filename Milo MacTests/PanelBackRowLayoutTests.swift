@@ -1,10 +1,10 @@
-//  Hauteur de l'en-tête des sous-niveaux.
+//  Sub-level header height.
 //
-//  L'en-tête d'un sous-niveau se cale sur son TEXTE, et le bouton de lecture des pages artiste/
-//  album ne doit rien y changer : ni en apparaissant, ni en laissant la place au spinner, qui
-//  n'a pas la même taille que le symbole play. C'est pour ça qu'il est posé en overlay — une
-//  construction dont rien, à la lecture, ne dit qu'elle tient encore après une retouche de la
-//  ligne. D'où cette mesure, la seule façon de le vérifier sans ouvrir le panneau à la main.
+//  A sub-level's header sizes itself on its TEXT, and the play button on the artist/album
+//  pages must not change that: neither by appearing, nor by making room for the spinner,
+//  which is not the same size as the play symbol. That is why it sits in an overlay — a
+//  construction that, on reading, gives no sign of still holding after a tweak to the row.
+//  Hence this measurement, the only way to check it without opening the panel by hand.
 
 import AppKit
 import SwiftUI
@@ -18,10 +18,10 @@ private func headerHeight(play: PanelBackPlayAction?) -> CGFloat {
 }
 
 @MainActor
-@Suite("Hauteur de PanelBackRow")
+@Suite("PanelBackRow height")
 struct PanelBackRowLayoutTests {
 
-    @Test("Le bouton de lecture ne change pas la hauteur de l'en-tête")
+    @Test("The play button does not change the header's height")
     func playButtonDoesNotChangeHeight() {
         let bare = headerHeight(play: nil)
         let withPlay = headerHeight(play: .init(isLoading: false, isPlaying: false, action: {}))
@@ -30,7 +30,7 @@ struct PanelBackRowLayoutTests {
         #expect(withPlay == bare)
     }
 
-    @Test("Le spinner ne change pas la hauteur de l'en-tête")
+    @Test("The spinner does not change the header's height")
     func loadingSpinnerDoesNotChangeHeight() {
         let bare = headerHeight(play: nil)
         let loading = headerHeight(play: .init(isLoading: true, isPlaying: false, action: {}))

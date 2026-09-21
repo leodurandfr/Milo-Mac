@@ -3,16 +3,16 @@ import ServiceManagement
 
 // MARK: - Shared identifiers
 
-/// Clés UserDefaults partagées entre fichiers — une seule définition pour qu'une faute de
-/// frappe ne puisse pas scinder silencieusement l'état persisté.
+/// UserDefaults keys shared across files — a single definition, so a typo cannot silently
+/// split the persisted state.
 enum DefaultsKey {
     static let showVolumeHUDOnAllChanges = "ShowVolumeHUDOnAllChanges"
     static let hotkeyVolumeDeltaDb = "HotkeyVolumeDeltaDb"
 }
 
 extension Notification.Name {
-    /// Posté par GlobalHotkeyManager à chaque ajustement local du volume, observé par
-    /// MiloStore pour synchroniser le slider et le cache.
+    /// Posted by GlobalHotkeyManager on every local volume adjustment, observed by
+    /// MiloStore to keep the slider and the cache in sync.
     static let volumeChangedViaHotkey = Notification.Name("VolumeChangedViaHotkey")
 }
 
@@ -21,9 +21,9 @@ struct Milo_MacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // L'app vit entièrement dans la barre de menus : aucune scène à présenter.
-        // Le panneau est une NSPanel (MenuBarShell) et les Réglages une NSWindow
-        // (SettingsWindowPresenter), tous deux hébergeant des vues SwiftUI.
+        // The app lives entirely in the menu bar: there is no scene to present.
+        // The panel is an NSPanel (MenuBarShell) and Settings an NSWindow
+        // (SettingsWindowPresenter), both hosting SwiftUI views.
         Settings { EmptyView() }
     }
 }
@@ -43,10 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSLog("🚀 Milō Mac starting...")
 
-        // L'icône de barre de menus apparaît immédiatement, avant toute vérification.
-        // Milō est pleinement utilisable sans roc-vad — seule la source « Mac » en
-        // dépend — donc rien ne justifie de retarder l'interface ou, pire, de refuser
-        // de démarrer. roc-vad est un état, pas un péage.
+        // The menu-bar icon appears immediately, before any check runs.
+        // Milō is fully usable without roc-vad — only the "Mac" source depends on
+        // it — so nothing justifies delaying the interface or, worse, refusing to
+        // start. roc-vad is a state, not a toll.
         let store = MiloStore()
         self.store = store
         self.menuBarShell = MenuBarShell(store: store)
@@ -54,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.attachRocVAD(RocVADManager())
         store.start()
 
-        // Configuration du driver en arrière-plan, sans jamais bloquer l'UI.
+        // Driver setup in the background, never blocking the UI.
         store.prepareRocVADIfInstalled()
 
         NSLog("✅ Milō Mac ready")

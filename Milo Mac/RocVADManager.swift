@@ -1,36 +1,34 @@
 import Foundation
 import AppKit
 
-// MARK: - Progression
+// MARK: - Progress
 
-/// Ce que le pilote demande d'afficher pendant une opération. Le panneau, lui, est
-/// dessiné par `RocVADManager`, sur le main thread.
+/// What the driver layer asks to display during an operation. The panel itself is drawn
+/// by `RocVADManager`, on the main thread.
 enum RocVADProgress: Sendable {
     case show(String)
     case update(String)
     case hide
 }
 
-// MARK: - Pilote
+// MARK: - Driver
 
-/// Appels au binaire roc-vad, **sérialisés**.
+/// Calls to the roc-vad binary, **serialized**.
 ///
-/// La sérialisation n'est pas un détail de confort : chaque opération liste, supprime,
-/// recrée puis configure le device « Milō ». Deux qui s'entrelacent laissent des doublons
-/// ou un device à moitié configuré. Elle était portée par une `DispatchQueue` série et par
-/// la discipline des appelants ; elle l'est maintenant par le compilateur.
+/// The serialization is not a comfort detail: every operation lists, deletes, recreates and
+/// then configures the "Milō" device. Two of them interleaving leave duplicates or a
+/// half-configured device. It used to be carried by a serial `DispatchQueue` and by the
+/// callers' discipline; it is now carried by the compiler.
 ///
-/// L'exécuteur de cet acteur **est** cette même queue série (`DispatchSerialQueue` est
-/// conforme à `SerialExecutor`). Ce n'est pas une coquetterie : les appels roc-vad sont
-/// synchrones et bloquants (`Process.waitUntilExit`, plusieurs secondes quand le driver
-/// répond mal). Sur l'exécuteur par défaut, ils bloqueraient un thread du pool coopératif
-/// de Swift, dont la largeur est bornée par le nombre de cœurs. Ici ils bloquent un thread
-/// de queue — exactement comme avant.
+/// This actor's executor **is** that same serial queue (`DispatchSerialQueue` conforms to
+/// `SerialExecutor`). That is not an affectation: the roc-vad calls are synchronous and
+/// blocking (`Process.waitUntilExit`, several seconds when the driver answers badly). On
+/// the default executor they would block a thread of Swift's cooperative pool, whose width
+/// is bounded by the core count. Here they block a queue thread — exactly as before.
 ///
-/// ⚠️ Aucune méthode de cet acteur ne doit contenir d'`await` : un point de suspension
-/// rouvrirait la réentrance, donc l'entrelacement que la queue série interdisait. C'est
-/// pourquoi la progression est **postée sans être attendue** — comme le faisait le
-/// `DispatchQueue.main.async` d'origine.
+/// ⚠️ No method on this actor may contain an `await`: a suspension point would reopen
+/// reentrancy, hence the interleaving the serial queue forbade. That is why progress is
+/// **posted without being awaited** — just as the original `DispatchQueue.main.async` did.
 actor RocVADDevice {
     private let queue = DispatchSerialQueue(label: "com.milo.rocvad.device")
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
@@ -47,11 +45,11 @@ actor RocVADDevice {
         self.settings = settings
     }
 
-    // MARK: - Sous-processus roc-vad
+    // MARK: - roc-vad subprocess
 
-    /// Lance roc-vad et attend la fin. Synchrone et bloquant — d'où l'exécuteur ci-dessus.
-    /// Renvoie nil si le binaire n'a pas pu être lancé (désinstallé en cours de session,
-    /// par ex.) — contrairement à launch(), run() est rattrapable.
+    /// Runs roc-vad and waits for it to finish. Synchronous and blocking — hence the
+    /// executor above. Returns nil if the binary could not be launched (uninstalled
+    /// mid-session, for instance) — unlike launch(), run() is recoverable.
     private nonisolated static func runRocVAD(_ arguments: [String]) -> (status: Int32, output: String)? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: RocVADManager.binaryPath)
@@ -68,7 +66,7 @@ actor RocVADDevice {
             return nil
         }
 
-        // Lire avant waitUntilExit pour ne pas bloquer si la sortie remplit le pipe.
+        // Read before waitUntilExit so we do not block if the output fills the pipe.
         let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
 
@@ -77,19 +75,19 @@ actor RocVADDevice {
 
     // MARK: - Interface
 
-    /// Le binaire est présent ET le driver répond. `roc-vad info` passe par gRPC et peut
-    /// prendre plusieurs secondes quand le driver est à moitié chargé.
+    /// The binary is present AND the driver answers. `roc-vad info` goes through gRPC and
+    /// can take several seconds when the driver is half-loaded.
     func isFunctional() -> Bool {
         let working = RocVADManager.isBinaryInstalled && Self.runRocVAD(["info"])?.status == 0
         NSLog(working ? "✅ roc-vad is functional" : "⚠️ roc-vad missing or driver not loaded")
         return working
     }
 
-    /// Installe roc-vad via osascript (qui affiche lui-même le dialogue d'autorisation
-    /// administrateur). Bloquant : auth + curl + install.
+    /// Installs roc-vad via osascript (which shows the administrator authorization dialog
+    /// itself). Blocking: auth + curl + install.
     ///
-    /// En sous-processus, et non via un `NSAppleScript` synchrone sur le main thread —
-    /// celui-ci gelait le panneau de progression pendant toute l'installation.
+    /// In a subprocess, rather than through a synchronous `NSAppleScript` on the main
+    /// thread — that one froze the progress panel for the whole installation.
     func runInstaller() -> Bool {
         NSLog("📦 Installing roc-vad...")
 
@@ -113,14 +111,14 @@ actor RocVADDevice {
         return true
     }
 
-    /// Vérifie le device et ne le (re)crée que si nécessaire — le cas courant (device déjà
-    /// bon) ne montre aucun panneau.
+    /// Checks the device and only (re)creates it when needed — the common case (device
+    /// already fine) shows no panel at all.
     func configureIfNeeded(progress: @Sendable (RocVADProgress) -> Void) -> Bool {
         NSLog("🔧 Checking Milō audio device configuration...")
 
         let existing = deviceInfo().filter { $0.name == deviceName }
 
-        // Doublons : tout supprimer et repartir proprement.
+        // Duplicates: delete everything and start over cleanly.
         if existing.count > 1 {
             NSLog("⚠️ Found %d Milō devices - cleaning up duplicates", existing.count)
             deleteAllMiloDevices()
@@ -152,8 +150,8 @@ actor RocVADDevice {
         return configureDevice(deviceIndex: index)
     }
 
-    /// Repointe le device sur l'IP résolue. roc-vad ne permet pas de modifier les endpoints
-    /// d'un device existant : il faut le supprimer et le recréer.
+    /// Repoints the device at the resolved IP. roc-vad does not allow an existing device's
+    /// endpoints to be modified: it has to be deleted and recreated.
     func updateHost(_ newHost: String) {
         guard newHost != miloHost else {
             NSLog("🔄 roc-vad: Host unchanged (%@)", newHost)
@@ -176,12 +174,12 @@ actor RocVADDevice {
         NSLog(success ? "✅ Device reconfigured with IP: %@" : "❌ Failed to configure device with IP: %@", newHost)
     }
 
-    /// Applique de nouveaux réglages : le device est recréé avec les nouveaux arguments.
+    /// Applies new settings: the device is recreated with the new arguments.
     func apply(_ newSettings: RocVADSettings, progress: @Sendable (RocVADProgress) -> Void) -> Bool {
         settings = newSettings
 
         if deleteAllMiloDevices() > 0 {
-            // Court délai pour s'assurer que les devices sont bien supprimés.
+            // A short delay to make sure the devices really are deleted.
             Thread.sleep(forTimeInterval: 0.5)
         }
 
@@ -201,9 +199,9 @@ actor RocVADDevice {
         return success
     }
 
-    // MARK: - Primitives roc-vad
+    // MARK: - roc-vad primitives
 
-    /// Supprime tous les devices « Milō » et retourne le nombre supprimé.
+    /// Deletes every "Milō" device and returns how many were deleted.
     @discardableResult
     private func deleteAllMiloDevices() -> Int {
         let existing = deviceInfo().filter { $0.name == deviceName }
@@ -238,8 +236,8 @@ actor RocVADDevice {
         return success
     }
 
-    /// Le device a-t-il déjà ses endpoints ? On cherche les ports ROC caractéristiques,
-    /// sans présumer de l'hôte (l'IP résolue peut différer de `miloHost`).
+    /// Does the device already have its endpoints? We look for the characteristic ROC
+    /// ports, without assuming the host (the resolved IP may differ from `miloHost`).
     private func isDeviceConfigured(deviceIndex: Int) -> Bool {
         guard let result = Self.runRocVAD(["device", "show", "\(deviceIndex)"]) else { return false }
 
@@ -257,31 +255,31 @@ actor RocVADDevice {
 
 // MARK: - Manager
 
-/// Façade du driver roc-vad : l'état côté UI (réglages, panneau de progression) et la
-/// porte d'entrée du pilote.
+/// The roc-vad driver's façade: the UI-side state (settings, progress panel) and the
+/// entry point to the driver layer.
 ///
-/// roc-vad est un **état**, jamais un péage au démarrage : l'app tourne très bien sans
-/// lui — seule la source « Mac » en dépend, et elle apparaît simplement désactivée.
+/// roc-vad is a **state**, never a toll at startup: the app runs perfectly well without it
+/// — only the "Mac" source depends on it, and it simply shows up as disabled.
 @MainActor
 final class RocVADManager {
 
-    /// `nonisolated` : simple constante, lue depuis le pilote (hors main actor) comme
-    /// depuis l'UI.
+    /// `nonisolated`: a plain constant, read from the driver layer (off the main actor) as
+    /// well as from the UI.
     nonisolated static let binaryPath = "/usr/local/bin/roc-vad"
 
-    /// Le binaire est présent sur le disque (ne dit pas si le driver est chargé — pour ça,
-    /// voir `checkInstallation()`).
+    /// The binary is present on disk (this says nothing about whether the driver is
+    /// loaded — for that, see `checkInstallation()`).
     nonisolated static var isBinaryInstalled: Bool {
         FileManager.default.fileExists(atPath: binaryPath)
     }
 
-    /// Copie main-isolée des réglages, lue par SettingsViewModel. Le pilote garde la sienne
-    /// (il en a besoin pour construire les arguments, sur sa propre queue).
+    /// A main-isolated copy of the settings, read by SettingsViewModel. The driver layer
+    /// keeps its own (it needs it to build the arguments, on its own queue).
     private(set) var settings: RocVADSettings
 
     private let device: RocVADDevice
 
-    // Panneau de progression (style NSAlert natif)
+    // Progress panel (native NSAlert styling)
     private var progressPanel: NSWindow?
     private var progressLabel: NSTextField?
     private var progressIndicator: NSProgressIndicator?
@@ -300,15 +298,15 @@ final class RocVADManager {
         await device.isFunctional()
     }
 
-    /// Vérifie le device et ne le (re)crée qu'au besoin. Le panneau de progression
-    /// n'apparaît que si du travail est nécessaire.
+    /// Checks the device and only (re)creates it when needed. The progress panel only
+    /// appears if there is work to do.
     @discardableResult
     func configureDeviceOnly() async -> Bool {
         await device.configureIfNeeded(progress: progressSink())
     }
 
-    /// Repointe roc-vad sur l'IP résolue. Sans attente : l'appelant (le connection manager)
-    /// n'a rien à en faire.
+    /// Repoints roc-vad at the resolved IP. Without waiting: the caller (the connection
+    /// manager) has nothing to do with the result.
     nonisolated func updateMiloHost(_ newHost: String) {
         Task { await device.updateHost(newHost) }
     }
@@ -322,8 +320,8 @@ final class RocVADManager {
         updateProgressMessage(L("progress.downloading"))
         guard await device.runInstaller() else { return false }
 
-        // Laisser l'installation se poser, puis vérifier. `Task.sleep` et non
-        // `Thread.sleep` : on est sur le main actor, et le panneau doit rester animé.
+        // Let the installation settle, then check. `Task.sleep` and not `Thread.sleep`:
+        // we are on the main actor, and the panel has to stay animated.
         try? await Task.sleep(for: .seconds(3))
 
         updateProgressMessage(L("progress.verifying"))
@@ -340,13 +338,13 @@ final class RocVADManager {
         return true
     }
 
-    /// Applique de nouveaux réglages et recrée le device.
+    /// Applies new settings and recreates the device.
     func updateSettings(_ newSettings: RocVADSettings) async -> Bool {
         NSLog("🔧 Updating ROC VAD settings...")
 
-        // Poser la copie main-isolée AVANT le travail : c'est elle que lit
-        // SettingsViewModel (`hasChanges`), et elle doit refléter ce qu'on est en train
-        // d'appliquer dès le clic sur « Appliquer ».
+        // Set the main-isolated copy BEFORE the work: that is what SettingsViewModel reads
+        // (`hasChanges`), and it has to reflect what is being applied from the moment Apply
+        // is clicked.
         settings = newSettings
         newSettings.saveToUserDefaults()
         NSLog("💾 Settings saved: buffer=%dms, fec=%@, resampler=%@",
@@ -358,11 +356,11 @@ final class RocVADManager {
         return await device.apply(newSettings, progress: progressSink())
     }
 
-    // MARK: - Panneau de progression
+    // MARK: - Progress panel
 
-    /// Le pilote poste ses étapes **sans les attendre** : un `await` vers le main actor
-    /// depuis l'acteur le suspendrait, et rouvrirait l'entrelacement que sa queue série
-    /// interdit. C'est exactement ce que faisait le `DispatchQueue.main.async` d'origine.
+    /// The driver layer posts its steps **without awaiting them**: an `await` towards the
+    /// main actor from the actor would suspend it, and reopen the interleaving its serial
+    /// queue forbids. That is exactly what the original `DispatchQueue.main.async` did.
     private nonisolated func progressSink() -> @Sendable (RocVADProgress) -> Void {
         { [weak self] step in
             Task { @MainActor in self?.applyProgress(step) }
@@ -377,10 +375,10 @@ final class RocVADManager {
         }
     }
 
-    // Fenêtre sans barre de titre, au matériau des NSAlert.
+    // A title-bar-less window, in the NSAlert material.
     private func showProgressPanel(message: String) {
-        // Une opération peut en enchaîner une autre (updateSettings ouvre le panneau, puis
-        // le pilote demande .show) : ne pas empiler deux fenêtres.
+        // One operation can chain into another (updateSettings opens the panel, then the
+        // driver layer asks for .show): do not stack two windows.
         guard progressPanel == nil else {
             updateProgressMessage(message)
             return
@@ -399,7 +397,7 @@ final class RocVADManager {
         window.center()
         window.isReleasedWhenClosed = false
 
-        // Transparence + flou, comme les vrais NSAlert.
+        // Transparency + blur, like real NSAlerts.
         let visualEffectView = NSVisualEffectView()
         visualEffectView.frame = window.contentView!.bounds
         visualEffectView.autoresizingMask = [.width, .height]
@@ -414,14 +412,14 @@ final class RocVADManager {
         contentView.autoresizingMask = [.width, .height]
         visualEffectView.addSubview(contentView)
 
-        // Icône de l'app, 64×64 centrée — comme dans un NSAlert.
+        // The app icon, 64×64 centred — as in an NSAlert.
         let iconImageView = NSImageView()
         iconImageView.frame = NSRect(x: (260 - 64) / 2, y: 106, width: 64, height: 64)
         iconImageView.image = NSApp.applicationIconImage
         iconImageView.imageScaling = .scaleProportionallyDown
         contentView.addSubview(iconImageView)
 
-        // Titre principal (messageText).
+        // Main title (messageText).
         let titleLabel = NSTextField(labelWithString: L("setup.installation.title"))
         titleLabel.font = .boldSystemFont(ofSize: 13)
         titleLabel.alignment = .center
@@ -432,7 +430,7 @@ final class RocVADManager {
         titleLabel.frame = NSRect(x: 20, y: 66, width: 220, height: 20)
         contentView.addSubview(titleLabel)
 
-        // Message de progression (informativeText).
+        // Progress message (informativeText).
         let messageLabel = NSTextField(labelWithString: message)
         messageLabel.font = .systemFont(ofSize: 11)
         messageLabel.alignment = .center
@@ -446,7 +444,7 @@ final class RocVADManager {
         contentView.addSubview(messageLabel)
         progressLabel = messageLabel
 
-        // Barre de progression (accessoryView).
+        // Progress bar (accessoryView).
         let progress = NSProgressIndicator()
         progress.style = .bar
         progress.isIndeterminate = true

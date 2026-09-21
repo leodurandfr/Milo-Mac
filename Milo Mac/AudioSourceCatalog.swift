@@ -1,15 +1,15 @@
 import SwiftUI
 
-/// `RadioStation` porte déjà un `id` — la conformité permet de l'utiliser directement
-/// dans un `ForEach`.
+/// `RadioStation` already carries an `id` — the conformance lets it be used directly
+/// in a `ForEach`.
 extension RadioStation: Identifiable {}
 
-/// Icône d'une ligne du panneau : soit un SF Symbol, soit une image du catalogue.
+/// A panel row's icon: either an SF Symbol or an image from the asset catalog.
 ///
-/// Les deux ne se dimensionnent pas de la même façon et il ne faut surtout pas leur
-/// imposer la même taille : les images du catalogue portent leur propre marge interne et
-/// doivent donc remplir **tout** le cercle, tandis qu'un SF Symbol se dimensionne par sa
-/// police. Les contraindre au même cadre rend les assets minuscules à côté des symboles.
+/// The two do not size the same way, and they must never be forced into the same frame:
+/// catalog images carry their own internal padding and therefore have to fill the **whole**
+/// circle, whereas an SF Symbol sizes itself by its font. Constraining both to one frame
+/// makes the assets tiny next to the symbols.
 enum SourceIcon {
     case symbol(String)
     case asset(String)
@@ -21,8 +21,8 @@ enum SourceIcon {
             Image(systemName: name)
                 .font(.system(size: 14, weight: .medium))
         case .asset(let name):
-            // Dimensionnée sur la pastille elle-même (`MenuRowMetrics.iconSize`) : l'asset
-            // porte sa propre marge et doit donc remplir tout le cercle.
+            // Sized on the badge itself (`MenuRowMetrics.iconSize`): the asset carries
+            // its own padding and therefore has to fill the whole circle.
             Image(name)
                 .renderingMode(.template)
                 .resizable()
@@ -32,11 +32,11 @@ enum SourceIcon {
     }
 }
 
-/// Une source audio affichable dans le panneau.
+/// An audio source that can be shown in the panel.
 ///
-/// `id` doit correspondre **exactement** à la valeur de l'enum `AudioSource` du backend
-/// (`backend/core/models/audio_state.py`). Le backend est la source de vérité : ce
-/// catalogue ne fait que décrire comment chaque identifiant s'affiche.
+/// `id` must match the backend's `AudioSource` enum value **exactly**
+/// (`backend/core/models/audio_state.py`). The backend is the source of truth: this
+/// catalog only describes how each identifier is displayed.
 struct AudioSourceDescriptor: Identifiable {
     let id: String
     let titleKey: String
@@ -46,8 +46,8 @@ struct AudioSourceDescriptor: Identifiable {
 }
 
 enum AudioSourceCatalog {
-    /// Ordre de repli uniquement. L'ordre réel d'affichage vient de `enabled_apps`
-    /// (backend) — ne jamais coder l'ordre en dur ailleurs.
+    /// Fallback order only. The real display order comes from `enabled_apps`
+    /// (backend) — never hardcode the order anywhere else.
     static let all: [AudioSourceDescriptor] = [
         .init(id: "spotify",   titleKey: "source.spotify",   icon: .asset("spotify-icon")),
         .init(id: "bluetooth", titleKey: "source.bluetooth", icon: .asset("bluetooth-icon")),
@@ -67,15 +67,15 @@ enum AudioSourceCatalog {
     private static let byId: [String: AudioSourceDescriptor] =
         Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
 
-    /// Sources à afficher, dans l'ordre imposé par le backend (`enabled_apps`).
-    /// `enabled_apps` est à la fois le **filtre** et l'**ordre**.
+    /// Sources to display, in the order imposed by the backend (`enabled_apps`).
+    /// `enabled_apps` is both the **filter** and the **order**.
     static func ordered(enabledApps: [String]?) -> [AudioSourceDescriptor] {
         guard let enabledApps else { return all }
         return enabledApps.compactMap { byId[$0] }
     }
 }
 
-/// Une fonctionnalité activable (interrupteur), par opposition à une source (sélection).
+/// A toggleable feature (a switch), as opposed to a source (a selection).
 struct FeatureDescriptor: Identifiable {
     let id: String
     let titleKey: String
@@ -90,8 +90,8 @@ enum FeatureCatalog {
         .init(id: "equalizer", titleKey: "feature.equalizer", icon: .asset("equalizer-icon"))
     ]
 
-    /// Multiroom est affiché par défaut (comportement historique : `?? true`),
-    /// l'égaliseur seulement s'il est explicitement listé (`?? false`).
+    /// Multiroom is shown by default (historical behaviour: `?? true`),
+    /// the equalizer only if explicitly listed (`?? false`).
     static func enabled(enabledApps: [String]?) -> [FeatureDescriptor] {
         all.filter { feature in
             switch feature.id {

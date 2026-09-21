@@ -2,47 +2,47 @@ import Foundation
 import Network
 import Synchronization
 
-/// Backend Milō minimal, servi en local sur un port éphémère, dont on peut faire échouer
-/// `/api/settings/bulk` à volonté.
+/// A minimal Milō backend, served locally on an ephemeral port, whose
+/// `/api/settings/bulk` can be made to fail at will.
 ///
-/// C'est un vrai serveur HTTP, pas un mock d'URLSession : les tests exercent ainsi la
-/// pile réseau réelle de l'app (URLSession, codes d'erreur, parsing, retries) plutôt
-/// qu'une réimplémentation de celle-ci.
+/// This is a real HTTP server, not a mocked URLSession: the tests thereby exercise the
+/// app's real networking stack (URLSession, error codes, parsing, retries) rather than a
+/// reimplementation of it.
 ///
-/// `Sendable` vérifié : il est piloté depuis les tests (main actor) et sert ses requêtes
-/// sur sa propre queue — tout son état mutable est donc sous `Mutex`, comme celui de
+/// `Sendable` checked: it is driven from the tests (main actor) and serves its requests
+/// on its own queue — so all of its mutable state sits under a `Mutex`, like that of
 /// `MiloAPIService`.
 final class StubMiloBackend: Sendable {
 
-    /// Limites servies par le stub — volontairement différentes des valeurs de repli
-    /// (-80/-21) pour qu'un test puisse distinguer « limites chargées » de « repli ».
+    /// Limits served by the stub — deliberately different from the fallback values
+    /// (-80/-21) so a test can tell "limits loaded" from "fallback".
     static let limitMinDb = -55.0
     static let limitMaxDb = -15.0
     static let enabledApps = ["radio", "spotify"]
 
-    /// Le client multiroom servi par `/api/multiroom/state` et `/api/volume/state` : un seul
-    /// suffit à distinguer « volume chargé » de « volume vidé ».
+    /// The multiroom client served by `/api/multiroom/state` and `/api/volume/state`: one
+    /// is enough to tell "volume loaded" from "volume emptied".
     static let clientMac = "aa:bb:cc:dd:ee:ff"
     static let clientVolumeDb = -33.0
 
     private struct State {
-        /// Nombre d'appels `/api/settings/bulk` encore à faire échouer (503).
-        /// `.max` = échoue toujours ; 0 = répond normalement.
+        /// Number of `/api/settings/bulk` calls still to be failed (503).
+        /// `.max` = always fails; 0 = answers normally.
         var bulkFailuresRemaining = 0
-        /// Nombre total d'appels reçus sur `/api/settings/bulk`, échecs compris.
+        /// Total number of calls received on `/api/settings/bulk`, failures included.
         var bulkHits = 0
-        /// Port éphémère attribué par le noyau au démarrage.
+        /// Ephemeral port assigned by the kernel at startup.
         var port = 0
-        /// Sert `/api/audio/state` multiroom ACTIF — le store charge alors, de lui-même,
-        /// la structure multiroom et les volumes par client.
+        /// Serves `/api/audio/state` with multiroom ACTIVE — the store then loads, on its
+        /// own, the multiroom structure and the per-client volumes.
         var multiroomEnabled = false
-        /// Fait répondre `/api/volume/state` en 200 + {"status":"error"} : l'enveloppe que
-        /// Milō sert sur exception (backend/api/volume.py), et non un statut HTTP d'échec.
+        /// Makes `/api/volume/state` answer 200 + {"status":"error"}: the envelope Milō
+        /// serves on exception (backend/api/volume.py), not an HTTP failure status.
         var volumeStateFails = false
-        /// Nombre d'appels servis sur `/api/volume/state`, erreurs comprises.
+        /// Number of calls served on `/api/volume/state`, errors included.
         var volumeStateHits = 0
-        /// Fait répondre `PUT /api/equalizer/target/local/enabled` en 200 + {"status":"error"} :
-        /// ce que le backend renvoie quand la cible refuse (backend/api/equalizer.py).
+        /// Makes `PUT /api/equalizer/target/local/enabled` answer 200 + {"status":"error"}:
+        /// what the backend returns when the target refuses (backend/api/equalizer.py).
         var equalizerRefuses = false
     }
 
@@ -77,9 +77,9 @@ final class StubMiloBackend: Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "stub.milo.backend")
 
-    // MARK: - Cycle de vie
+    // MARK: - Lifecycle
 
-    /// Démarre le stub et attend qu'il écoute réellement.
+    /// Starts the stub and waits until it is really listening.
     static func start() throws -> StubMiloBackend {
         let backend = try StubMiloBackend()
         try backend.startListening()
@@ -89,7 +89,7 @@ final class StubMiloBackend: Sendable {
     private init() throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
-        // Port .any : le noyau en attribue un libre, donc aucun conflit entre tests.
+        // Port .any: the kernel assigns a free one, so no conflict between tests.
         listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { [weak self] connection in
             self?.handle(connection)
@@ -117,7 +117,7 @@ final class StubMiloBackend: Sendable {
         listener.cancel()
     }
 
-    // MARK: - Requêtes
+    // MARK: - Requests
 
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
@@ -127,7 +127,7 @@ final class StubMiloBackend: Sendable {
                 return
             }
 
-            // « GET /api/settings/bulk HTTP/1.1 » → « /api/settings/bulk »
+            // "GET /api/settings/bulk HTTP/1.1" → "/api/settings/bulk"
             let path = request.split(separator: "\r\n").first?
                 .split(separator: " ").dropFirst().first.map(String.init) ?? ""
 
@@ -167,8 +167,8 @@ final class StubMiloBackend: Sendable {
                 state.volumeStateHits += 1
                 return (state.volumeStateFails, state.multiroomEnabled)
             }
-            // 200 avec status:error — c'est bien l'enveloppe, et non le statut HTTP, qui
-            // porte l'échec de cette route.
+            // 200 with status:error — it really is the envelope, not the HTTP status, that
+            // carries this route's failure.
             if fails {
                 return Self.http(json: #"{"status":"error","message":"volume service unavailable"}"#)
             }
@@ -197,8 +197,8 @@ final class StubMiloBackend: Sendable {
         }
     }
 
-    /// Réponse HTTP/1.1 fermée après chaque requête : URLSession n'a alors aucune
-    /// connexion à recycler, ce qui garde le stub trivial (une requête = une connexion).
+    /// An HTTP/1.1 response closed after every request: URLSession then has no connection
+    /// to recycle, which keeps the stub trivial (one request = one connection).
     private static func http(status: String = "200 OK", json: String) -> Data {
         let body = Data(json.utf8)
         let head = "HTTP/1.1 \(status)\r\n"

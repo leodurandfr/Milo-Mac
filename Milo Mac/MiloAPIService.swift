@@ -1,22 +1,22 @@
 import Foundation
 import Synchronization
 
-/// Convertit le `[String: Any]` de `JSONSerialization` en dictionnaire réellement
-/// **Sendable**.
+/// Converts `JSONSerialization`'s `[String: Any]` into a genuinely **Sendable**
+/// dictionary.
 ///
-/// `MiloState` franchit une frontière d'isolation — il est décodé hors du main actor
-/// (queue déléguée d'URLSession pour le WebSocket, pool Swift-concurrency pour le HTTP)
-/// puis remis au main actor, qui le possède. Sa `metadata` doit donc être Sendable pour
-/// de vrai.
+/// `MiloState` crosses an isolation boundary — it is decoded off the main actor
+/// (URLSession's delegate queue for the WebSocket, the Swift-concurrency pool for HTTP)
+/// and then handed to the main actor, which owns it. Its `metadata` therefore has to be
+/// Sendable for real.
 ///
-/// Et non par un `as? [String: any Sendable]` : `Sendable` est un protocole *marqueur*,
-/// sans représentation à l'exécution — ce cast « réussit toujours » sans rien vérifier.
-/// Ce serait un `@unchecked` déguisé. On reconstruit donc explicitement, à partir des
-/// seuls types que `JSONSerialization` produit.
+/// And not through an `as? [String: any Sendable]`: `Sendable` is a *marker* protocol,
+/// with no runtime representation — that cast "always succeeds" without checking anything.
+/// It would be an `@unchecked` in disguise. So we rebuild it explicitly, from the only
+/// types `JSONSerialization` produces.
 ///
-/// Les `NSNumber` sont conservés tels quels (ils *sont* Sendable) : les lectures
-/// `as? Int` / `as? Bool` du reste de l'app gardent exactement le même comportement de
-/// pont Objective-C qu'avec un `[String: Any]`.
+/// `NSNumber` values are kept as they are (they *are* Sendable): the rest of the app's
+/// `as? Int` / `as? Bool` reads keep exactly the same Objective-C bridging behaviour as
+/// with a `[String: Any]`.
 enum JSONSendable {
     static func dictionary(_ raw: [String: Any]) -> [String: any Sendable] {
         raw.compactMapValues(value)
@@ -24,11 +24,11 @@ enum JSONSendable {
 
     private static func value(_ any: Any) -> (any Sendable)? {
         switch any {
-        case let number as NSNumber:      return number   // Int, Double et Bool
+        case let number as NSNumber:      return number   // Int, Double and Bool
         case let string as String:        return string
         case let array as [Any]:          return array.compactMap(value)
         case let object as [String: Any]: return dictionary(object)
-        default:                          return nil      // NSNull et inconnus
+        default:                          return nil      // NSNull and unknowns
         }
     }
 }
@@ -36,26 +36,26 @@ enum JSONSendable {
 struct MiloState: Sendable {
     let activeSource: String
     let sourceState: String       // "starting", "ready", "active", "error"
-    let transitioning: Bool       // true pendant un changement de source
+    let transitioning: Bool       // true during a source change
     let multiroomEnabled: Bool
     let equalizerEnabled: Bool
     let metadata: [String: any Sendable]
 
-    /// Vrai quand la source est POSÉE : son moteur tourne et plus rien n'est en vol — le
-    /// préalable à l'affichage de tout sous-niveau (stations radio, recherche bibliothèque).
+    /// True when the source is SETTLED: its engine is running and nothing is in flight any
+    /// more — the prerequisite for displaying any sub-level (radio stations, library search).
     ///
-    /// `ready` est le nom actuel de cet état côté backend (`SourceState.READY`). `waiting`
-    /// est celui qu'il portait avant le renommage : on l'accepte encore parce qu'un Milō
-    /// pas mis à jour le renvoie toujours, et que les deux désignent le même état (moteur
-    /// debout, session vide). Ne pas réduire à `ready` tant que le backend déployé peut être
-    /// ancien : c'est exactement ce décalage qui avait fait disparaître les deux carets.
+    /// `ready` is this state's current name on the backend side (`SourceState.READY`).
+    /// `waiting` is the one it carried before the rename: we still accept it because a Milō
+    /// that has not been updated still returns it, and both denote the same state (engine up,
+    /// empty session). Do not narrow this to `ready` while the deployed backend may be old:
+    /// that very mismatch is what made both chevrons disappear.
     var isSourceSettled: Bool {
         ["ready", "waiting", "active"].contains(sourceState.lowercased())
     }
 
-    /// Décodage unique du payload backend — partagé entre le fetch HTTP
-    /// (/api/audio/state) et le `full_state` des événements WebSocket,
-    /// pour que les deux transports ne puissent pas diverger.
+    /// A single decoding of the backend payload — shared between the HTTP fetch
+    /// (/api/audio/state) and the WebSocket events' `full_state`,
+    /// so the two transports cannot diverge.
     init(json: [String: Any]) {
         activeSource = json["active_source"] as? String ?? "none"
         sourceState = json["source_state"] as? String ?? "active"
@@ -66,22 +66,22 @@ struct MiloState: Sendable {
     }
 }
 
-/// Bornes de volume de repli, utilisées avant que le premier fetch
-/// /api/settings/bulk n'amorce les vraies limites du device.
-/// Définition unique pour le slider du menu, le HUD et le raccourci clavier.
+/// Fallback volume bounds, used before the first /api/settings/bulk fetch
+/// bootstraps the device's real limits.
+/// A single definition for the menu slider, the HUD and the keyboard shortcut.
 enum VolumeDefaults {
     static let limitMinDb = -80.0
     static let limitMaxDb = -21.0
 }
 
 struct VolumeStatus {
-    let volumeDb: Double          // Volume en dB (-80 à 0)
+    let volumeDb: Double          // Volume in dB (-80 to 0)
     let multiroomEnabled: Bool
-    let limitMinDb: Double        // Limite min configurée
-    let limitMaxDb: Double        // Limite max configurée
+    let limitMinDb: Double        // Configured min limit
+    let limitMaxDb: Double        // Configured max limit
 
-    /// Copie avec de nouvelles bornes — sert à préserver les limites en cache
-    /// quand un événement WebSocket n'en porte pas (voir CLAUDE.md).
+    /// A copy with new bounds — used to preserve the cached limits
+    /// when a WebSocket event does not carry any (see CLAUDE.md).
     func withLimits(minDb: Double, maxDb: Double) -> VolumeStatus {
         VolumeStatus(volumeDb: volumeDb,
                      multiroomEnabled: multiroomEnabled,
@@ -90,21 +90,21 @@ struct VolumeStatus {
     }
 }
 
-/// Réglages statiques du device, servis en un seul appel par `/api/settings/bulk`
-/// (remplace les anciennes routes par catégorie volume-limits / dock-apps).
+/// The device's static settings, served in a single call by `/api/settings/bulk`
+/// (replaces the old per-category volume-limits / dock-apps routes).
 struct BulkSettings {
     let limitMinDb: Double
     let limitMaxDb: Double
     let enabledApps: [String]
 }
 
-/// Station radio telle que servie par /api/radio/stations.
+/// A radio station as served by /api/radio/stations.
 ///
-/// `favicon` est le logo de la station : vide/absent pour beaucoup de favoris,
-/// sinon soit une image hébergée par le Pi (`/api/radio/images/…`), soit une URL
-/// externe à faire passer par le proxy backend. La résolution en URL absolue
-/// vit dans `MiloAPIService.radioFaviconURL(for:)`, qui reprend la règle du
-/// frontend Milō (utils/faviconUrl.js).
+/// `favicon` is the station's logo: empty/absent for many favourites,
+/// otherwise either an image hosted by the Pi (`/api/radio/images/…`), or an external
+/// URL to route through the backend proxy. Resolving it to an absolute URL
+/// lives in `MiloAPIService.radioFaviconURL(for:)`, which follows the
+/// Milō frontend's rule (utils/faviconUrl.js).
 struct RadioStation: Decodable {
     let id: String
     let name: String
@@ -117,10 +117,10 @@ private struct RadioStationsResponse: Decodable {
 
 // MARK: - Music Library
 
-/// Morceau tel que servi par `/api/music-library/search` (dict Subsonic `song`, passé par
-/// `search3`). `raw` garde le dict TEL QUEL : `play_context` (voir `playMusicLibraryContext`)
-/// l'exige en retour, verbatim, comme contexte de file de lecture — le réduire à `id`/`title`/
-/// `artist`/`coverArt` perdrait des champs que le backend attend.
+/// A song as served by `/api/music-library/search` (a Subsonic `song` dict, passed through
+/// `search3`). `raw` keeps the dict AS IS: `play_context` (see `playMusicLibraryContext`)
+/// requires it back, verbatim, as the playback queue's context — reducing it to `id`/`title`/
+/// `artist`/`coverArt` would lose fields the backend expects.
 struct MusicLibrarySong: Sendable, Identifiable {
     let id: String
     let title: String
@@ -138,8 +138,8 @@ struct MusicLibrarySong: Sendable, Identifiable {
     }
 }
 
-/// Album tel que servi par `/api/music-library/search` (dict Subsonic `album`). Affiché en
-/// lecture seule ici — pas de vue de navigation par album dans cette app.
+/// An album as served by `/api/music-library/search` (a Subsonic `album` dict). Displayed
+/// read-only here — there is no album browsing view in this app.
 struct MusicLibraryAlbum: Sendable, Identifiable {
     let id: String
     let name: String
@@ -155,8 +155,8 @@ struct MusicLibraryAlbum: Sendable, Identifiable {
     }
 }
 
-/// Artiste tel que servi par `/api/music-library/search` (dict Subsonic `artist`). Affiché en
-/// lecture seule ici — pas de vue de navigation par artiste dans cette app.
+/// An artist as served by `/api/music-library/search` (a Subsonic `artist` dict). Displayed
+/// read-only here — there is no artist browsing view in this app.
 struct MusicLibraryArtist: Sendable, Identifiable {
     let id: String
     let name: String
@@ -172,7 +172,7 @@ struct MusicLibraryArtist: Sendable, Identifiable {
     }
 }
 
-/// Résultat complet d'une recherche (`search3` : artistes/albums/morceaux fuzzy-matchés).
+/// The full result of a search (`search3`: fuzzy-matched artists/albums/songs).
 struct MusicLibrarySearchResults: Sendable {
     let artists: [MusicLibraryArtist]
     let albums: [MusicLibraryAlbum]
@@ -197,13 +197,13 @@ struct MusicLibrarySearchResults: Sendable {
 
 // MARK: - Multiroom
 
-/// Un client multiroom — un haut-parleur milo-client, ou le client local du Pi — tel que
-/// servi par `/api/multiroom/state`. `Sendable` : décodé hors du main actor (pool
-/// Swift-concurrency) puis remis au store, qui le possède.
+/// A multiroom client — a milo-client speaker, or the Pi's local client — as
+/// served by `/api/multiroom/state`. `Sendable`: decoded off the main actor (the
+/// Swift-concurrency pool) and then handed to the store, which owns it.
 ///
-/// L'identité canonique est le `mac_id` (le backend indexe tout dessus). `volumeControl`
-/// vaut faux pour une carte DAC / un ampli externe qui gère son propre volume — le futur
-/// slider n'a alors pas de prise, comme sur le frontend web.
+/// The canonical identity is the `mac_id` (the backend indexes everything on it).
+/// `volumeControl` is false for a DAC card / an external amp that manages its own volume —
+/// the future slider then has no grip, as on the web frontend.
 struct MultiroomClient: Sendable, Identifiable {
     let macId: String
     let name: String
@@ -232,8 +232,8 @@ struct MultiroomClient: Sendable, Identifiable {
     }
 }
 
-/// Une zone multiroom : un groupe de clients liés, avec un nom et l'ordre de ses membres
-/// (`client_ids`, déjà triés client-local-d'abord par le backend).
+/// A multiroom zone: a group of linked clients, with a name and the order of its members
+/// (`client_ids`, already sorted local-client-first by the backend).
 struct MultiroomZone: Sendable, Identifiable {
     let id: String
     let name: String
@@ -248,13 +248,13 @@ struct MultiroomZone: Sendable, Identifiable {
     }
 }
 
-/// Instantané complet du registre multiroom (`/api/multiroom/state`), clients et zones
-/// indexés par leur identifiant. C'est la *structure* : noms, appartenance aux zones,
-/// présence en ligne. Le volume/mute en direct arrive à part, par l'événement WebSocket
-/// `volume/volume_changed` (voir Étape 2).
+/// A complete snapshot of the multiroom registry (`/api/multiroom/state`), clients and zones
+/// indexed by their identifier. This is the *structure*: names, zone membership,
+/// online presence. The live volume/mute arrives separately, through the WebSocket event
+/// `volume/volume_changed` (see Step 2).
 struct MultiroomSnapshot: Sendable {
-    let clients: [String: MultiroomClient]   // indexés par mac_id
-    let zones: [String: MultiroomZone]       // indexés par zone_id
+    let clients: [String: MultiroomClient]   // indexed by mac_id
+    let zones: [String: MultiroomZone]       // indexed by zone_id
 
     static let empty = MultiroomSnapshot(clients: [:], zones: [:])
 
@@ -283,17 +283,18 @@ struct MultiroomSnapshot: Sendable {
     }
 }
 
-/// Volume/mute EN DIRECT par client et par zone, tel que porté par `/api/volume/state` et par
-/// l'événement WebSocket `volume/volume_changed` (`data.state`). Distinct de la *structure*
-/// (`MultiroomSnapshot`) : celle-ci dit qui existe et où, celui-ci dit où en est le volume.
+/// LIVE volume/mute per client and per zone, as carried by `/api/volume/state` and by the
+/// WebSocket event `volume/volume_changed` (`data.state`). Distinct from the *structure*
+/// (`MultiroomSnapshot`): that one says who exists and where, this one says where the volume
+/// stands.
 ///
-/// La moyenne de zone (`averageVolumeDb`) est pré-calculée par le backend — le slider de zone
-/// s'y cale, et ne recompose pas la moyenne des clients côté app.
+/// The zone average (`averageVolumeDb`) is pre-computed by the backend — the zone slider
+/// follows it, and does not recompose the clients' average on the app side.
 struct MultiroomVolume: Sendable {
     struct Client: Sendable {
         let volumeDb: Double
         let mute: Bool
-        /// Faux quand le client ne peut pas régler son volume (carte DAC / ampli externe).
+        /// False when the client cannot adjust its volume (DAC card / external amp).
         let available: Bool
     }
 
@@ -302,8 +303,8 @@ struct MultiroomVolume: Sendable {
         let allMuted: Bool
     }
 
-    let clients: [String: Client]   // indexés par mac_id
-    let zones: [String: Zone]       // indexés par zone_id
+    let clients: [String: Client]   // indexed by mac_id
+    let zones: [String: Zone]       // indexed by zone_id
 
     static let empty = MultiroomVolume(clients: [:], zones: [:])
 
@@ -312,7 +313,7 @@ struct MultiroomVolume: Sendable {
         self.zones = zones
     }
 
-    /// Décode le `data`/`state` de `/api/volume/state` ou de `volume/volume_changed`.
+    /// Decodes the `data`/`state` of `/api/volume/state` or of `volume/volume_changed`.
     init(state: [String: Any]) {
         func double(_ any: Any?) -> Double? {
             (any as? Double) ?? (any as? Int).map(Double.init)
@@ -342,10 +343,10 @@ struct MultiroomVolume: Sendable {
     }
 }
 
-/// Résolution DNS → IPv4 partagée (bloc CFHost unique pour toute l'app).
-/// MiloAPIService prend le premier résultat ; MiloConnectionManager garde la
-/// liste complète pour son test de latence. CFHost est soft-déprécié — le jour
-/// où on migre vers Network.framework, c'est le seul endroit à changer.
+/// Shared DNS → IPv4 resolution (a single CFHost block for the whole app).
+/// MiloAPIService takes the first result; MiloConnectionManager keeps the
+/// full list for its latency test. CFHost is soft-deprecated — the day
+/// we migrate to Network.framework, this is the only place to change.
 enum IPv4Resolver {
     static func resolveAll(host: String) -> [String] {
         let cfHost = CFHostCreateWithName(nil, host as CFString).takeRetainedValue()
@@ -361,10 +362,10 @@ enum IPv4Resolver {
                                &hostname,
                                socklen_t(hostname.count),
                                nil, 0, NI_NUMERICHOST) == 0 {
-                    // Tronquer au NUL terminal puis décoder : `String(cString:)` est déprécié.
+                    // Truncate at the terminating NUL then decode: `String(cString:)` is deprecated.
                     let bytes = hostname.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
                     let ipAddress = String(decoding: bytes, as: UTF8.self)
-                    // Ne garder que les IPv4 (pas d'IPv6 avec ":")
+                    // Keep only the IPv4 addresses (no IPv6, which contains ":")
                     if !ipAddress.contains(":") {
                         results.append(ipAddress)
                     }
@@ -375,50 +376,50 @@ enum IPv4Resolver {
     }
 }
 
-/// Client HTTP du backend Milō.
+/// The Milō backend's HTTP client.
 ///
-/// Contrairement au reste de l'app, ce service n'est **pas** main-thread-only : il est
-/// appelé depuis le pool Swift-concurrency (toutes ses méthodes `async`) et depuis une
-/// queue utilitaire de résolution DNS. Son traitement correct est donc `Sendable`, pas
+/// Unlike the rest of the app, this service is **not** main-thread-only: it is
+/// called from the Swift-concurrency pool (all of its methods are `async`) and from a
+/// utility DNS-resolution queue. Its correct treatment is therefore `Sendable`, not
 /// `@MainActor`.
 ///
-/// Et un Sendable **vérifié** : tout l'état mutable est enfermé dans un `Mutex`, et les
-/// autres propriétés sont des `let`. Là où un `NSLock` + `@unchecked Sendable` demandait
-/// au compilateur de nous croire sur parole, ici il vérifie.
+/// And a **checked** Sendable: all the mutable state is enclosed in a `Mutex`, and the
+/// other properties are `let`s. Where an `NSLock` + `@unchecked Sendable` asked the
+/// compiler to take our word for it, here it checks.
 final class MiloAPIService: Sendable {
     private let host: String
     private let port: Int
 
-    /// L'état mutable, accédé depuis plusieurs threads — donc rassemblé sous un seul
-    /// verrou plutôt qu'éparpillé en propriétés `var`.
+    /// The mutable state, accessed from several threads — hence gathered under a single
+    /// lock rather than scattered across `var` properties.
     private struct State {
         var session: URLSession
-        // Session dédiée aux endpoints où le backend garde la connexion HTTP ouverte
-        // pendant toute une opération lente (ex. toggle multiroom : snapserver start
-        // + restart source + push volume, jusqu'à ~20 s). Les timeouts 3 s/5 s de la
-        // session rapide tomberaient en pleine transition.
+        // A session dedicated to the endpoints where the backend keeps the HTTP connection
+        // open for the whole of a slow operation (e.g. the multiroom toggle: snapserver start
+        // + source restart + volume push, up to ~20 s). The fast session's 3 s/5 s timeouts
+        // would fire mid-transition.
         var longSession: URLSession
         var resolvedIPv4: String?
-        // Limites de volume : config statique du device servie par /api/settings/bulk.
-        // Mises en cache une fois à la connexion (via fetchBulkSettings) pour que le
-        // HUD volume ne tire pas tout le payload /bulk à chaque getVolumeStatus() —
-        // c'est ce que fait le frontend Milō via son settingsStore.
+        // Volume limits: the device's static config, served by /api/settings/bulk.
+        // Cached once at connect (via fetchBulkSettings) so that the volume
+        // HUD does not pull the whole /bulk payload on every getVolumeStatus() —
+        // which is what the Milō frontend does through its settingsStore.
         var cachedLimitMinDb: Double = VolumeDefaults.limitMinDb
         var cachedLimitMaxDb: Double = VolumeDefaults.limitMaxDb
     }
 
     private let state: Mutex<State>
 
-    /// Bornes en cache (amorcées par fetchBulkSettings, rafraîchies par le
-    /// WebSocket settings/volume_limits_changed via updateCachedLimits).
+    /// The cached bounds (bootstrapped by fetchBulkSettings, refreshed by the
+    /// WebSocket settings/volume_limits_changed through updateCachedLimits).
     var cachedLimits: (minDb: Double, maxDb: Double) {
         state.withLock { ($0.cachedLimitMinDb, $0.cachedLimitMaxDb) }
     }
 
-    /// - Parameter resolvedIPv4: IP déjà validée par l'appelant (le connection
-    ///   manager sélectionne la meilleure IP par test de latence). Quand elle est
-    ///   fournie, on ne relance pas de résolution indépendante qui pourrait
-    ///   choisir une autre adresse que celle qui vient d'être sondée.
+    /// - Parameter resolvedIPv4: an IP already validated by the caller (the connection
+    ///   manager selects the best IP through a latency test). When it is
+    ///   provided, we do not start an independent resolution that might
+    ///   pick a different address from the one just probed.
     init(host: String, port: Int = 80, resolvedIPv4: String? = nil) {
         self.host = host
         self.port = port
@@ -432,8 +433,8 @@ final class MiloAPIService: Sendable {
     }
 
     deinit {
-        // Une URLSession n'est libérée qu'une fois invalidée — indispensable pour
-        // les instances jetables (sonde de readiness du connection manager).
+        // A URLSession is only released once invalidated — indispensable for
+        // the disposable instances (the connection manager's readiness probe).
         let sessions = state.withLock { ($0.session, $0.longSession) }
         sessions.0.invalidateAndCancel()
         sessions.1.invalidateAndCancel()
@@ -459,7 +460,7 @@ final class MiloAPIService: Sendable {
         return URLSession(configuration: config)
     }
 
-    /// Recréer les sessions pour éviter les connexions TCP stales
+    /// Recreates the sessions to avoid stale TCP connections
     func resetSession() {
         let old = state.withLock { state -> (URLSession, URLSession) in
             let previous = (state.session, state.longSession)
@@ -471,11 +472,11 @@ final class MiloAPIService: Sendable {
         old.0.invalidateAndCancel()
         old.1.invalidateAndCancel()
 
-        // Re-résoudre l'IP : si la session est stale, l'adresse peut l'être aussi.
+        // Re-resolve the IP: if the session is stale, the address may be too.
         resolveIPv4InBackground()
     }
 
-    /// Résout le hostname en IPv4 en arrière-plan et met l'adresse en cache.
+    /// Resolves the hostname to IPv4 in the background and caches the address.
     private func resolveIPv4InBackground() {
         let host = self.host
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -485,32 +486,32 @@ final class MiloAPIService: Sendable {
         }
     }
 
-    /// Origine HTTP du Pi : l'IPv4 résolue si on l'a, le hostname sinon.
+    /// The Pi's HTTP origin: the resolved IPv4 if we have it, the hostname otherwise.
     ///
-    /// Point unique de la règle d'hôte, partagé entre `buildURL` — donc toute la surface `send`
-    /// — et les trois constructeurs d'URL d'IMAGE de ce fichier (`radioFaviconURL`,
+    /// The single point of the host rule, shared between `buildURL` — hence the whole `send`
+    /// surface — and this file's three IMAGE URL builders (`radioFaviconURL`,
     /// `musicLibraryCoverURL`, `nowPlayingArtworkURL`).
     ///
-    /// Ces trois-là ne passent PAS par `send`, et c'est voulu : ils n'émettent aucune requête.
-    /// Ils rendent une URL que `AsyncImage` ira chercher lui-même, avec la session partagée de
-    /// SwiftUI — d'où ni le timeout de 3 s de `send` (trop court pour une pochette qu'un Pi tire
-    /// d'une carte SD), ni ses erreurs typées (l'échec d'une image, c'est le placeholder de la
-    /// vue, pas une `APIError` à remonter), ni son cache désactivé (une pochette, on veut
-    /// justement la garder — voir aussi `FaviconCache`). La seule chose que ces URL doivent à
-    /// `send`, c'est l'hôte : c'est exactement ce que cette propriété leur donne.
+    /// Those three do NOT go through `send`, and that is deliberate: they issue no request.
+    /// They return a URL that `AsyncImage` will fetch itself, with SwiftUI's shared session —
+    /// hence neither `send`'s 3 s timeout (too short for a cover a Pi pulls off an SD card),
+    /// nor its typed errors (an image's failure is the view's placeholder, not an `APIError`
+    /// to report), nor its disabled cache (a cover is precisely something we want to keep —
+    /// see also `FaviconCache`). The only thing these URLs owe `send` is the host: which is
+    /// exactly what this property gives them.
     private var baseURL: String {
         let hostToUse = state.withLock { $0.resolvedIPv4 } ?? host
         return "http://\(hostToUse):\(port)"
     }
 
-    /// Construit l'URL en utilisant l'IP IPv4 si disponible
+    /// Builds the URL using the IPv4 address when available
     private func buildURL(path: String) -> URL? {
         URL(string: baseURL + path)
     }
 
-    // MARK: - Requête générique
+    // MARK: - Generic request
 
-    /// Construit, exécute et valide une requête ; renvoie le corps de la réponse.
+    /// Builds, runs and validates a request; returns the response body.
     @discardableResult
     private func send(_ path: String,
                       method: String = "GET",
@@ -548,19 +549,19 @@ final class MiloAPIService: Sendable {
         return json
     }
 
-    /// Comme `send`, mais valide EN PLUS le `status` du corps — la seconde moitié du contrat,
-    /// pour toute MUTATION.
+    /// Like `send`, but ALSO validates the body's `status` — the second half of the contract,
+    /// for every MUTATION.
     ///
-    /// Un 200 ne suffit pas à conclure : Milō sert délibérément certains échecs en
-    /// 200 + `{"status": "error"}` — `POST /api/audio/source/{id}` quand la transition échoue,
-    /// `PUT /api/equalizer/target/{t}/enabled` quand la cible refuse. C'est un invariant d'API
-    /// documenté côté backend, pas un oubli : il ne changera pas, c'est donc à l'appelant de
-    /// lire le corps. Sans ça, un toggle qui a échoué s'affiche comme réussi.
+    /// A 200 is not enough to conclude: Milō deliberately serves some failures as
+    /// 200 + `{"status": "error"}` — `POST /api/audio/source/{id}` when the transition fails,
+    /// `PUT /api/equalizer/target/{t}/enabled` when the target refuses. This is an API invariant
+    /// documented on the backend side, not an oversight: it will not change, so it is up to the
+    /// caller to read the body. Without this, a toggle that failed shows up as succeeded.
     ///
-    /// Appliqué à TOUTES les mutations, et pas aux seules routes connues pour le faire : le coût
-    /// est le parse de quelques octets, et une route qui adopterait l'enveloppe plus tard n'aurait
-    /// pas à être redécouverte par un bouton qui ment. Un corps sans clé `status` (ou qui n'est
-    /// pas du JSON) passe : ces routes-là signalent par le statut HTTP, déjà validé par `send`.
+    /// Applied to ALL mutations, and not only to the routes known to do it: the cost is parsing
+    /// a few bytes, and a route that adopted the envelope later would not have to be rediscovered
+    /// through a button that lies. A body with no `status` key (or that is not JSON) passes:
+    /// those routes report through the HTTP status, already validated by `send`.
     @discardableResult
     private func sendCommand(_ path: String,
                              method: String,
@@ -585,22 +586,22 @@ final class MiloAPIService: Sendable {
     }
 
     func setMultiroom(_ enabled: Bool) async throws {
-        // Le backend bloque jusqu'à la fin complète de la transition (~20 s max).
+        // The backend blocks until the transition is fully complete (~20 s max).
         try await sendCommand("/api/routing/multiroom", method: "PUT",
                               body: ["enabled": enabled], long: true)
     }
 
     // MARK: - Volume API
 
-    /// Lit le `data` de `/api/volume/state` — l'unique route de volume en lecture, partagée
-    /// par le volume global et par le volume multiroom.
+    /// Reads the `data` of `/api/volume/state` — the only volume read route, shared
+    /// by the global volume and by the multiroom volume.
     ///
-    /// Elle porte l'enveloppe `{"status", "data"}`, et le backend y sert ses échecs en
-    /// 200 + `{"status": "error", "message": …}` (même invariant que pour les mutations, voir
-    /// `sendCommand`). Il faut donc la lire : sans ça, l'échec se présente comme un `data`
-    /// absent, c'est-à-dire un état VIDE — 0 dB pour le volume global, zéro client pour le
-    /// multiroom. Des valeurs plausibles et fausses, là où une erreur laisse l'appelant garder
-    /// la dernière valeur connue.
+    /// It carries the `{"status", "data"}` envelope, and the backend serves its failures there
+    /// as 200 + `{"status": "error", "message": …}` (the same invariant as for mutations, see
+    /// `sendCommand`). So it has to be read: without that, the failure presents as a missing
+    /// `data`, that is, as an EMPTY state — 0 dB for the global volume, zero clients for
+    /// multiroom. Plausible and wrong values, where an error lets the caller keep
+    /// the last known value.
     private func fetchVolumeStateData() async throws -> [String: Any] {
         let json = try await fetchJSON("/api/volume/state")
         if let status = json["status"] as? String, status != "success" {
@@ -612,15 +613,15 @@ final class MiloAPIService: Sendable {
         return data
     }
 
-    /// Lit la valeur de volume + le mode en direct. Les limites proviennent du
-    /// cache amorcé par fetchBulkSettings() à la connexion. Le step n'est plus
-    /// porté : le pas du raccourci clavier est un réglage local
+    /// Reads the volume value + the live mode. The limits come from the
+    /// cache bootstrapped by fetchBulkSettings() at connect. The step is no longer
+    /// carried: the keyboard shortcut's step is a local setting
     /// (GlobalHotkeyManager.volumeDeltaDb).
     func getVolumeStatus() async throws -> VolumeStatus {
         let dataDict = try await fetchVolumeStateData()
 
-        // Pas de valeur par défaut ici : un payload sans global_volume_db
-        // fabriquerait 0 dB (le maximum) — on préfère échouer proprement.
+        // No default value here: a payload with no global_volume_db
+        // would fabricate 0 dB (the maximum) — we prefer to fail cleanly.
         guard let volumeDb = (dataDict["global_volume_db"] as? Double)
                 ?? (dataDict["global_volume_db"] as? Int).map(Double.init) else {
             throw APIError.invalidResponse
@@ -649,12 +650,12 @@ final class MiloAPIService: Sendable {
                               body: ["enabled": enabled])
     }
 
-    /// Transport générique d'une commande de lecture vers la source active — même route que le
-    /// frontend web (`POST /api/audio/control/{source}`). N'émet que des commandes sans
-    /// paramètre (pause/resume/next) : chaque source valide la commande contre sa propre table
-    /// (`COMMANDS` côté Milo) et rejette tout le reste en 400, donc un identifiant de source qui
-    /// ne les supporte pas (AirPlay, DLNA, Qobuz — récepteurs passifs sans télécommande) échoue
-    /// proprement plutôt que d'agir sur la mauvaise source.
+    /// Generic transport for a playback command to the active source — the same route as the
+    /// web frontend (`POST /api/audio/control/{source}`). It only issues parameterless commands
+    /// (pause/resume/next): each source validates the command against its own table
+    /// (`COMMANDS` on the Milo side) and rejects everything else with a 400, so a source id that
+    /// does not support them (AirPlay, DLNA, Qobuz — passive receivers with no remote) fails
+    /// cleanly rather than acting on the wrong source.
     func sendPlaybackCommand(_ command: String, to source: String) async throws {
         try await sendCommand("/api/audio/control/\(source)", method: "POST",
                               body: ["command": command, "data": [String: Any]()])
@@ -662,23 +663,23 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Settings API
 
-    /// Récupère les réglages statiques du device (limites volume + dock apps) en un
-    /// seul appel. Remplace les anciennes routes par catégorie /api/settings/volume-limits
-    /// et /api/settings/dock-apps — mêmes sous-clés, enveloppe différente :
+    /// Fetches the device's static settings (volume limits + dock apps) in a
+    /// single call. Replaces the old per-category routes /api/settings/volume-limits
+    /// and /api/settings/dock-apps — same sub-keys, different envelope:
     ///   volume-limits {"limits": {...}} → bulk {"volume_limits": {...}}
     ///   dock-apps     {"config": {...}} → bulk {"dock_apps": {...}}
-    /// Effet de bord : amorce le cache des limites lu par getVolumeStatus().
+    /// Side effect: bootstraps the limits cache read by getVolumeStatus().
     func fetchBulkSettings() async throws -> BulkSettings {
         let json = try await fetchJSON("/api/settings/bulk")
 
-        // volume_limits.{min_db,max_db} : sous-clés identiques à l'ancienne route ;
-        // on retombe sur le cache courant si la clé est absente (jamais 0/0).
+        // volume_limits.{min_db,max_db}: sub-keys identical to the old route;
+        // we fall back on the current cache if the key is absent (never 0/0).
         let current = cachedLimits
         let limits = json["volume_limits"] as? [String: Any]
         let limitMin = (limits?["min_db"] as? Double) ?? (limits?["min_db"] as? Int).map(Double.init) ?? current.minDb
         let limitMax = (limits?["max_db"] as? Double) ?? (limits?["max_db"] as? Int).map(Double.init) ?? current.maxDb
 
-        // dock_apps.enabled_apps : sous-clé identique à l'ancienne route.
+        // dock_apps.enabled_apps: sub-key identical to the old route.
         let dockApps = json["dock_apps"] as? [String: Any]
         let enabledApps = dockApps?["enabled_apps"] as? [String] ?? []
 
@@ -687,9 +688,9 @@ final class MiloAPIService: Sendable {
         return BulkSettings(limitMinDb: limitMin, limitMaxDb: limitMax, enabledApps: enabledApps)
     }
 
-    /// Met à jour le cache de limites suite à l'événement WS `settings/volume_limits_changed`
-    /// (les limites ont changé côté device). getVolumeStatus() lira ces nouvelles valeurs
-    /// — évite de re-tirer /bulk à chaque séquence du raccourci clavier.
+    /// Updates the limits cache following the WS event `settings/volume_limits_changed`
+    /// (the limits changed on the device side). getVolumeStatus() will read these new values
+    /// — avoids re-pulling /bulk on every keyboard-shortcut sequence.
     func updateCachedLimits(minDb: Double, maxDb: Double) {
         state.withLock {
             $0.cachedLimitMinDb = minDb
@@ -699,42 +700,42 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Multiroom API
 
-    /// Lit la structure multiroom complète (clients + zones). Servi par le registre, donc
-    /// indépendant de l'état actif — on ne l'appelle toutefois que lorsque le multiroom est
-    /// activé (voir `MiloStore.loadMultiroomState`).
+    /// Reads the full multiroom structure (clients + zones). Served by the registry, hence
+    /// independent of the active state — we only call it when multiroom is
+    /// enabled, though (see `MiloStore.loadMultiroomState`).
     func fetchMultiroomState() async throws -> MultiroomSnapshot {
         MultiroomSnapshot(json: try await fetchJSON("/api/multiroom/state"))
     }
 
-    /// Lit le volume/mute en direct par client et par zone (moyennes de zone incluses) depuis
-    /// `/api/volume/state`. Amorce les sliders de la sous-section avant que le premier
-    /// `volume/volume_changed` ne prenne le relais.
+    /// Reads the live volume/mute per client and per zone (zone averages included) from
+    /// `/api/volume/state`. Bootstraps the sub-section's sliders before the first
+    /// `volume/volume_changed` takes over.
     func fetchMultiroomVolume() async throws -> MultiroomVolume {
         MultiroomVolume(state: try await fetchVolumeStateData())
     }
 
-    /// Le backend indexe les clients par MAC AVEC deux-points ; l'URL les veut SANS.
+    /// The backend indexes clients by MAC WITH colons; the URL wants them WITHOUT.
     private static func macURL(_ macId: String) -> String {
         macId.replacingOccurrences(of: ":", with: "")
     }
 
-    /// Fixe le volume ABSOLU d'un client (dB). `PATCH /api/volume/client/mac/{mac}`.
+    /// Sets a client's ABSOLUTE volume (dB). `PATCH /api/volume/client/mac/{mac}`.
     func setClientVolume(mac: String, volumeDb: Double) async throws {
         try await sendCommand("/api/volume/client/mac/\(Self.macURL(mac))", method: "PATCH",
                               body: ["volume_db": volumeDb])
     }
 
-    /// Bascule le mute d'un client. `PATCH /api/volume/client/mac/{mac}/mute`.
+    /// Toggles a client's mute. `PATCH /api/volume/client/mac/{mac}/mute`.
     func setClientMute(mac: String, muted: Bool) async throws {
         try await sendCommand("/api/volume/client/mac/\(Self.macURL(mac))/mute", method: "PATCH",
                               body: ["mute": muted])
     }
 
-    /// Applique un DELTA de volume à toute une zone. `PATCH /api/volume/zone/{id}`.
+    /// Applies a volume DELTA to a whole zone. `PATCH /api/volume/zone/{id}`.
     ///
-    /// La zone n'a pas de volume propre : le backend répercute le delta sur chaque client et
-    /// rediffuse la nouvelle moyenne. C'est pourquoi le slider de zone travaille en relatif
-    /// (voir `MultiroomZoneRow`), là où celui d'un client est absolu.
+    /// A zone has no volume of its own: the backend passes the delta on to each client and
+    /// rebroadcasts the new average. That is why the zone slider works in relative terms
+    /// (see `MultiroomZoneRow`), where a client's is absolute.
     func setZoneVolumeDelta(zoneId: String, deltaDb: Double) async throws {
         try await sendCommand("/api/volume/zone/\(zoneId)", method: "PATCH",
                               body: ["delta_db": deltaDb])
@@ -751,13 +752,13 @@ final class MiloAPIService: Sendable {
         }
     }
 
-    /// Résout le `favicon` d'une station en URL absolue affichable.
+    /// Resolves a station's `favicon` to an absolute, displayable URL.
     ///
-    /// Reprend la logique du frontend Milō (`utils/faviconUrl.js`) : une image
-    /// locale (`/api/radio/images/…`) est servie telle quelle ; une URL externe
-    /// passe par le proxy `/api/radio/favicon?url=…`, qui spoofe les en-têtes
-    /// pour contourner les WAF qui rejettent un fetch brut. `nil` si le favori
-    /// n'a pas de logo — l'appelant affiche alors son fallback.
+    /// Follows the Milō frontend's logic (`utils/faviconUrl.js`): a local
+    /// image (`/api/radio/images/…`) is served as is; an external URL
+    /// goes through the `/api/radio/favicon?url=…` proxy, which spoofs the headers
+    /// to get around WAFs that reject a raw fetch. `nil` if the favourite
+    /// has no logo — the caller then shows its fallback.
     func radioFaviconURL(for favicon: String?) -> URL? {
         guard let favicon, !favicon.isEmpty else { return nil }
         let base = baseURL
@@ -780,12 +781,12 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Music Library API
 
-    /// Recherche fuzzy artistes/albums/morceaux (`search3`). Une requête vide renvoie trois
-    /// listes vides en 200, pas une erreur — le backend le garantit.
+    /// Fuzzy search over artists/albums/songs (`search3`). An empty query returns three
+    /// empty lists with a 200, not an error — the backend guarantees it.
     ///
-    /// `URLComponents` (et non une concaténation à la main, comme pour `favorites_only=true`
-    /// plus haut) : un terme de recherche, contrairement à un littéral fixe, a vraiment besoin
-    /// d'être pourcent-encodé (espaces, accents…).
+    /// `URLComponents` (and not hand concatenation, as for `favorites_only=true`
+    /// above): a search term, unlike a fixed literal, genuinely needs to be
+    /// percent-encoded (spaces, accents…).
     func searchMusicLibrary(query: String) async throws -> MusicLibrarySearchResults {
         var components = URLComponents()
         components.queryItems = [URLQueryItem(name: "query", value: query)]
@@ -793,14 +794,14 @@ final class MiloAPIService: Sendable {
         return MusicLibrarySearchResults(json: json)
     }
 
-    /// Lance la lecture d'une file de morceaux (`play_context`), à partir de l'index `startIndex`
-    /// — même route générique que `sendPlaybackCommand`, mais avec des données, d'où une méthode à
-    /// part plutôt qu'un paramètre optionnel de plus sur celle-ci.
+    /// Starts playback of a queue of songs (`play_context`), from index `startIndex`
+    /// — the same generic route as `sendPlaybackCommand`, but with data, hence a separate
+    /// method rather than one more optional parameter on that one.
     ///
-    /// `[String: any Sendable]` (et non `[String: Any]`) : ce paramètre franchit la frontière
-    /// d'isolation depuis le main actor (voir `MusicLibrarySong.raw`) — `Any` ferait échouer la
-    /// vérification stricte de concurrence à l'appel. La conversion vers `Any` (ce que
-    /// `JSONSerialization` exige) reste locale à cette méthode, qui ne franchit plus rien après.
+    /// `[String: any Sendable]` (and not `[String: Any]`): this parameter crosses the
+    /// isolation boundary from the main actor (see `MusicLibrarySong.raw`) — `Any` would fail
+    /// strict concurrency checking at the call site. The conversion to `Any` (which
+    /// `JSONSerialization` requires) stays local to this method, which crosses nothing afterwards.
     func playMusicLibraryContext(tracks: [[String: any Sendable]], startIndex: Int) async throws {
         let jsonTracks = tracks.map { $0.mapValues { $0 as Any } }
         try await sendCommand("/api/audio/control/music_library", method: "POST",
@@ -808,9 +809,9 @@ final class MiloAPIService: Sendable {
                                      "data": ["tracks": jsonTracks, "start_index": startIndex, "shuffle": false]])
     }
 
-    /// Résout l'identifiant de pochette Subsonic (`coverArt`) d'un résultat de recherche en URL
-    /// affichable, via le proxy `/api/music-library/cover/{id}` (voir `nowPlayingArtworkURL` pour
-    /// le même principe de résolution IP).
+    /// Resolves a search result's Subsonic cover identifier (`coverArt`) to a displayable
+    /// URL, through the `/api/music-library/cover/{id}` proxy (see `nowPlayingArtworkURL` for
+    /// the same IP-resolution principle).
     func musicLibraryCoverURL(for coverId: String?, size: Int = 64) -> URL? {
         guard let coverId, !coverId.isEmpty else { return nil }
         var comps = URLComponents(string: "\(baseURL)/api/music-library/cover/\(coverId)")
@@ -818,10 +819,10 @@ final class MiloAPIService: Sendable {
         return comps?.url
     }
 
-    /// Albums d'un artiste (`getArtist`), pour la page artiste de la bibliothèque musicale.
-    /// Mêmes objets « album » que ceux de la recherche (le backend passe les deux par
-    /// `merge_albums`), donc `MusicLibraryAlbum` se réutilise tel quel. Le backend les range
-    /// sous la clé Subsonic `"album"` (singulier), imbriquée sous `"artist"`.
+    /// An artist's albums (`getArtist`), for the music library's artist page.
+    /// The same "album" objects as the search's (the backend passes both through
+    /// `merge_albums`), so `MusicLibraryAlbum` is reused as is. The backend files them
+    /// under the Subsonic key `"album"` (singular), nested under `"artist"`.
     func fetchMusicLibraryArtistAlbums(artistId: String) async throws -> [MusicLibraryAlbum] {
         guard let encodedId = artistId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             throw APIError.invalidURL
@@ -831,10 +832,10 @@ final class MiloAPIService: Sendable {
         return (artist["album"] as? [[String: Any]] ?? []).compactMap(MusicLibraryAlbum.init)
     }
 
-    /// Morceaux d'un album (`getAlbum`), pour la page album de la bibliothèque musicale. `id`
-    /// peut être le synthétique `mdisc:…` d'un album multi-disque fusionné — le backend l'étend
-    /// (concatène les morceaux des disques membres) de façon transparente, rien à faire ici. La
-    /// clé Subsonic du côté morceaux est `"song"` (singulier), imbriquée sous `"album"`.
+    /// An album's songs (`getAlbum`), for the music library's album page. `id`
+    /// can be the synthetic `mdisc:…` of a merged multi-disc album — the backend expands it
+    /// (concatenating the member discs' songs) transparently, nothing to do here. The
+    /// Subsonic key on the song side is `"song"` (singular), nested under `"album"`.
     func fetchMusicLibraryAlbumSongs(albumId: String) async throws -> [MusicLibrarySong] {
         guard let encodedId = albumId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             throw APIError.invalidURL
@@ -844,14 +845,14 @@ final class MiloAPIService: Sendable {
         return (album["song"] as? [[String: Any]] ?? []).compactMap(MusicLibrarySong.init)
     }
 
-    /// Une page d'albums d'une liste Subsonic (`getAlbumList2`) : `recent` (écoutés récemment),
-    /// `newest` (ajoutés récemment), `random`… Le backend valide le type contre sa liste blanche
-    /// `ALBUM_LIST_TYPES` et répond 400 s'il n'en fait pas partie, d'où l'absence de garde ici —
-    /// les seuls appelants passent des littéraux.
+    /// One page of albums from a Subsonic list (`getAlbumList2`): `recent` (recently played),
+    /// `newest` (recently added), `random`… The backend validates the type against its
+    /// `ALBUM_LIST_TYPES` allow-list and answers 400 if it is not in it, hence the absence of a
+    /// guard here — the only callers pass literals.
     ///
-    /// Ce sont les mêmes objets « album » que ceux de la recherche et de la page artiste (le
-    /// backend passe les trois par `merge_albums`), donc `MusicLibraryAlbum` se réutilise tel
-    /// quel. Pas d'encodage à faire : ni le type ni la taille ne viennent d'une saisie.
+    /// These are the same "album" objects as the search's and the artist page's (the
+    /// backend passes all three through `merge_albums`), so `MusicLibraryAlbum` is reused as
+    /// is. No encoding to do: neither the type nor the size comes from user input.
     func fetchMusicLibraryAlbums(type: String, size: Int) async throws -> [MusicLibraryAlbum] {
         let json = try await fetchJSON("/api/music-library/albums?type=\(type)&size=\(size)")
         return (json["albums"] as? [[String: Any]] ?? []).compactMap(MusicLibraryAlbum.init)
@@ -859,13 +860,13 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Now playing
 
-    /// Résout `album_art_url` (ou l'artwork Shazam de Radio) en URL absolue affichable.
+    /// Resolves `album_art_url` (or Radio's Shazam artwork) to an absolute, displayable URL.
     ///
-    /// Deux formes en sortie du backend (voir `PlaybackMetadata`, côté Milo) : un chemin LOCAL
-    /// que le Pi sert lui-même (AirPlay, DLNA, CD, bibliothèque musicale — ex.
-    /// `/api/dlna/artwork?v=…`), à préfixer d'host:port comme le reste de l'API ; ou une URL déjà
-    /// absolue vers un CDN externe (Spotify, Qobuz, artwork Shazam reconnu par Radio), à utiliser
-    /// telle quelle. `nil` si la métadonnée n'a pas d'illustration.
+    /// Two shapes come out of the backend (see `PlaybackMetadata`, on the Milo side): a LOCAL
+    /// path the Pi serves itself (AirPlay, DLNA, CD, music library — e.g.
+    /// `/api/dlna/artwork?v=…`), to be prefixed with host:port like the rest of the API; or an
+    /// already absolute URL to an external CDN (Spotify, Qobuz, the Shazam artwork Radio
+    /// recognized), to be used as is. `nil` if the metadata has no artwork.
     func nowPlayingArtworkURL(for path: String?) -> URL? {
         guard let path, !path.isEmpty else { return nil }
         if path.hasPrefix("http://") || path.hasPrefix("https://") {

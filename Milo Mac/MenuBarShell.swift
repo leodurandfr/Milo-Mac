@@ -2,33 +2,32 @@ import AppKit
 import SwiftUI
 import Observation
 
-/// Fenêtre du panneau. Sans bordure, elle doit pouvoir devenir fenêtre clé — sinon le
-/// slider ne répondrait pas et le matériau se rendrait en état « inactif » (plus clair).
+/// The panel's window. Borderless, it has to be able to become the key window — otherwise
+/// the slider would not respond and the material would render in its "inactive" (lighter) state.
 private final class PanelWindow: NSPanel {
     override var canBecomeKey: Bool { true }
 
-    /// Sans ça, le panneau s'ouvre 60 pt trop bas.
+    /// Without this, the panel opens 60 pt too low.
     ///
-    /// AppKit « recale » d'office toute fenêtre dont le bord haut dépasse le bas de la barre
-    /// des menus. Or la nôtre est VOLONTAIREMENT plus haute que le panneau : elle l'entoure
-    /// d'une marge transparente de `shadowMargin` (60 pt) pour laisser l'ombre s'étaler. Son
-    /// bord haut passe donc au-dessus du haut de l'écran, et AppKit la redescendait d'autant.
+    /// AppKit automatically "shoves back" any window whose top edge crosses the bottom of the
+    /// menu bar. But ours is DELIBERATELY taller than the panel: it surrounds it with a
+    /// transparent `shadowMargin` (60 pt) to give the shadow room to spread. Its top edge
+    /// therefore goes above the top of the screen, and AppKit pushed it down by just as much.
     ///
-    /// Mesuré, avant correction : bord haut du verre à 94,5 pt, contre 34,5 pt pour « Son » —
-    /// soit exactement les 60 pt de la marge. C'est le même symptôme que le piège des
-    /// contraintes documenté dans `setupPanel()`, mais une cause toute différente : ici ce
-    /// n'est pas la disposition interne, c'est la fenêtre elle-même qu'on déplaçait.
+    /// Measured, before the fix: the glass's top edge at 94.5 pt, against 34.5 pt for "Sound" —
+    /// exactly the margin's 60 pt. It is the same symptom as the constraint trap documented in
+    /// `setupPanel()`, but a completely different cause: here it is not the internal layout,
+    /// it is the window itself that was being moved.
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
         frameRect
     }
 }
 
-/// Conteneur transparent qui entoure le verre d'une marge, afin que l'ombre portée ait la
-/// place de s'étaler : une couche ne peut pas dessiner d'ombre au-delà des bords de sa
-/// fenêtre.
+/// A transparent container that surrounds the glass with a margin, so the drop shadow has
+/// room to spread: a layer cannot draw a shadow beyond the edges of its window.
 ///
-/// Ses marges ne doivent pas capter les clics — sans quoi cliquer « à côté » du panneau,
-/// dans le vide, ne le refermerait pas.
+/// Its margins must not catch clicks — otherwise clicking "next to" the panel, in the void,
+/// would not close it.
 private final class ShadowContainerView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = super.hitTest(point)
@@ -36,22 +35,22 @@ private final class ShadowContainerView: NSView {
     }
 }
 
-/// Coquille de la barre de menus : un NSStatusItem qui présente le panneau SwiftUI dans une
-/// fenêtre sans bordure.
+/// The menu-bar shell: an NSStatusItem that presents the SwiftUI panel in a borderless
+/// window.
 ///
-/// **Pourquoi pas un NSMenu ?** C'était pourtant la voie naturelle, et on l'a essayée. Mais
-/// un NSMenu peint son propre chrome et aucune API publique ne permet de le changer.
-/// Mesuré : coins de 14,5 pt et liseré marqué, contre 18 pt et un bord discret pour les
-/// modules système (Son, Bluetooth). Impossible d'être iso en restant dans un menu.
+/// **Why not an NSMenu?** It was the natural route, and we tried it. But an NSMenu paints
+/// its own chrome and no public API lets you change it. Measured: 14.5 pt corners and a hard
+/// border, against 18 pt and a soft edge on the system modules (Sound, Bluetooth). Matching
+/// them is impossible from inside a menu.
 ///
-/// **Pourquoi pas MenuBarExtra ?** Il confisque le NSStatusItem : on perdrait le contrôle de
-/// l'icône (l'opacité réduite hors connexion) et l'option-clic. Son style `.menu` rend bien
-/// un vrai NSMenu, mais il ignore les images et ne sait pas afficher de slider.
+/// **Why not MenuBarExtra?** It takes over the NSStatusItem: we would lose control of the
+/// icon (the reduced opacity when disconnected) and of option-click. Its `.menu` style does
+/// render a genuine NSMenu, but it ignores images and cannot display a slider.
 ///
-/// **Pourquoi pas NSPopover ?** Il dessine toujours une flèche vers son ancre, non masquable.
+/// **Why not NSPopover?** It always draws an arrow at its anchor, and that cannot be hidden.
 ///
-/// Le prix de la fenêtre : la fermeture au clic extérieur, que NSMenu et NSPopover offraient
-/// gratuitement, doit être recâblée à la main (voir plus bas).
+/// The price of a window: click-outside-to-dismiss, which NSMenu and NSPopover gave for
+/// free, has to be rewired by hand (see below).
 @MainActor
 final class MenuBarShell: NSObject, NSWindowDelegate {
     private let statusItem: NSStatusItem
@@ -60,42 +59,41 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     private let panel: PanelWindow
     private let hostingController: NSHostingController<MiloPanelView>
 
-    /// Le fond du panneau : le verre de macOS 26.
+    /// The panel's background: macOS 26's glass.
     ///
-    /// Et non un `NSVisualEffectView`. Mesuré sur fond uni, l'intérieur du panneau « Son »
-    /// vaut 8 sur noir et 83 sur blanc — soit une transmission de 0,294 avec une base très
-    /// sombre. Le meilleur matériau legacy (`.toolTip`) donne 36 / 83, et aucun réglage
-    /// d'opacité ne permet d'atteindre cette combinaison : assombrir un matériau réduit ses
-    /// deux valeurs à la fois. Control Center n'utilise donc pas l'ancien système de
-    /// matériaux, mais Liquid Glass.
+    /// And not an `NSVisualEffectView`. Measured on a solid background, the inside of the
+    /// "Sound" panel reads 8 on black and 83 on white — a transmission of 0.294 over a very
+    /// dark base. The best legacy material (`.toolTip`) gives 36 / 83, and no opacity setting
+    /// reaches that combination: darkening a material lowers both of its values at once.
+    /// Control Center therefore does not use the old material system, but Liquid Glass.
     ///
-    /// ⚠️ Ne PAS tenter le modificateur SwiftUI `.glassEffect()` à la racine de la vue : dans
-    /// une NSPanel transparente il rend la fenêtre entièrement invisible, contenu compris
-    /// (vérifié : fenêtre visible, alpha 1, mais ne peignant rien). C'est bien la vue AppKit
-    /// qu'il faut, avec la vue SwiftUI placée dans son `contentView`.
+    /// ⚠️ Do NOT try the SwiftUI `.glassEffect()` modifier at the root of the view: inside a
+    /// transparent NSPanel it renders the whole window invisible, content included (verified:
+    /// window visible, alpha 1, but painting nothing). The AppKit view is what is required,
+    /// with the SwiftUI view placed in its `contentView`.
     private let glassView = NSGlassEffectView()
 
-    /// Surveille les clics hors du panneau pour le refermer.
+    /// Watches for clicks outside the panel in order to close it.
     private var outsideClickMonitor: Any?
 
-    /// Vrai pendant le fondu de sortie. La fenêtre est encore « visible » à ce moment-là.
+    /// True during the fade-out. The window is still "visible" at that point.
     private var isHiding = false
 
-    /// Ordonnée ÉCRAN du bord HAUT du panneau (`origin.y + height`), posée par `positionPanel`.
+    /// SCREEN y-coordinate of the panel's TOP edge (`origin.y + height`), set by `positionPanel`.
     ///
-    /// Le panneau est collé sous la barre des menus et ne doit grandir/rétrécir QUE vers le bas.
-    /// Pendant l'accordéon multiroom c'est `stepReveal` qui repose le cadre à chaque pas (haut
-    /// déjà correct). Mais `NSHostingController` peut AUSSI redimensionner la fenêtre de lui-même
-    /// quand le contenu change au repos (un client passe en ligne) : AppKit garde alors le coin
-    /// bas-gauche et fait monter le bord haut sous la barre. `windowDidResize` le recolle à cette
-    /// valeur — un simple décalage d'origine, sans toucher à la hauteur (donc sans boucle).
+    /// The panel is pinned under the menu bar and must only grow/shrink DOWNWARDS.
+    /// During the multiroom accordion it is `stepReveal` that resets the frame at every step (the
+    /// top is already right). But `NSHostingController` can ALSO resize the window on its own
+    /// when the content changes at rest (a client comes online): AppKit then keeps the bottom-left
+    /// corner and makes the top edge rise under the bar. `windowDidResize` pins it back to this
+    /// value — a plain origin shift, without touching the height (hence no loop).
     private var pinnedTopY: CGFloat?
 
     init(store: MiloStore) {
         self.store = store
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Le plafond de hauteur est réévalué à chaque ouverture (`positionPanel`), l'écran
-        // pouvant changer ; celui d'ici n'est qu'une valeur de départ.
+        // The height ceiling is re-evaluated on every opening (`positionPanel`), since the screen
+        // can change; the one here is only a starting value.
         self.hostingController = NSHostingController(
             rootView: MiloPanelView(
                 store: store,
@@ -144,14 +142,14 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         return fallback
     }
 
-    /// Le comportement historique, préservé tel quel : l'icône est à moitié transparente
-    /// tant que Milō n'est pas joignable.
+    /// The historical behaviour, preserved as is: the icon is half transparent
+    /// as long as Milō is unreachable.
     private func updateIcon() {
         statusItem.button?.alphaValue = store.isConnected ? 1.0 : 0.5
     }
 
-    /// `@Observable` ne notifie qu'une seule fois par observation : il faut se réarmer à
-    /// chaque changement, sinon l'icône ne se met à jour qu'une fois.
+    /// `@Observable` only notifies once per observation: it has to be re-armed on every
+    /// change, otherwise the icon updates only once.
     private func observeConnection() {
         withObservationTracking {
             _ = store.isConnected
@@ -164,22 +162,22 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         }
     }
 
-    // MARK: - Contenu piloté par l'état
+    // MARK: - State-driven content
 
-    /// Vrai si la ligne « en cours » était visible au dernier état observé — pour ne déclencher
-    /// `animateNowPlayingReveal` que sur un vrai changement de PRÉSENCE (musique détectée ou
-    /// non), pas à chaque broadcast qui touche `state` sans y toucher (le volume, par exemple).
+    /// True if the "now playing" row was visible in the last observed state — so that
+    /// `animateNowPlayingReveal` only fires on a real change of PRESENCE (music detected or
+    /// not), not on every broadcast that touches `state` without touching it (the volume, say).
     private var lastNowPlayingPresence = false
 
-    /// Recale le panneau sur la taille réelle de son contenu à chaque nouvel état, tant qu'il
-    /// est ouvert. Même motif de réarmement que `observeConnection`.
+    /// Resets the panel to the real size of its content on every new state, as long as it is
+    /// open. Same re-arming pattern as `observeConnection`.
     ///
-    /// Deux cas : la ligne « en cours » apparaît ou disparaît (changement de source, arrêt de
-    /// lecture) — animé en douceur par `animateNowPlayingReveal`, comme l'accordéon multiroom.
-    /// Tout le reste (liste de sources, connexion...) n'a pas de timer dédié : `NSHostingController`
-    /// grandit la fenêtre tout seul quand le contenu s'allonge, mais ne la RÉTRÉCIT jamais quand
-    /// il raccourcit (voir `stepReveal`) — sans ce recalage immédiat, un tel contenu qui rétrécit
-    /// au repos laissait un vide sous le panneau.
+    /// Two cases: the "now playing" row appears or disappears (source change, playback stopped) —
+    /// smoothly animated by `animateNowPlayingReveal`, like the multiroom accordion.
+    /// Everything else (source list, connection…) has no dedicated timer: `NSHostingController`
+    /// grows the window on its own when the content gets longer, but never SHRINKS it when it
+    /// gets shorter (see `stepReveal`) — without this immediate reset, content shrinking at rest
+    /// left a gap under the panel.
     private func observeStateForRepositioning() {
         withObservationTracking {
             _ = store.state
@@ -198,17 +196,17 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Recale le panneau à chaque nouvelle frappe de recherche OU nouvelle page artiste/album,
-    /// indépendamment de toute transition de route : contrairement à la liste des stations radio
-    /// (qui ne change de forme qu'à l'ouverture/fermeture de sa route, gérée par le morphing),
-    /// ce contenu change de forme APRÈS être entré dans la route (une frappe modifie les
-    /// résultats ; la page artiste/album arrive vide - chargement - puis se peuple une fois la
-    /// réponse réseau revenue) — retirer du texte, ou voir une liste se peupler après coup, peut
-    /// RÉTRÉCIR/grandir sans qu'aucune route ne change, et `NSHostingController` ne rétrécit
-    /// jamais la fenêtre de lui-même.
+    /// Resets the panel on every new search keystroke OR new artist/album page,
+    /// independently of any route transition: unlike the radio station list
+    /// (which only changes shape when its route opens/closes, handled by the morph),
+    /// this content changes shape AFTER entering the route (a keystroke changes the
+    /// results; the artist/album page arrives empty - loading - then fills once the network
+    /// response comes back) — deleting text, or watching a list fill in afterwards, can
+    /// SHRINK/grow with no route change at all, and `NSHostingController` never shrinks
+    /// the window by itself.
     ///
-    /// Le garde `!isRouteMorphing` évite de se battre avec les `positionPanel()` du timer de
-    /// morphing pendant l'entrée/sortie de la route elle-même.
+    /// The `!isRouteMorphing` guard avoids fighting the morph timer's `positionPanel()` calls
+    /// while entering/leaving the route itself.
     private func observeMusicLibrarySearchForRepositioning() {
         withObservationTracking {
             _ = store.musicLibrarySearchResults
@@ -228,23 +226,23 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         }
     }
 
-    // MARK: - Ligne « en cours »
+    // MARK: - "Now playing" row
 
     private var nowPlayingRevealTimer: Timer?
     private var nowPlayingRevealStartFraction: CGFloat = 0
     private var nowPlayingRevealTargetFraction: CGFloat = 0
     private var nowPlayingRevealStartTime: CFTimeInterval = 0
-    /// Plus court que l'accordéon multiroom (0,45 s) : une seule ligne à révéler, pas une
-    /// sous-section de cartes — au-delà, l'apparition traînerait.
+    /// Shorter than the multiroom accordion (0.45 s): a single row to reveal, not a
+    /// sub-section of cards — any longer and the appearance would drag.
     private let nowPlayingRevealDuration: CFTimeInterval = 0.3
 
-    /// Anime `nowPlayingRevealFraction` vers `target`. Même construction que `animateReveal`
-    /// (accordéon multiroom) : un timer à 120 Hz qui recale la fenêtre à chaque pas, jamais
-    /// `withAnimation` (voir *Panel height animations* dans CLAUDE.md).
+    /// Animates `nowPlayingRevealFraction` towards `target`. Same construction as `animateReveal`
+    /// (multiroom accordion): a 120 Hz timer that resets the window at every step, never
+    /// `withAnimation` (see *Panel height animations* in CLAUDE.md).
     private func animateNowPlayingReveal(to target: CGFloat) {
         nowPlayingRevealTimer?.invalidate()
 
-        // Panneau masqué : rien à animer, on pose l'état final — comme le morphing de route.
+        // Panel hidden: nothing to animate, we set the final state — like the route morph.
         guard panel.isVisible else {
             store.nowPlayingRevealFraction = target
             return
@@ -271,8 +269,8 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         let e = Self.ease(t)
         store.nowPlayingRevealFraction = nowPlayingRevealStartFraction
             + (nowPlayingRevealTargetFraction - nowPlayingRevealStartFraction) * e
-        // Voir `stepReveal` : l'auto-dimensionnement de `NSHostingController` grandit la fenêtre
-        // tout seul mais ne la rétrécit jamais — il faut la recaler à chaque pas.
+        // See `stepReveal`: `NSHostingController`'s self-sizing grows the window
+        // on its own but never shrinks it — it has to be reset at every step.
         if panel.isVisible { positionPanel() }
 
         guard t >= 1 else { return true }
@@ -282,16 +280,16 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         return false
     }
 
-    // MARK: - Accordéon multiroom
+    // MARK: - Multiroom accordion
 
-    /// Anime `multiroomRevealFraction` à chaque bascule de `multiroomExpanded`. Même motif de
-    /// réarmement que `observeConnection`.
+    /// Animates `multiroomRevealFraction` on every toggle of `multiroomExpanded`. Same re-arming
+    /// pattern as `observeConnection`.
     ///
-    /// C'est un timer (valeurs concrètes 120 fois/s), et NON `withAnimation` : chaque pas donne
-    /// au contenu SwiftUI une hauteur concrète, sur laquelle `stepReveal` recale aussitôt la
-    /// fenêtre (voir `positionPanel`), le verre suivant tout seul. `withAnimation`, lui,
-    /// rapporterait la taille FINALE d'un coup à `NSHostingController` (qui redimensionnerait la
-    /// fenêtre d'un bloc) : la fenêtre sauterait, contenu centré pendant la transition.
+    /// This is a timer (concrete values 120 times/s), and NOT `withAnimation`: each step gives
+    /// the SwiftUI content a concrete height, on which `stepReveal` immediately resets the
+    /// window (see `positionPanel`), the glass following on its own. `withAnimation`, by
+    /// contrast, would report the FINAL size to `NSHostingController` in one go (which would
+    /// resize the window in one block): the window would jump, content centred mid-transition.
     private func observeMultiroomExpansion() {
         withObservationTracking {
             _ = store.multiroomExpanded
@@ -321,16 +319,16 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
             return
         }
 
-        // Même idiome que l'animation du HUD de volume : un `Timer` à 120 Hz, `CACurrentMediaTime`
-        // pour l'horloge, `MainActor.assumeIsolated` pour retraverser vers l'acteur principal (le
-        // timer arrive bien sur le thread principal, mais son type ne peut pas le dire).
+        // The same idiom as the volume HUD's animation: a 120 Hz `Timer`, `CACurrentMediaTime`
+        // for the clock, `MainActor.assumeIsolated` to cross back to the main actor (the timer
+        // does arrive on the main thread, but its type cannot say so).
         revealTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
             let running = MainActor.assumeIsolated { self?.stepReveal() ?? false }
             if !running { timer.invalidate() }
         }
     }
 
-    /// easeInOut cubique, la courbe de toutes les animations de hauteur du panneau.
+    /// Cubic easeInOut, the curve of every panel height animation.
     private static func ease(_ t: CGFloat) -> CGFloat {
         t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
     }
@@ -340,11 +338,11 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         let t = min(CGFloat(raw), 1)
         let e = Self.ease(t)
         store.multiroomRevealFraction = revealStartFraction + (revealTargetFraction - revealStartFraction) * e
-        // On recale la fenêtre sur la taille RÉELLE du contenu à ce pas. Indispensable :
-        // l'auto-dimensionnement de `NSHostingController` agrandit la fenêtre quand le contenu
-        // grandit, mais ne la RÉTRÉCIT pas quand il diminue (la contrainte intrinsèque pousse
-        // vers le haut, jamais vers le bas). Sans ce recalage, la fenêtre resterait haute à la
-        // fermeture. `positionPanel` mesure le contenu et le recolle sous la barre des menus.
+        // We reset the window to the REAL size of the content at this step. Indispensable:
+        // `NSHostingController`'s self-sizing enlarges the window when the content grows,
+        // but does not SHRINK it when the content shrinks (the intrinsic constraint pushes
+        // upwards, never downwards). Without this reset, the window would stay tall on close.
+        // `positionPanel` measures the content and pins it back under the menu bar.
         if panel.isVisible { positionPanel() }
 
         guard t >= 1 else { return true }
@@ -354,12 +352,12 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         return false
     }
 
-    // MARK: - Morphing entre routes (racine ↔ stations radio)
+    // MARK: - Route morphing (root ↔ radio stations)
 
-    /// Anime la bascule d'une route à l'autre. On observe `outgoingPanelRoute` et non
-    /// `panelRoute` : lui seul distingue une NAVIGATION (clic sur le caret Radio, retour) d'un
-    /// simple retour à la racine à la fermeture du panneau, qu'il ne faut pas animer.
-    /// Même motif de réarmement que `observeConnection`.
+    /// Animates the switch from one route to another. We observe `outgoingPanelRoute` and not
+    /// `panelRoute`: only it tells a NAVIGATION (clicking the Radio chevron, going back) apart
+    /// from a plain return to the root when the panel closes, which must not be animated.
+    /// Same re-arming pattern as `observeConnection`.
     private func observePanelNavigation() {
         withObservationTracking {
             _ = store.outgoingPanelRoute
@@ -380,14 +378,14 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     private var routeMorphTimer: Timer?
     private var routeMorphStartTime: CFTimeInterval = 0
 
-    /// Plus court que l'accordéon multiroom (0,45 s) : celui-ci déplie du contenu sous une ligne
-    /// qu'on vient de désigner, celle-ci CHANGE de vue — au-delà, la navigation traîne.
+    /// Shorter than the multiroom accordion (0.45 s): that one unfolds content under a row just
+    /// pointed at, this one CHANGES view — any longer and navigation drags.
     private let routeMorphDuration: CFTimeInterval = 0.34
 
     private func animateRouteMorph() {
         routeMorphTimer?.invalidate()
 
-        // Panneau masqué : rien à animer, on pose l'état final.
+        // Panel hidden: nothing to animate, we set the final state.
         guard panel.isVisible else {
             store.finishRouteMorph()
             return
@@ -396,8 +394,8 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         store.routeMorphFraction = 0
         routeMorphStartTime = CACurrentMediaTime()
 
-        // Même idiome que l'accordéon : un timer à 120 Hz plutôt qu'un `withAnimation`, pour que
-        // le contenu SwiftUI ait à chaque pas une hauteur CONCRÈTE que la fenêtre puisse suivre.
+        // The same idiom as the accordion: a 120 Hz timer rather than a `withAnimation`, so that
+        // the SwiftUI content has a CONCRETE height at every step that the window can follow.
         routeMorphTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
             let running = MainActor.assumeIsolated { self?.stepRouteMorph() ?? false }
             if !running { timer.invalidate() }
@@ -408,9 +406,9 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         let raw = (CACurrentMediaTime() - routeMorphStartTime) / routeMorphDuration
         let t = min(CGFloat(raw), 1)
         store.routeMorphFraction = Self.ease(t)
-        // Comme pour l'accordéon : `NSHostingController` fait GRANDIR la fenêtre tout seul, mais
-        // ne la rétrécit jamais — il faut la recaler à chaque pas sur la hauteur réelle du contenu
-        // (une navigation va aussi bien vers plus haut que vers plus court).
+        // As for the accordion: `NSHostingController` GROWS the window on its own, but
+        // never shrinks it — it has to be reset at every step to the content's real height
+        // (a navigation goes towards a taller view as readily as towards a shorter one).
         if panel.isVisible { positionPanel() }
 
         guard t >= 1 else { return true }
@@ -420,17 +418,17 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         return false
     }
 
-    // MARK: - Panneau
+    // MARK: - Panel
 
     private func setupPanel() {
-        // Le verre porte le contenu SwiftUI et définit la forme du panneau.
+        // The glass carries the SwiftUI content and defines the panel's shape.
         glassView.contentView = hostingController.view
         glassView.cornerRadius = PanelMetrics.cornerRadius
 
-        // Ombre dessinée à la main. Celle de NSWindow n'est pas réglable et se révèle bien
-        // trop serrée : mesurée sur fond blanc, elle porte à 15,5 pt et assombrit de 72 au
-        // bord, là où celle de « Son » porte à 48,5 pt en n'assombrissant que de 48 — trois
-        // fois plus large et bien plus douce.
+        // A hand-drawn shadow. NSWindow's is not adjustable and turns out to be far too
+        // tight: measured on a white background, it reaches 15.5 pt and darkens by 72 at the
+        // edge, where "Sound"'s reaches 48.5 pt darkening by only 48 — three times wider and
+        // far softer.
         glassView.wantsLayer = true
         glassView.layer?.masksToBounds = false
         glassView.layer?.shadowColor = NSColor.black.cgColor
@@ -438,14 +436,13 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         glassView.layer?.shadowRadius = PanelMetrics.shadowRadius
         glassView.layer?.shadowOffset = CGSize(width: 0, height: -PanelMetrics.shadowOffsetY)
 
-        // Une couche ne peut pas dessiner d'ombre au-delà des bords de sa fenêtre : le verre
-        // est donc encastré dans un conteneur plus grand, dont les marges transparentes
-        // laissent l'ombre s'étaler.
+        // A layer cannot draw a shadow beyond the edges of its window: the glass is therefore
+        // embedded in a larger container, whose transparent margins let the shadow spread.
         //
-        // ⚠️ Par CONTRAINTES, et non en posant `glassView.frame` : NSGlassEffectView gère la
-        // disposition de son contentView et écrase le cadre qu'on lui donne. Le verre se
-        // retrouvait alors collé en bas du conteneur, toute la marge passait au-dessus, et le
-        // panneau s'ouvrait 60 pt trop bas sous la barre des menus.
+        // ⚠️ Through CONSTRAINTS, and not by setting `glassView.frame`: NSGlassEffectView
+        // manages its contentView's layout and overwrites the frame it is given. The glass then
+        // ended up flush with the bottom of the container, the whole margin went above it, and
+        // the panel opened 60 pt too low under the menu bar.
         let container = ShadowContainerView()
         container.addSubview(glassView)
         glassView.translatesAutoresizingMaskIntoConstraints = false
@@ -468,61 +465,61 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        // Pas de mise à l'échelle : l'apparition et la disparition sont de simples fondus,
-        // pilotés à la main dans showPanel/hidePanel.
+        // No scaling: appearing and disappearing are plain fades,
+        // driven by hand in showPanel/hidePanel.
         panel.animationBehavior = .none
     }
 
     @objc private func statusItemClicked() {
-        // Panneau visible : ce clic est un basculement vers « fermé ». Y compris quand il est
-        // DÉJÀ en train de se fermer — car c'est souvent ce même clic qui l'a fermé : sur un
-        // vrai clic, le mouse-down lui fait perdre le focus (`windowDidResignKey` → `hidePanel`)
-        // AVANT que le mouse-up ne déclenche cette action. On laisse donc la fermeture aller à
-        // son terme au lieu de rouvrir (sinon l'icône ne refermait jamais le panneau).
+        // Panel visible: this click is a toggle to "closed". Including when it is ALREADY
+        // closing — because it is often that same click that closed it: on a real click, the
+        // mouse-down makes it lose focus (`windowDidResignKey` → `hidePanel`) BEFORE the
+        // mouse-up triggers this action. So we let the close run to completion instead of
+        // reopening (otherwise the icon never closed the panel).
         if panel.isVisible {
             if !isHiding { hidePanel() }
             return
         }
 
-        // Option-clic : le panneau s'ouvre avec son pied (Paramètres, Quitter).
+        // Option-click: the panel opens with its footer (Settings, Quit).
         //
-        // On lit l'état VIVANT des modificateurs (`NSEvent.modifierFlags`), et non ceux portés
-        // par `NSApp.currentEvent` : sur l'action d'un NSStatusItem, l'event du mouse-up arrive
-        // avec des `modifierFlags` vides (vérifié : option enfoncée, `currentEvent` à 0, état
-        // global à `.option`). S'appuyer dessus laissait le pied invisible.
+        // We read the LIVE modifier state (`NSEvent.modifierFlags`), and not the ones carried
+        // by `NSApp.currentEvent`: on an NSStatusItem's action, the mouse-up event arrives with
+        // empty `modifierFlags` (verified: option held down, `currentEvent` at 0, global state
+        // at `.option`). Relying on it left the footer invisible.
         store.showsPreferences = NSEvent.modifierFlags.contains(.option)
 
         showPanel()
     }
 
     private func showPanel() {
-        // Le HUD du raccourci clavier flotte au-dessus de tout : le masquer pour qu'il ne
-        // recouvre pas le panneau qu'on vient d'ouvrir.
+        // The keyboard shortcut's HUD floats above everything: hide it so it does not
+        // cover the panel that has just been opened.
         store.hotkeyManager?.volumeHUD?.hide()
 
         store.isPanelOpen = true
         store.refreshPanelData()
 
-        // La ligne « en cours » part de l'état RÉEL, sans animation : on vient d'ouvrir, il n'y
-        // a rien à faire glisser. Seuls les changements survenant PENDANT que le panneau est
-        // ouvert (`observeStateForRepositioning`) sont animés.
+        // The "now playing" row starts from the REAL state, with no animation: we have just
+        // opened, there is nothing to slide. Only changes occurring WHILE the panel is open
+        // (`observeStateForRepositioning`) are animated.
         nowPlayingRevealTimer?.invalidate()
         lastNowPlayingPresence = store.nowPlaying != nil
         store.nowPlayingRevealFraction = lastNowPlayingPresence ? 1 : 0
 
         positionPanel()
 
-        // L'app est en policy .accessory : elle n'est pas active quand on clique dans la
-        // barre des menus, donc la fenêtre s'ouvrirait **non-clé** et son matériau se
-        // rendrait en état « inactif » (visiblement plus clair). Activer AVANT le show ne
-        // suffit pas — l'activation n'a pas encore pris effet quand la fenêtre est créée.
+        // The app is in .accessory policy: it is not active when clicking in the menu bar,
+        // so the window would open **non-key** and its material would render in its
+        // "inactive" state (visibly lighter). Activating BEFORE the show is not enough —
+        // the activation has not taken effect yet when the window is created.
         isHiding = false
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
 
-        // Comme « Son » : l'apparition est vive, la disparition plus lente.
+        // Like "Sound": the appearance is brisk, the disappearance slower.
         NSAnimationContext.runAnimationGroup { context in
             context.duration = PanelMetrics.fadeInDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -544,8 +541,8 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            // La closure de fin n'est pas isolée sur le main actor : on y revient
-            // explicitement plutôt que d'y toucher `isHiding` directement.
+            // The completion closure is not isolated to the main actor: we come back to it
+            // explicitly rather than touching `isHiding` there directly.
             Task { @MainActor in
                 guard let self, self.isHiding else { return }
                 self.panel.orderOut(nil)
@@ -554,17 +551,17 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         })
     }
 
-    /// Marge transparente à gauche de l'encre, DANS l'image de l'icône. Mesurée une fois
-    /// plutôt que codée en dur : si l'asset change, l'alignement du panneau suit.
+    /// The transparent margin to the left of the ink, WITHIN the icon's image. Measured once
+    /// rather than hardcoded: if the asset changes, the panel's alignment follows.
     private var cachedIconInkInset: CGFloat?
 
-    /// Abscisse du premier pixel VISIBLE de l'icône, dans le repère de l'écran.
+    /// The x-coordinate of the icon's first VISIBLE pixel, in screen coordinates.
     ///
-    /// Le bouton d'un NSStatusItem centre son image, et l'image elle-même a du vide autour
-    /// de son dessin. Les deux s'additionnent : notre bouton fait 40 pt, l'image 22, l'encre
-    /// 14 — l'encre commence donc à 13 pt du bord du bouton. Celui de « Son » est ajusté à
-    /// son glyphe (encre à 1,5 pt du bord). S'ancrer sur le CADRE du bouton, comme le fait le
-    /// système, nous décalerait de 11,5 pt : on s'ancre donc sur l'encre.
+    /// An NSStatusItem's button centres its image, and the image itself has empty space around
+    /// its drawing. The two add up: our button is 40 pt, the image 22, the ink 14 — so the ink
+    /// starts 13 pt from the button's edge. "Sound"'s is fitted to its glyph (ink 1.5 pt from
+    /// the edge). Anchoring on the button's FRAME, as the system does, would shift us by
+    /// 11.5 pt: so we anchor on the ink.
     private func iconInkMinX(button: NSStatusBarButton, buttonRect: NSRect) -> CGFloat {
         guard let image = button.image else { return buttonRect.minX }
 
@@ -576,12 +573,12 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
             cachedIconInkInset = inkInset
         }
 
-        // L'image est centrée dans le bouton.
+        // The image is centred in the button.
         let imageMinX = buttonRect.minX + (buttonRect.width - image.size.width) / 2
         return imageMinX + inkInset
     }
 
-    /// Première colonne non transparente de l'image.
+    /// The image's first non-transparent column.
     private static func leftInkInset(of image: NSImage) -> CGFloat {
         let w = Int(image.size.width.rounded())
         let h = Int(image.size.height.rounded())
@@ -605,69 +602,69 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         return 0
     }
 
-    /// Place le panneau sous l'icône, aligné à gauche sur elle, sans déborder de l'écran.
+    /// Places the panel under the icon, left-aligned with it, without running off the screen.
     private func positionPanel() {
         guard let button = statusItem.button,
               let buttonWindow = button.window,
               let screen = buttonWindow.screen ?? NSScreen.main else { return }
 
-        // Ce que l'écran peut afficher. Le contenu s'y plafonne lui-même (la liste des stations
-        // défile au-delà) : il faut donc le lui dire AVANT de le mesurer. On ne réécrit la vue
-        // que si la valeur a bougé — sinon on invaliderait la disposition à chaque ouverture.
+        // What the screen can display. The content caps itself to it (the station list scrolls
+        // beyond that): so it has to be told BEFORE being measured. We only rewrite the view
+        // if the value has moved — otherwise we would invalidate the layout on every opening.
         let maxContentHeight = PanelMetrics.maxContentHeight(on: screen)
         if hostingController.rootView.maxContentHeight != maxContentHeight {
             hostingController.rootView.maxContentHeight = maxContentHeight
         }
 
-        // La taille vient du contenu SwiftUI : elle change selon que le pied est visible,
-        // que Milō est connecté, qu'on est dans la liste des stations radio, ou que la
-        // sous-section multiroom est dépliée.
+        // The size comes from the SwiftUI content: it changes depending on whether the footer
+        // is visible, whether Milō is connected, whether we are in the radio station list, or
+        // whether the multiroom sub-section is expanded.
         hostingController.view.layoutSubtreeIfNeeded()
         var size = hostingController.view.fittingSize
 
-        // Hauteur ENTIÈRE, indispensable au calage sous-pixel : voir `shadowMargin`, dont les
-        // 60,5 pt ne tombent juste que si la hauteur du contenu est entière. Sans ce calage, le
-        // panneau glissait d'un pixel selon la parité du contenu.
+        // A WHOLE height, indispensable for sub-pixel alignment: see `shadowMargin`, whose
+        // 60.5 pt only land right if the content height is an integer. Without this rounding,
+        // the panel drifted by a pixel depending on the parity of its content.
         size.height = min(size.height.rounded(.up), maxContentHeight)
 
         hostingController.view.frame = NSRect(origin: .zero, size: size)
 
-        // La fenêtre est plus grande que le panneau : la marge accueille l'ombre. Le verre y
-        // est centré par les contraintes posées dans setupPanel().
+        // The window is larger than the panel: the margin houses the shadow. The glass is
+        // centred in it by the constraints set in setupPanel().
         let m = PanelMetrics.shadowMargin
 
         let buttonRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
 
-        // On positionne le PANNEAU, puis on décale la fenêtre de la marge.
+        // We position the PANEL, then offset the window by the margin.
         //
-        // Aligné à GAUCHE sur l'icône, et non centré dessous : c'est ce que font les modules
-        // système. Mesuré sur « Son » : son panneau commence 11,5 pt à gauche de l'encre de
-        // son glyphe — ses pastilles (à 14 pt du bord) tombent alors 2,5 pt à droite de
-        // l'encre, l'alignement optique que l'œil lit comme « aligné ».
+        // LEFT-aligned with the icon, and not centred under it: that is what the system
+        // modules do. Measured on "Sound": its panel starts 11.5 pt left of its glyph's ink —
+        // its badges (14 pt from the edge) then land 2.5 pt right of the ink, the optical
+        // alignment the eye reads as "aligned".
         var x = iconInkMinX(button: button, buttonRect: buttonRect) - PanelMetrics.panelLeftFromIconInk
         let visible = screen.visibleFrame
         x = min(max(x, visible.minX + PanelMetrics.screenEdgeMargin),
                 visible.maxX - size.width - PanelMetrics.screenEdgeMargin)
 
-        // Ancré sur le bas de la BARRE DES MENUS (`visibleFrame.maxY`), et non sur le bas du
-        // bouton : sur un écran à encoche la barre est plus haute que l'élément d'état, et
-        // s'ancrer au bouton fait chevaucher le panneau sous la barre. Le panneau grandit donc
-        // vers le BAS (le haut reste collé sous la barre), comme « Son ».
+        // Anchored on the bottom of the MENU BAR (`visibleFrame.maxY`), and not on the bottom
+        // of the button: on a notched screen the bar is taller than the status item, and
+        // anchoring on the button makes the panel overlap under the bar. The panel therefore
+        // grows DOWNWARDS (the top stays pinned under the bar), like "Sound".
         let y = visible.maxY - PanelMetrics.topGap - size.height
 
         let frame = NSRect(x: x - m, y: y - m,
                            width: size.width + 2 * m, height: size.height + 2 * m)
-        // On fige le bord haut AVANT de poser le cadre : le `setFrame` déclenche `windowDidResize`,
-        // qui doit déjà connaître la bonne valeur (sinon il recalerait sur l'ancienne).
+        // We pin the top edge BEFORE setting the frame: the `setFrame` triggers `windowDidResize`,
+        // which must already know the right value (otherwise it would reset to the old one).
         pinnedTopY = frame.origin.y + frame.height
         panel.setFrame(frame, display: false)
     }
 
-    // MARK: - Fermeture au clic extérieur
+    // MARK: - Click-outside-to-dismiss
 
-    /// `NSMenu` et `NSPopover.behavior = .transient` faisaient ça tout seuls. Avec une
-    /// fenêtre, il faut surveiller soi-même les clics ailleurs — y compris dans les autres
-    /// applications, d'où le moniteur **global**.
+    /// `NSMenu` and `NSPopover.behavior = .transient` did this on their own. With a
+    /// window, you have to watch for clicks elsewhere yourself — including in other
+    /// applications, hence the **global** monitor.
     private func startWatchingOutsideClicks() {
         stopWatchingOutsideClicks()
 
@@ -686,17 +683,17 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
 
     // MARK: - NSWindowDelegate
 
-    /// Le panneau perd le focus (Cmd-Tab, autre app, ouverture des Réglages) : on le ferme,
-    /// comme le font Son et Bluetooth.
+    /// The panel loses focus (Cmd-Tab, another app, Settings opening): we close it,
+    /// as Sound and Bluetooth do.
     func windowDidResignKey(_ notification: Notification) {
         guard panel.isVisible else { return }
         hidePanel()
     }
 
-    /// `NSHostingController` redimensionne la fenêtre à la taille du contenu SwiftUI (dépli/repli
-    /// de l'accordéon multiroom). AppKit garde alors le coin bas-gauche fixe, ce qui ferait
-    /// monter le bord haut sous la barre des menus : on le recolle à `pinnedTopY` en ne bougeant
-    /// que l'origine (jamais la hauteur — pas de boucle de redimensionnement). Voir `pinnedTopY`.
+    /// `NSHostingController` resizes the window to the SwiftUI content's size (expanding/collapsing
+    /// the multiroom accordion). AppKit then keeps the bottom-left corner fixed, which would make
+    /// the top edge rise under the menu bar: we pin it back to `pinnedTopY` by moving only the
+    /// origin (never the height — so no resize loop). See `pinnedTopY`.
     func windowDidResize(_ notification: Notification) {
         guard let top = pinnedTopY else { return }
         let newY = top - panel.frame.height

@@ -32,12 +32,12 @@ enum ConnectionPhase: Equatable, CustomStringConvertible {
     }
 }
 
-/// Tous les rappels sont livrés sur le main thread — c'était déjà le cas, ce n'est
-/// maintenant plus une convention mais une signature.
+/// Every callback is delivered on the main thread — that was already the case, it is now
+/// a signature rather than a convention.
 ///
-/// `Sendable` : le delegate est parfois extrait puis relâché sur la main queue (voir
-/// `stop()`, appelé depuis `deinit`). Ses conformants sont des classes `@MainActor`, donc
-/// Sendable de plein droit.
+/// `Sendable`: the delegate is sometimes taken out and then released on the main queue (see
+/// `stop()`, called from `deinit`). Its conformers are `@MainActor` classes, hence Sendable
+/// in their own right.
 @MainActor
 protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func miloDidConnect()
@@ -51,17 +51,17 @@ protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
 
-/// Découverte et connexion à Milō : mDNS → tests de readiness de l'API → WebSocket.
+/// Discovery of and connection to Milō: mDNS → API readiness checks → WebSocket.
 ///
-/// Main-thread-only, désormais vérifié. La machine à phases, l'état de découverte et les
-/// timers appartiennent au main actor ; seuls les travaux réellement bloquants (résolution
-/// CFHost, sondes TCP de latence) partent hors du main thread — et le font par `await`,
-/// donc en revenant tout seuls.
+/// Main-thread-only, now checked. The phase machine, the discovery state and the timers
+/// belong to the main actor; only the genuinely blocking work (CFHost resolution, TCP
+/// latency probes) goes off the main thread — and it does so through `await`, so it comes
+/// back on its own.
 @MainActor
 final class MiloConnectionManager: NSObject {
     weak var delegate: MiloConnectionManagerDelegate?
 
-    // Référence vers RocVADManager pour mettre à jour l'endpoint avec l'IP résolue
+    // A reference to RocVADManager, to update the endpoint with the resolved IP
     var rocVADManager: RocVADManager?
 
     // Configuration
@@ -78,17 +78,17 @@ final class MiloConnectionManager: NSObject {
 
     // Services
     private let webSocketService = WebSocketService()
-    /// Service HTTP de la connexion active. Créé à la connexion, nil sinon.
+    /// The active connection's HTTP service. Created on connect, nil otherwise.
     private(set) var apiService: MiloAPIService?
-    /// Instance unique réutilisée pour les 20 tests de readiness — en créer une
-    /// par tentative laissait fuiter deux URLSessions toutes les 2 secondes.
+    /// A single instance reused for the 20 readiness checks — creating one
+    /// per attempt leaked two URLSessions every 2 seconds.
     private var probeAPIService: MiloAPIService?
 
     // mDNS/Bonjour Discovery
     private var serviceBrowser: NetServiceBrowser?
     private var resolvingServices: Set<NetService> = []
 
-    // Retry ciblé (quand mDNS trouve le Pi)
+    // Targeted retry (when mDNS finds the Pi)
     private var retryTimer: Timer?
     private var retryCount = 0
     private let maxRetries = 20
@@ -111,12 +111,12 @@ final class MiloConnectionManager: NSObject {
         NSLog("💤 Wake notification registered")
     }
 
-    /// Livré par NSWorkspace sur le main thread.
+    /// Delivered by NSWorkspace on the main thread.
     @objc private nonisolated func systemDidWake() {
         NSLog("☀️ System woke up - forcing reconnection...")
 
         Task { @MainActor [weak self] in
-            // Laisser la pile réseau se stabiliser après le réveil.
+            // Let the network stack settle after waking.
             try? await Task.sleep(for: .seconds(1))
 
             guard let self, self.phase != .idle else { return }
@@ -139,19 +139,20 @@ final class MiloConnectionManager: NSObject {
         }
     }
 
-    /// Résout le hostname en IPv4 et, s'il y a plusieurs candidats, retient le plus rapide.
+    /// Resolves the hostname to IPv4 and, when there are several candidates, keeps the
+    /// fastest one.
     ///
-    /// `nonisolated` : `IPv4Resolver.resolveAll` (CFHost) bloque, et les sondes TCP prennent
-    /// jusqu'à 500 ms chacune — rien de tout ça n'a sa place sur le main actor. L'appelant
-    /// n'a qu'à `await`, et récupère la main tout seul.
+    /// `nonisolated`: `IPv4Resolver.resolveAll` (CFHost) blocks, and the TCP probes take up
+    /// to 500 ms each — none of that belongs on the main actor. The caller only has to
+    /// `await`, and gets the main actor back on its own.
     ///
-    /// La résolution est explicitement poussée sur une queue `.utility` : cette méthode est
-    /// appelée depuis `connectToMilo()` sur le main actor, donc le pool coopératif de la
-    /// concurrence structurée hérite d'une QoS `.userInitiated`. `CFHostStartInfoResolution`
-    /// bloque le thread appelant en attendant une réponse résolue en interne à une QoS
-    /// `.default` — sans ce hop, un thread `.userInitiated` attend sur un thread `.default`,
-    /// l'inversion de priorité qu'Instruments signale ("Hang Risk"). `.utility` (< `.default`)
-    /// fait de l'attente une simple donation de priorité descendante, pas une inversion.
+    /// The resolution is explicitly pushed onto a `.utility` queue: this method is called
+    /// from `connectToMilo()` on the main actor, so structured concurrency's cooperative
+    /// pool inherits a `.userInitiated` QoS. `CFHostStartInfoResolution` blocks the calling
+    /// thread waiting for an answer resolved internally at `.default` QoS — without this
+    /// hop, a `.userInitiated` thread waits on a `.default` thread, the priority inversion
+    /// Instruments flags ("Hang Risk"). `.utility` (< `.default`) turns the wait into a
+    /// plain downward priority donation, not an inversion.
     private nonisolated static func resolveBestIPv4(host: String, port: Int) async -> String? {
         let candidates = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -166,8 +167,8 @@ final class MiloConnectionManager: NSObject {
 
         NSLog("🔄 Testing latency for %d IP candidates...", candidates.count)
 
-        // Les sondes courent en parallèle et se bornent elles-mêmes à 500 ms : le
-        // `DispatchGroup.wait(timeout:)` global d'avant n'a plus lieu d'être.
+        // The probes run in parallel and bound themselves to 500 ms: the global
+        // `DispatchGroup.wait(timeout:)` from before is no longer needed.
         var results: [(ip: String, latency: TimeInterval)] = []
         await withTaskGroup(of: (String, TimeInterval?).self) { group in
             for ip in candidates {
@@ -192,12 +193,12 @@ final class MiloConnectionManager: NSObject {
         return candidates.first
     }
 
-    /// Mesure la latence vers une IP via une connexion TCP rapide.
+    /// Measures the latency to an IP through a quick TCP connection.
     ///
-    /// La continuation ne doit être reprise **qu'une fois**, alors que le handler d'état et
-    /// le timeout de 500 ms courent en parallèle : d'où le drapeau sous verrou. C'était un
-    /// `var hasCompleted` + NSLock, que le compilateur ne pouvait pas suivre ; un `Mutex`
-    /// dit la même chose, et se prouve.
+    /// The continuation must be resumed **exactly once**, while the state handler and the
+    /// 500 ms timeout run in parallel: hence the flag under a lock. It used to be a
+    /// `var hasCompleted` + NSLock, which the compiler could not follow; a `Mutex` says the
+    /// same thing, and proves it.
     private nonisolated static func measureLatency(to ip: String, port: Int) async -> TimeInterval? {
         await withCheckedContinuation { continuation in
             let start = Date()
@@ -228,7 +229,7 @@ final class MiloConnectionManager: NSObject {
 
             connection.start(queue: .global(qos: .userInitiated))
 
-            // Timeout de 500 ms
+            // 500 ms timeout
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { finish(nil) }
         }
     }
@@ -252,9 +253,9 @@ final class MiloConnectionManager: NSObject {
         apiService = nil
 
         if wasConnected {
-            // Capturer le delegate plutôt que `self` : stop() est aussi appelé depuis
-            // deinit, et former une référence faible sur un objet en cours de
-            // désallocation fait crasher le runtime objc.
+            // Capture the delegate rather than `self`: stop() is also called from
+            // deinit, and forming a weak reference to an object being deallocated
+            // crashes the objc runtime.
             let delegate = self.delegate
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { delegate?.miloDidDisconnect() }
@@ -292,7 +293,7 @@ final class MiloConnectionManager: NSObject {
         serviceBrowser = nil
     }
 
-    // MARK: - Retry ciblé (quand mDNS trouve Milo)
+    // MARK: - Targeted retry (when mDNS finds Milo)
 
     private func startAPIRetry() {
         guard case .discovering = phase else { return }
@@ -305,8 +306,8 @@ final class MiloConnectionManager: NSObject {
         phase = .testingAPI(attempt: 0)
         probeAPIService = MiloAPIService(host: host, port: httpPort)
 
-        // Mode .common : continuer les tests même si l'utilisateur garde le menu
-        // ouvert (le mode par défaut suspend les timers pendant le tracking).
+        // .common mode: keep the checks running even if the user holds the menu
+        // open (the default mode suspends timers during tracking).
         let timer = Timer(timeInterval: retryInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.testAPIWithRetry() }
         }
@@ -372,10 +373,10 @@ final class MiloConnectionManager: NSObject {
         stopRetry()
         phase = .connecting
 
-        // Résoudre l'IP IPv4 AVANT de connecter
+        // Resolve the IPv4 address BEFORE connecting
         let best = await Self.resolveBestIPv4(host: host, port: httpPort)
 
-        // Vérifier qu'on est toujours en phase connecting
+        // Check we are still in the connecting phase
         guard case .connecting = phase, connectionGeneration == myGeneration else { return }
 
         if let best {
@@ -395,9 +396,9 @@ final class MiloConnectionManager: NSObject {
         NSLog("🎉 Milo connected successfully!")
 
         phase = .connected
-        // Transmettre l'IP validée par le test de latence : laisser le service
-        // HTTP re-résoudre de son côté pourrait choisir une autre adresse
-        // (interface Wi-Fi vs Ethernet du Pi, bail périmé) que celle sondée.
+        // Pass on the IP validated by the latency check: letting the HTTP service
+        // re-resolve on its own side could pick a different address (the Pi's Wi-Fi
+        // vs Ethernet interface, a stale lease) than the one probed.
         apiService = MiloAPIService(host: host, port: httpPort, resolvedIPv4: resolvedIPv4)
         delegate?.miloDidConnect()
     }
@@ -428,11 +429,11 @@ final class MiloConnectionManager: NSObject {
     // MARK: - Tests
 
 #if DEBUG
-    /// Installe le service HTTP d'une connexion établie en pointant sur un backend local,
-    /// sans mDNS ni WebSocket. Réservé aux tests : ils peuvent ainsi appeler les méthodes
-    /// de `MiloConnectionManagerDelegate` sur un vrai serveur (la pile URLSession, le
-    /// parsing et les retries sont exercés pour de bon), là où la découverte mDNS impose
-    /// un `milo.local` sur le réseau.
+    /// Installs an established connection's HTTP service, pointing at a local backend, with
+    /// no mDNS and no WebSocket. Reserved for the tests: they can thereby call the
+    /// `MiloConnectionManagerDelegate` methods against a real server (the URLSession stack,
+    /// the parsing and the retries are exercised for real), where mDNS discovery would
+    /// require a `milo.local` on the network.
     func injectAPIServiceForTesting(host: String, port: Int) {
         phase = .connected
         apiService = MiloAPIService(host: host, port: port, resolvedIPv4: host)
@@ -451,11 +452,11 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
     }
 
     func webSocketDidFailToConnect() {
-        // Handshake jamais abouti (port 8000 fermé, service WS pas encore prêt).
-        // Sans cette voie de sortie, la machine resterait en .connecting pour
-        // toujours : mDNS et retry sont déjà arrêtés à ce stade. On ne réagit
-        // qu'en phase .connecting — un teardown volontaire (stop, sleep/wake)
-        // ne doit pas ressusciter la découverte via un callback tardif.
+        // The handshake never completed (port 8000 closed, WS service not ready yet).
+        // Without this way out, the machine would stay in .connecting forever:
+        // mDNS and retry are already stopped at this point. We only react while in
+        // the .connecting phase — a deliberate teardown (stop, sleep/wake) must not
+        // resurrect discovery through a late callback.
         guard case .connecting = phase else { return }
 
         NSLog("💔 WebSocket handshake failed - resuming discovery...")
@@ -495,18 +496,18 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 
 // MARK: - NetServiceBrowserDelegate
 
-/// `NetServiceBrowser` et `NetService` livrent leurs rappels sur la run loop où ils ont été
-/// programmés — ici la principale, puisque le browser est créé et les résolutions lancées
-/// depuis le main actor. Les protocoles, eux, ne sont pas annotés : leurs méthodes sont donc
-/// `nonisolated`, et rentrent explicitement sur le main actor.
+/// `NetServiceBrowser` and `NetService` deliver their callbacks on the run loop they were
+/// scheduled on — here the main one, since the browser is created and the resolutions
+/// started from the main actor. The protocols themselves are not annotated: their methods
+/// are therefore `nonisolated`, and enter the main actor explicitly.
 extension MiloConnectionManager: NetServiceBrowserDelegate {
     nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
         NSLog("🔍 Found service: %@ (type: %@, domain: %@)", service.name, service.type, service.domain)
 
-        // `NetService` est explicitement non-Sendable (Apple pousse vers Network.framework) :
-        // le confier au main actor est vu comme un transfert. Il n'en est rien — l'objet
-        // *arrive* du main thread et n'est jamais touché ailleurs. On le dit ici, sur cette
-        // liaison précise, plutôt que de déclarer tout le type Sendable.
+        // `NetService` is explicitly non-Sendable (Apple pushes towards Network.framework):
+        // handing it to the main actor is seen as a transfer. It is nothing of the sort —
+        // the object *comes from* the main thread and is never touched anywhere else. We say
+        // so here, on this precise binding, rather than declaring the whole type Sendable.
         nonisolated(unsafe) let service = service
 
         MainActor.assumeIsolated {
@@ -560,7 +561,7 @@ extension MiloConnectionManager: NetServiceDelegate {
         let hostName = sender.hostName ?? ""
         NSLog("✅ Service resolved: %@ -> hostname: %@", sender.name, hostName)
 
-        // Voir netServiceBrowser(_:didFind:moreComing:).
+        // See netServiceBrowser(_:didFind:moreComing:).
         nonisolated(unsafe) let sender = sender
 
         MainActor.assumeIsolated {
@@ -584,7 +585,7 @@ extension MiloConnectionManager: NetServiceDelegate {
     nonisolated func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
         NSLog("⚠️ Failed to resolve service %@: %@", sender.name, String(describing: errorDict))
 
-        // Voir netServiceBrowser(_:didFind:moreComing:).
+        // See netServiceBrowser(_:didFind:moreComing:).
         nonisolated(unsafe) let sender = sender
 
         MainActor.assumeIsolated {

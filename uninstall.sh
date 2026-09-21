@@ -1,86 +1,86 @@
 #!/bin/bash
 
-# Script de désinstallation de Milo Mac et roc-vad
+# Uninstall script for Milo Mac and roc-vad
 # Version 1.0
 
-set -e  # Arrêter en cas d'erreur
+set -e  # Stop on error
 
 echo "=============================================="
-echo "Désinstallation de Milo Mac et roc-vad"
+echo "Uninstalling Milo Mac and roc-vad"
 echo "=============================================="
 echo ""
 
-# Vérifier les permissions admin
+# Check admin permissions
 if [ "$EUID" -eq 0 ]; then
-    echo "Erreur: Ne pas exécuter ce script avec sudo directement"
-    echo "Le script demandera les permissions admin quand nécessaire"
+    echo "Error: do not run this script with sudo directly"
+    echo "The script will ask for admin permissions when needed"
     exit 1
 fi
 
-# Arrêter Milo Mac s'il tourne
-echo "1. Arrêt de Milo Mac..."
-killall "Milo Mac" 2>/dev/null && echo "   Milo Mac arrêté" || echo "   Milo Mac n'était pas en cours d'exécution"
+# Stop Milo Mac if it is running
+echo "1. Stopping Milo Mac..."
+killall "Milo Mac" 2>/dev/null && echo "   Milo Mac stopped" || echo "   Milo Mac was not running"
 
-# Vérifier si roc-vad est installé
+# Check whether roc-vad is installed
 if command -v roc-vad &> /dev/null || [ -f "/usr/local/bin/roc-vad" ]; then
     echo ""
-    echo "2. Désinstallation de roc-vad..."
-    echo "   (Mot de passe administrateur requis)"
+    echo "2. Uninstalling roc-vad..."
+    echo "   (Administrator password required)"
     
     if [ -f "/usr/local/bin/roc-vad" ]; then
         sudo /usr/local/bin/roc-vad uninstall
-        echo "   roc-vad désinstallé"
+        echo "   roc-vad uninstalled"
     else
-        echo "   roc-vad introuvable, passage à l'étape suivante"
+        echo "   roc-vad not found, moving on to the next step"
     fi
 else
     echo ""
-    echo "2. roc-vad n'est pas installé, passage à l'étape suivante"
+    echo "2. roc-vad is not installed, moving on to the next step"
 fi
 
-# Supprimer l'application Milo Mac
+# Remove the Milo Mac application
 echo ""
-echo "3. Suppression de l'application Milo Mac..."
+echo "3. Removing the Milo Mac application..."
 
 if [ -d "/Applications/Milo Mac.app" ]; then
     rm -rf "/Applications/Milo Mac.app"
-    echo "   Application supprimée de /Applications/"
+    echo "   Application removed from /Applications/"
 else
-    echo "   Application introuvable dans /Applications/"
+    echo "   Application not found in /Applications/"
 fi
 
-# Nettoyer les fichiers de configuration
+# Clean up the configuration files
 echo ""
-echo "4. Nettoyage des fichiers de configuration..."
+echo "4. Cleaning up the configuration files..."
 
-# Trouver et supprimer les préférences Milo Mac
+# Find and remove the Milo Mac preferences
 find ~/Library/Preferences/ -name "*Milo*Mac*" -type f 2>/dev/null | while read file; do
     rm -f "$file"
-    echo "   Supprimé: $(basename "$file")"
+    echo "   Removed: $(basename "$file")"
 done
 
-# Trouver et supprimer les caches
+# Find and remove the caches
 find ~/Library/Caches/ -name "*Milo*Mac*" -type d 2>/dev/null | while read dir; do
     rm -rf "$dir"
-    echo "   Supprimé: $(basename "$dir")"
+    echo "   Removed: $(basename "$dir")"
 done
 
-# Supprimer le dossier Application Support
+# Remove the Application Support folder
 if [ -d ~/Library/Application\ Support/Milo\ Mac/ ]; then
     rm -rf ~/Library/Application\ Support/Milo\ Mac/
-    echo "   Dossier de support supprimé"
+    echo "   Support folder removed"
 fi
 
-# Nettoyer les LaunchAgents (démarrage automatique)
+# Clean up the LaunchAgents (automatic startup)
 find ~/Library/LaunchAgents/ -name "*Milo*Mac*" -type f 2>/dev/null | while read file; do
     rm -f "$file"
-    echo "   Agent de démarrage supprimé: $(basename "$file")"
+    echo "   Startup agent removed: $(basename "$file")"
 done
 
 echo ""
 echo "=============================================="
-echo "Désinstallation terminée avec succès!"
+echo "Uninstallation completed successfully!"
 echo ""
-echo "IMPORTANT: Redémarrez votre Mac pour finaliser"
-echo "la suppression complète des services audio."
+echo "IMPORTANT: restart your Mac to finalize"
+echo "the complete removal of the audio services."
 echo "=============================================="

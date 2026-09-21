@@ -1,299 +1,299 @@
 import SwiftUI
 
-/// Les lignes du panneau, en SwiftUI.
+/// The panel's rows, in SwiftUI.
 ///
-/// Le panneau n'est pas un NSMenu mais une NSPanel qu'on dessine soi-même (`MenuBarShell`
-/// dit pourquoi) : RIEN ne vient du système ici — ni les séparateurs, ni les titres, ni le
-/// chrome, ni la surbrillance au survol. Tout ce qui suit est donc dessiné à la main, y
-/// compris ce qu'un menu natif aurait donné gratuitement.
+/// The panel is not an NSMenu but an NSPanel we draw ourselves (`MenuBarShell`
+/// says why): NOTHING here comes from the system — not the separators, not the titles, not the
+/// chrome, not the hover highlight. Everything that follows is therefore drawn by hand, including
+/// what a native menu would have given for free.
 ///
-/// Corollaire : chaque ligne gère son propre survol (`MenuRowContainer`). C'est le prix de
-/// la fenêtre — et sa raison d'être : un clic n'y referme rien, on peut donc afficher le
-/// spinner de transition sur place.
+/// Corollary: every row manages its own hover (`MenuRowContainer`). That is the price of
+/// the window — and its reason for being: a click closes nothing there, so the
+/// transition spinner can be shown in place.
 ///
-/// Ces vues observent `MiloStore` : tant que le panneau est ouvert, elles se re-rendent
-/// toutes seules quand le backend pousse un nouvel état.
+/// These views observe `MiloStore`: as long as the panel is open, they re-render
+/// themselves whenever the backend pushes a new state.
 
-/// Géométrie des lignes, relevée au pixel sur le panneau **Bluetooth** natif (capture 2x,
-/// décalages comptés depuis le bord gauche du menu) :
+/// Row geometry, measured to the pixel on the native **Bluetooth** panel (2x capture,
+/// offsets counted from the menu's left edge):
 ///
-///   titre             16 pt
-///   pastille d'icône  19 pt
-///   libellé           49 pt   ( = 19 + pastille de 26 + 4 d'écart )
+///   title            16 pt
+///   icon badge       19 pt
+///   label            49 pt   ( = 19 + a 26 badge + 4 of gap )
 enum MenuRowMetrics {
-    /// Largeur du panneau. Fixée, et non déduite du contenu : un NSMenu se dimensionnait sur
-    /// son item le plus large, une fenêtre qu'on dessine soi-même n'a pas cette règle — sans
-    /// cette valeur, le panneau se rétrécirait sur ses libellés, qui changent avec la langue.
+    /// The panel's width. Fixed, and not derived from the content: an NSMenu sized itself on
+    /// its widest item, a window we draw ourselves has no such rule — without
+    /// this value, the panel would shrink onto its labels, which change with the language.
     static let width: CGFloat = 264
 
-    // Ces valeurs sont désormais les valeurs RÉELLES : le contenu vit dans une NSPanel
-    // qu'on dessine soi-même, pas dans un NSMenu. (Un NSMenu ajoutait son propre retrait
-    // autour des vues d'items, ce qui obligeait à pré-compenser — piège désormais éteint.)
+    // These values are now the REAL values: the content lives in an NSPanel
+    // we draw ourselves, not in an NSMenu. (An NSMenu added its own inset
+    // around item views, which forced us to pre-compensate — a trap now extinguished.)
 
-    /// Décalage du texte des titres et en-têtes.
+    /// The offset of the titles' and headers' text.
     static let textInset: CGFloat = 15
 
-    /// Décalage du contenu des lignes (la pastille d'icône). Mesuré sur « Son » : 14 pt —
-    /// soit un point à GAUCHE du texte des titres (15 pt). Ce débord est volontaire : il
-    /// aligne optiquement le cercle, dont les bords fuient, sur les lettres à fût droit.
+    /// The offset of a row's content (the icon badge). Measured on "Sound": 14 pt —
+    /// that is one point to the LEFT of the titles' text (15 pt). This overhang is deliberate: it
+    /// optically aligns the circle, whose edges fall away, with the letters' straight stems.
     static let contentInset: CGFloat = 14
 
-    /// Retrait au-dessus du titre, sous le bord du panneau.
+    /// The inset above the title, under the panel's edge.
     ///
-    /// Réglé par comparaison d'ENCRE à ENCRE avec « Son », seule comparaison valable : entre
-    /// le haut d'une vue `Text` et le haut des capitales il y a l'interligne interne de la
-    /// police, qu'aucun padding déclaré ne dit.
+    /// Set by comparing INK to INK with "Sound", the only valid comparison: between
+    /// the top of a `Text` view and the top of the capitals there is the font's internal
+    /// leading, which no declared padding accounts for.
     ///
-    /// Mesuré : le haut des capitales de « Son » est à 16,5 pt du bord du panneau ; le nôtre
-    /// tombait à 20,0 — d'où 16,5 − 3,5 = 13. (Ne pas comparer le haut de l'encre des deux
-    /// chaînes : « Milō » a une hampe (`l`) et un macron qui montent plus haut qu'une
-    /// capitale. On compare la capitale, ou la ligne de base — les deux donnent 3,5.)
+    /// Measured: the top of "Sound"'s capitals is 16.5 pt from the panel's edge; ours
+    /// landed at 20.0 — hence 16.5 − 3.5 = 13. (Do not compare the top of the two
+    /// strings' ink: "Milō" has an ascender (`l`) and a macron that rise higher than a
+    /// capital. Compare the capital, or the baseline — both give 3.5.)
     static let titleTopInset: CGFloat = 13
 
-    /// Retrait vertical d'une ligne. Le pas entre deux lignes vaut `iconSize + 2 ×` cette
-    /// valeur : 26 + 6 = 32 pt.
+    /// A row's vertical inset. The pitch between two rows is `iconSize + 2 ×` this
+    /// value: 26 + 6 = 32 pt.
     ///
-    /// Valait 3,25 (soit un pas de 32,5), sur la foi d'un commentaire qui disait l'avoir
-    /// relevé sur Bluetooth. Re-mesuré depuis, par l'écart entre centres de pastilles — une
-    /// mesure qui ne dépend ni du survol ni d'un seuil, et qui retrouve bien les 32,0 déjà
-    /// connus de Son quand on la lui applique :
+    /// Was 3.25 (a pitch of 32.5), on the strength of a comment claiming to have
+    /// measured it on Bluetooth. Re-measured since, by the gap between badge centres — a
+    /// measurement that depends neither on hover nor on a threshold, and which does recover the 32.0
+    /// already known from Sound when applied to it:
     ///
-    ///   Son        32,0 · 32,0
-    ///   Bluetooth  32,0 × 8 d'affilée
+    ///   Sound      32.0 · 32.0
+    ///   Bluetooth  32.0 × 8 in a row
     ///
-    /// Les lignes sont jointives (les boîtes de survol se touchent) : pas = hauteur de boîte.
+    /// The rows are contiguous (the hover boxes touch): pitch = box height.
     static let rowVerticalPadding: CGFloat = 3
 
-    /// Retrait de la surbrillance au survol par rapport au bord de la ligne.
+    /// The inset of the hover highlight relative to the row's edge.
     static let highlightInset: CGFloat = 5
 
-    /// Retrait vertical d'une ligne de TEXTE — le pied (Paramètres, Quitter) et le retour
-    /// depuis la liste radio. Ces lignes n'ont pas de pastille : leur boîte de survol se cale
-    /// sur le texte seul, et non sur `iconSize` comme celle d'une ligne à pastille.
+    /// A TEXT row's vertical inset — the footer (Settings, Quit) and the back row
+    /// from the radio list. These rows have no badge: their hover box is set
+    /// on the text alone, and not on `iconSize` like a badged row's.
     static let textRowVerticalPadding: CGFloat = 5
 
-    /// Rayon des coins de la surbrillance au survol.
+    /// The corner radius of the hover highlight.
     ///
-    /// Relevé sur « Son » en profilant le coin haut-gauche du masque de survol (obtenu par
-    /// différence entre deux captures, pointeur garé / pointeur sur la ligne) : son bord
-    /// gauche n'est atteint qu'à 9,0 pt du haut de la boîte, contre 3,5 pour notre rayon de 5.
+    /// Measured on "Sound" by profiling the top-left corner of the hover mask (obtained by
+    /// differencing two captures, pointer parked / pointer on the row): its left
+    /// edge is only reached 9.0 pt from the top of the box, against 3.5 for our radius of 5.
     ///
-    /// Attention, ces 9,0 ne SONT pas le rayon : en `.continuous` (squircle), la courbe
-    /// s'étire au-delà du rayon nominal, et le rapport entre les deux n'est PAS constant
-    /// (mesuré sur notre propre rendu : 5 → 3,5, mais 13 → 12,0). On calibre donc sur ces
-    /// deux points — L(0) ≈ 1,0625·r − 1,81 — d'où 10 pour viser 9,0.
+    /// Careful, those 9.0 are NOT the radius: in `.continuous` (squircle), the curve
+    /// stretches beyond the nominal radius, and the ratio between the two is NOT constant
+    /// (measured on our own rendering: 5 → 3.5, but 13 → 12.0). So we calibrate on those
+    /// two points — L(0) ≈ 1.0625·r − 1.81 — hence 10 to aim for 9.0.
     ///
-    /// Vérifié ensuite profil contre profil, ligne par ligne, et non sur un seul chiffre.
+    /// Verified afterwards profile against profile, row by row, and not on a single number.
     static let rowHoverCornerRadius: CGFloat = 10
 
-    /// Écart entre la pastille et le libellé.
+    /// The gap between the badge and the label.
     ///
-    /// Mesuré sur « Son » : l'encre du libellé commence à 49,0 pt du bord du panneau. La
-    /// pastille finissant à 40 (14 + 26), il reste 9,0 pt — dont ~0,5 de chasse à gauche du
-    /// glyphe, d'où 8,5.
+    /// Measured on "Sound": the label's ink starts 49.0 pt from the panel's edge. The
+    /// badge ending at 40 (14 + 26), 9.0 pt are left — of which ~0.5 is left side bearing on the
+    /// glyph, hence 8.5.
     ///
-    /// Valait 4, ce qui collait le texte à la pastille (encre à 44,5). L'ancien commentaire
-    /// de ce fichier faisait son calcul avec une pastille à 19 pt (49 = 19 + 26 + 4), alors
-    /// que `contentInset` vaut 14 : c'est de là que venait l'erreur.
+    /// Was 4, which stuck the text to the badge (ink at 44.5). This file's old comment
+    /// did its arithmetic with a badge at 19 pt (49 = 19 + 26 + 4), whereas
+    /// `contentInset` is 14: that is where the error came from.
     static let iconTextGap: CGFloat = 8.5
 
     static let iconSize: CGFloat = 26
 
-    /// Couleur de la pastille active.
+    /// The active badge's color.
     ///
-    /// `Color.accentColor` seul rend trop foncé : mesuré à travers le verre sur fond blanc,
-    /// il donne RGB(52, 120, 246) là où « Son » affiche RGB(63, 143, 247).
+    /// `Color.accentColor` alone renders too dark: measured through the glass on a white background,
+    /// it gives RGB(52, 120, 246) where "Sound" displays RGB(63, 143, 247).
     ///
-    /// On l'éclaircit vers un **cyan clair**, et non vers le blanc : le blanc fait monter le
-    /// rouge bien plus vite que le vert (mesuré à 12 % : RGB(79, 138, 249) — rouge trop haut
-    /// de 16). Il faut surtout du vert, donc du cyan. L'accent système reste la base : la
-    /// couleur suit toujours le réglage de l'utilisateur.
+    /// We lighten it towards a **light cyan**, and not towards white: white raises
+    /// red far faster than green (measured at 12%: RGB(79, 138, 249) — red 16 too
+    /// high). What is needed above all is green, hence cyan. The system accent stays the base: the
+    /// color still follows the user's setting.
     static let activeCircleColor = Color.accentColor
         .mix(with: Color(red: 0.2, green: 1, blue: 1), by: 0.18)
 
-    /// Couleur de la pastille inactive (grise).
+    /// The inactive badge's color (grey).
     ///
-    /// `.tertiary` (un style de PREMIER PLAN, pensé pour du texte) composite du NOIR à ~25 %
-    /// en apparence claire une fois utilisé comme fond — nettement plus sombre que la pastille
-    /// grise de « Son », qui est un simple remplissage système, pas du texte estompé. On prend
-    /// donc `tertiarySystemFill`, du même registre que `rowHoverFill` (`secondarySystemFill`)
-    /// juste en dessous, et qui bascule lui aussi tout seul entre clair et sombre.
+    /// `.tertiary` (a FOREGROUND style, meant for text) composites BLACK at ~25%
+    /// in light appearance once used as a background — markedly darker than the grey badge
+    /// of "Sound", which is a plain system fill, not dimmed text. So we take
+    /// `tertiarySystemFill`, of the same register as `rowHoverFill` (`secondarySystemFill`)
+    /// just below, and which also switches between light and dark on its own.
     static let inactiveCircleFill = Color(nsColor: .tertiarySystemFill)
 
-    /// Fond d'une ligne survolée.
+    /// A hovered row's background.
     ///
-    /// Et non `.selection`, qui est teinté d'accent (bleu) : ce n'est pas ce que font Son ni
-    /// Bluetooth. Relevé en différenciant deux captures du MÊME panneau, l'une pointeur garé
-    /// au loin, l'autre pointeur sur la ligne. La surbrillance étant une couche translucide,
-    /// `sortie = (1−a)·fond + a·C`, on retrouve `a` et `C` en régressant l'une sur l'autre :
-    /// pente 0,9195 et ordonnée 20,43, identiques sur les trois canaux (R² = 0,994 sur des
-    /// fonds allant de 8 à 231) — soit du BLANC à 8 %.
+    /// And not `.selection`, which is tinted with the accent (blue): that is not what Sound or
+    /// Bluetooth do. Measured by differencing two captures of the SAME panel, one with the pointer parked
+    /// far away, the other with the pointer on the row. The highlight being a translucent layer,
+    /// `out = (1−a)·background + a·C`, we recover `a` and `C` by regressing one on the other:
+    /// slope 0.9195 and intercept 20.43, identical on all three channels (R² = 0.994 over
+    /// backgrounds ranging from 8 to 231) — that is WHITE at 8%.
     ///
-    /// C'est exactement `secondarySystemFill` (blanc à 7,84 % en sombre). On prend la couleur
-    /// sémantique plutôt que le littéral : en apparence claire elle bascule toute seule sur du
-    /// NOIR à 7,84 %, là où un blanc codé en dur serait invisible.
+    /// This is exactly `secondarySystemFill` (white at 7.84% in dark). We take the semantic
+    /// color rather than the literal: in light appearance it switches on its own to
+    /// BLACK at 7.84%, where a hardcoded white would be invisible.
     static let rowHoverFill = Color(nsColor: .secondarySystemFill)
 
-    /// Taille des deux icônes de haut-parleur qui encadrent le slider.
+    /// The size of the two speaker icons that frame the slider.
     ///
-    /// Cette fois-ci mesurée, et non réglée à l'œil (l'ancienne mesure était cassée). « Son »
-    /// utilise les mêmes symboles que nous (`speaker.fill`, `speaker.wave.3.fill`) : l'encre
-    /// est donc proportionnelle au corps, et le rapport se lit directement.
+    /// This time measured, and not set by eye (the old measurement was broken). "Sound"
+    /// uses the same symbols as we do (`speaker.fill`, `speaker.wave.3.fill`): the ink
+    /// is therefore proportional to the point size, and the ratio can be read off directly.
     ///
-    ///                        Son          nous à 13      rapport
-    ///   speaker.fill        9,0 × 13,5    7,5 × 11,0     1,20 / 1,23
-    ///   speaker.wave.3.fill 20,5 × 15,0   17,0 × 12,5    1,21 / 1,20
+    ///                        Sound        ours at 13     ratio
+    ///   speaker.fill        9.0 × 13.5    7.5 × 11.0     1.20 / 1.23
+    ///   speaker.wave.3.fill 20.5 × 15.0   17.0 × 12.5    1.21 / 1.20
     ///
-    /// Quatre mesures concordantes → 13 × 1,21 ≈ 15,7.
+    /// Four concordant measurements → 13 × 1.21 ≈ 15.7.
     static let sliderIconSize: CGFloat = 15.5
 
-    /// Écart entre une icône et le rail.
+    /// The gap between an icon and the track.
     ///
-    /// Ce n'est pas l'écart qu'on VOIT : le `Slider` ajoute ~4,5 pt de marge interne avant
-    /// le début du rail. Mesuré, l'écart encre → rail vaut donc `sliderIconGap + 4,5`.
-    /// À 4, on lit 8,5 pt à l'écran.
+    /// This is not the gap you SEE: the `Slider` adds ~4.5 pt of internal padding before
+    /// the track starts. Measured, the ink → track gap is therefore `sliderIconGap + 4.5`.
+    /// At 4, you read 8.5 pt on screen.
     static let sliderIconGap: CGFloat = 4
 }
 
-/// Géométrie du panneau lui-même, relevée sur « Son » (captures 2x, sur fonds unis).
+/// The panel's own geometry, measured on "Sound" (2x captures, on solid backgrounds).
 enum PanelMetrics {
-    /// Rayon des coins : 36 px en 2x sur le panneau Son, contre 29 px pour un NSMenu —
-    /// c'est l'écart que l'œil repère immédiatement.
+    /// Corner radius: 36 px at 2x on the Sound panel, against 29 px for an NSMenu —
+    /// that is the difference the eye spots immediately.
     static let cornerRadius: CGFloat = 18
 
-    /// Écart entre le bas de la barre des menus et le haut du panneau. Mesuré sur « Son » :
-    /// 0,5 pt — le panneau est quasiment collé sous la barre. (Barre des menus : 34 pt ;
-    /// haut du panneau « Son » : 34,5 pt.)
+    /// The gap between the bottom of the menu bar and the top of the panel. Measured on "Sound":
+    /// 0.5 pt — the panel is all but flush under the bar. (Menu bar: 34 pt;
+    /// top of the "Sound" panel: 34.5 pt.)
     static let topGap: CGFloat = 0.5
 
-    /// Décalage du bord gauche du panneau par rapport à l'ENCRE de l'icône de la barre des
-    /// menus.
+    /// The offset of the panel's left edge relative to the INK of the menu bar's
+    /// icon.
     ///
-    /// Mesuré sur « Son » : encre du glyphe à 1407,5 pt, bord gauche de son panneau à
-    /// 1396,0 — soit 11,5 pt à gauche.
+    /// Measured on "Sound": glyph ink at 1407.5 pt, its panel's left edge at
+    /// 1396.0 — that is 11.5 pt to the left.
     ///
-    /// Le système, lui, s'ancre sur le CADRE du bouton (bord du panneau = bord du cadre
-    /// − 10 pt ; vérifié sur Son ET sur Bluetooth, dont les cadres n'ont pourtant pas la
-    /// même largeur). On ne peut pas reprendre cette règle telle quelle : les boutons
-    /// système sont ajustés à leur glyphe, le nôtre non (40 pt de cadre pour 14 pt d'encre).
-    /// S'ancrer sur l'encre donne le même résultat À L'ŒIL, qui est ce qu'on cherche.
+    /// The system, for its part, anchors on the button's FRAME (panel edge = frame edge
+    /// − 10 pt; verified on Sound AND on Bluetooth, whose frames do not even have
+    /// the same width). We cannot take that rule as is: the system buttons
+    /// are fitted to their glyph, ours is not (a 40 pt frame for 14 pt of ink).
+    /// Anchoring on the ink gives the same result TO THE EYE, which is what we are after.
     static let panelLeftFromIconInk: CGFloat = 11.5
 
-    /// Retrait sous la dernière ligne, au-dessus du bord bas du panneau.
+    /// The inset under the last row, above the panel's bottom edge.
     ///
-    /// Mesuré sur « Son » : 5 pt entre le bas de la BOÎTE de la dernière ligne (celle que
-    /// dessine la surbrillance) et le bord du panneau.
+    /// Measured on "Sound": 5 pt between the bottom of the last row's BOX (the one the
+    /// highlight draws) and the panel's edge.
     ///
-    /// Ne vaut que pour une dernière ligne de TEXTE — c'est le seul cas qu'on puisse relever,
-    /// Son et Bluetooth finissant tous deux sur un « Réglages… ». Chez nous, c'est le cas
-    /// à l'option-clic, quand le pied (Paramètres / Quitter) est affiché.
+    /// Only holds for a last row of TEXT — that is the only case we can measure,
+    /// Sound and Bluetooth both ending on a "Settings…". For us, that is the case
+    /// on option-click, when the footer (Settings / Quit) is displayed.
     static let bottomInset: CGFloat = 5
 
-    /// Retrait sous la dernière ligne quand celle-ci porte une PASTILLE (Égaliseur, sans le
-    /// pied) plutôt que du texte.
+    /// The inset under the last row when that row carries a BADGE (Equalizer, without the
+    /// footer) rather than text.
     ///
-    /// Une ligne à pastille est plus haute (32 pt contre ~22) et son disque s'arrête à
-    /// `rowVerticalPadding` (3 pt) du bas de sa boîte : à retrait égal, le panneau paraît se
-    /// refermer sur le disque. Aucun module système ne finit sur une telle ligne — il n'y a
-    /// donc rien à mesurer, et cette valeur est un réglage à l'œil assumé.
-    /// (Réglée avec Léo : 8 → 10, soit 13 pt sous le disque d'Égaliseur.)
+    /// A badged row is taller (32 pt against ~22) and its disc stops
+    /// `rowVerticalPadding` (3 pt) from the bottom of its box: at an equal inset, the panel seems to
+    /// close in on the disc. No system module ends on such a row — so there is
+    /// nothing to measure, and this value is an acknowledged by-eye setting.
+    /// (Tuned with Léo: 8 → 10, that is 13 pt under the Equalizer disc.)
     static let bottomInsetIconRow: CGFloat = 10
 
-    /// Fondus d'apparition et de disparition, comme « Son » : vif à l'ouverture, plus lent
-    /// à la fermeture.
+    /// The appear and disappear fades, like "Sound": brisk on opening, slower
+    /// on closing.
     static let fadeInDuration: TimeInterval = 0.10
     static let fadeOutDuration: TimeInterval = 0.22
 
-    /// Marge minimale avec le bord de l'écran.
+    /// The minimum margin from the screen's edge.
     static let screenEdgeMargin: CGFloat = 8
 
-    // MARK: Transition entre routes (racine ↔ stations radio)
+    // MARK: Transition between routes (root ↔ radio stations)
     //
-    // Le panneau n'a pas de sous-menus natifs : la liste des stations REMPLACE le contenu racine.
-    // La bascule est donc un morphing — la hauteur du panneau va de l'une à l'autre pendant que
-    // les deux contenus se croisent en fondu. Durée et courbe vivent dans `MenuBarShell`, qui
-    // pilote le timer ; ne restent ici que les seuils du fondu, affaire de vue.
+    // The panel has no native submenus: the station list REPLACES the root content.
+    // The switch is therefore a morph — the panel's height goes from one to the other while
+    // the two contents cross-fade. The duration and the curve live in `MenuBarShell`, which
+    // drives the timer; only the fade's thresholds, a matter for the view, remain here.
 
-    /// Avancement auquel la vue sortante a fini de s'effacer.
+    /// The progress at which the outgoing view has finished fading out.
     static let routeFadeOutEnd: CGFloat = 0.42
 
-    /// Avancement auquel la vue entrante commence à apparaître. Sous `routeFadeOutEnd`, donc :
-    /// les deux se chevauchent d'un cheveu, juste assez pour qu'il n'y ait pas d'instant vide.
+    /// The progress at which the incoming view starts to appear. Below `routeFadeOutEnd`, then:
+    /// the two overlap by a hair, just enough that there is no empty instant.
     static let routeFadeInStart: CGFloat = 0.34
 
-    /// Hauteur maximale du CONTENU du panneau : tout ce que l'écran peut afficher entre le bas
-    /// de la barre des menus et le bord bas de la zone utile (Dock compris, `visibleFrame` le
-    /// déduisant déjà), en gardant la même marge qu'ailleurs.
+    /// The maximum height of the panel's CONTENT: everything the screen can display between the bottom
+    /// of the menu bar and the bottom edge of the usable area (Dock included, `visibleFrame`
+    /// already deducting it), keeping the same margin as elsewhere.
     ///
-    /// Sans ce plafond, rien ne bornait la croissance du panneau : la fenêtre suit la taille
-    /// intrinsèque du contenu SwiftUI, et au-delà d'une vingtaine de favoris radio elle sortait
-    /// par le bas de l'écran. C'est le contenu lui-même qui s'y plie (`MiloPanelView`), la liste
-    /// des stations étant son seul élément élastique — comme le fait Bluetooth quand les
-    /// appareils sont nombreux.
+    /// Without this cap, nothing bounded the panel's growth: the window follows the
+    /// SwiftUI content's intrinsic size, and beyond twenty-odd radio favourites it ran off
+    /// the bottom of the screen. It is the content itself that complies (`MiloPanelView`), the station
+    /// list being its only elastic element — as Bluetooth does when the
+    /// devices are numerous.
     ///
-    /// ENTIÈRE, et arrondie vers le BAS : la hauteur du contenu doit rester entière pour que le
-    /// calage sous-pixel tombe juste (voir `shadowMargin`), et arrondir vers le haut ferait
-    /// dépasser le plafond de la fraction de point qu'on vient d'ajouter.
+    /// A WHOLE number, and rounded DOWN: the content's height has to stay integral so that the
+    /// sub-pixel alignment lands right (see `shadowMargin`), and rounding up would push
+    /// past the cap by the fraction of a point just added.
     ///
-    /// La marge transparente de l'ombre, elle, n'entre pas dans le calcul : elle ne peint rien
-    /// et peut déborder de l'écran sans dommage (`constrainFrameRect` est neutralisé).
+    /// The shadow's transparent margin does not enter the calculation: it paints nothing
+    /// and can run off the screen without harm (`constrainFrameRect` is neutralized).
     static func maxContentHeight(on screen: NSScreen?) -> CGFloat {
         guard let screen else { return .greatestFiniteMagnitude }
         let available = screen.visibleFrame.height - topGap - screenEdgeMargin
         return max(0, available.rounded(.down))
     }
 
-    // MARK: Ombre portée
+    // MARK: Drop shadow
     //
-    // Mesurée sur fond blanc : celle de « Son » porte à 48,5 pt en n'assombrissant le blanc
-    // que de 48 au bord. L'ombre par défaut de NSWindow porte à 15,5 pt et assombrit de 72 —
-    // trois fois trop courte et bien trop dure. D'où une ombre dessinée à la main.
+    // Measured on a white background: "Sound"'s reaches 48.5 pt while darkening the white
+    // by only 48 at the edge. NSWindow's default shadow reaches 15.5 pt and darkens by 72 —
+    // three times too short and far too hard. Hence a hand-drawn shadow.
 
     static let shadowRadius: CGFloat = 23
     static let shadowOpacity: Float = 0.32
     static let shadowOffsetY: CGFloat = 3
 
-    /// Marge transparente autour du panneau, pour que l'ombre ait la place de s'étaler.
-    /// Doit dépasser `shadowRadius + shadowOffsetY` (26).
+    /// The transparent margin around the panel, so the shadow has room to spread.
+    /// Must exceed `shadowRadius + shadowOffsetY` (26).
     ///
-    /// Le demi-point n'est pas décoratif : c'est lui qui rend le calage sous-pixel possible.
-    /// AppKit arrondit au point entier l'origine ET la taille des fenêtres ; les bords du
-    /// panneau valant `origine + marge`, une marge entière les condamne à tomber sur des
-    /// entiers — or les deux cibles mesurées sur « Son » sont des demi-entiers (haut 34,5 ;
-    /// bord gauche à 11,5 de l'encre de l'icône, soit 1360,5 chez nous). Avec 60,5 et une
-    /// hauteur de contenu entière (voir `positionPanel`), les deux tombent juste.
+    /// The half point is not decorative: it is what makes the sub-pixel alignment possible.
+    /// AppKit rounds both the origin AND the size of windows to whole points; the panel's
+    /// edges being `origin + margin`, a whole margin condemns them to land on
+    /// integers — yet both targets measured on "Sound" are half-integers (top 34.5;
+    /// left edge 11.5 from the icon's ink, that is 1360.5 for us). With 60.5 and a
+    /// whole content height (see `positionPanel`), both land right.
     static let shadowMargin: CGFloat = 60.5
 }
 
-// MARK: - Titres
+// MARK: - Titles
 
-/// Titre du menu et en-têtes de section.
+/// The menu's title and the section headers.
 ///
-/// Dessinés à la main, et non avec `NSMenuItem.sectionHeader(title:)` : l'en-tête natif
-/// d'un NSMenu rend **tout** en gris et petit, alors que les modules système (Son,
-/// Bluetooth, Wi-Fi) distinguent leur titre de leurs sections. Valeurs relevées au pixel
-/// sur le panneau « Son » (captures en 2x) :
+/// Drawn by hand, and not with `NSMenuItem.sectionHeader(title:)`: an NSMenu's native
+/// header renders **everything** grey and small, whereas the system modules (Sound,
+/// Bluetooth, Wi-Fi) distinguish their title from their sections. Values measured to the pixel
+/// on the "Sound" panel (2x captures):
 ///
-///                        capitale   pic d'encre   densité du trait
-///   titre « Son »          21 px       232          0,47   → blanc, gras
-///   en-tête « Sortie »     18 px       173          0,49   → gris, gras
-///   libellé de ligne       19 px       232          0,41   → blanc, normal
+///                        capital    ink peak    stroke density
+///   the "Sound" title      21 px       232          0.47   → white, bold
+///   the "Output" header    18 px       173          0.49   → grey, bold
+///   a row's label          19 px       232          0.41   → white, regular
 ///
-/// Autrement dit : le titre est à la taille des libellés mais en gras ; l'en-tête est plus
-/// petit, gris, et gras lui aussi.
+/// In other words: the title is at the labels' size but bold; the header is
+/// smaller, grey, and bold as well.
 struct MenuTitle: View {
     let text: String
 
     var body: some View {
         Text(text)
-            // `.semibold`, pas `.bold` : en gras, le contrepoinçon du « o » se referme et
-            // le titre ne ressemble plus à « Bluetooth » ou « Son ».
+            // `.semibold`, not `.bold`: in bold, the counter of the "o" closes up and
+            // the title no longer looks like "Bluetooth" or "Sound".
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, MenuRowMetrics.textInset)
             .padding(.top, MenuRowMetrics.titleTopInset)
-            // Réglé avec Léo : 2 → 4, soit 13 pt entre la ligne de base du titre et le haut
-            // de l'encre du haut-parleur (contre 11).
+            // Tuned with Léo: 2 → 4, that is 13 pt between the title's baseline and the top
+            // of the speaker's ink (against 11).
             .padding(.bottom, 4)
             .frame(width: MenuRowMetrics.width, alignment: .leading)
     }
@@ -313,47 +313,47 @@ struct MenuSectionHeader: View {
     }
 }
 
-// MARK: - Morceau en cours
+// MARK: - Now playing
 
-/// Géométrie de la ligne « en cours ». Sans référence système à mesurer (aucun module natif
-/// n'a d'équivalent) : des valeurs choisies, comme les contrôles de la sous-section multiroom.
+/// The geometry of the "now playing" row. With no system reference to measure (no native module
+/// has an equivalent): chosen values, like the multiroom sub-section's controls.
 private enum NowPlayingMetrics {
     static let artworkSize: CGFloat = 48
     static let artworkCornerRadius: CGFloat = 8
-    /// Écart pochette → texte.
+    /// The cover art → text gap.
     static let artworkTextGap: CGFloat = 10
 
-    /// Médaillon carré arrondi en coin de la pochette — voir `NowPlayingInfo.badgeArtworkURL`.
+    /// A rounded square badge in a corner of the cover art — see `NowPlayingInfo.badgeArtworkURL`.
     static let badgeSize: CGFloat = 16
     static let badgeCornerRadius: CGFloat = 6
-    /// Retrait du médaillon par rapport aux bords bas et droit de la pochette.
+    /// The badge's inset from the cover art's bottom and right edges.
     static let badgeInset: CGFloat = 2
-    /// Écart mini texte → boutons, avant que le fondu ne le masque.
+    /// The minimum text → buttons gap, before the fade hides it.
     static let textControlsGap: CGFloat = 8
 
-    /// Longueur du fondu — même valeur que les noms multiroom (`MultiroomMetrics.nameFade`),
-    /// pour un rendu identique.
+    /// The fade's length — the same value as the multiroom names (`MultiroomMetrics.nameFade`),
+    /// for an identical rendering.
     static let textFade: CGFloat = 14
-    /// Taille de police commune au titre et à l'artiste — l'un et l'autre ne se distinguent
-    /// plus que par le poids et la couleur.
+    /// The font size shared by the title and the artist — the two are now distinguished
+    /// only by weight and color.
     static let textSize: CGFloat = 12
 
-    /// Cible tactile d'un bouton de contrôle (play/pause, suivant, stop/relance Radio).
+    /// A control button's hit target (play/pause, next, Radio stop/restart).
     static let controlSize: CGFloat = 22
     static let controlGap: CGFloat = 7
-    /// Taille de police par défaut d'une icône de contrôle (`forward.fill`).
+    /// A control icon's default font size (`forward.fill`).
     static let controlIconSize: CGFloat = 13
-    /// `play.fill`/`pause.fill`/`stop.fill` remplissent moins leur bounding box que
-    /// `forward.fill` (triangle plein contre double-chevron + barre) : à même corps de police,
-    /// ils paraissent nettement plus petits. Corrigé en leur donnant un corps plus grand plutôt
-    /// qu'en changeant la cible tactile (`controlSize`), qui reste identique pour les deux.
+    /// `play.fill`/`pause.fill`/`stop.fill` fill their bounding box less than
+    /// `forward.fill` (a solid triangle against a double chevron + bar): at the same point size,
+    /// they look markedly smaller. Corrected by giving them a larger size rather
+    /// than by changing the hit target (`controlSize`), which stays the same for both.
     static let playPauseIconSize: CGFloat = 20
 
-    /// Largeur de la colonne titre/artiste, dimensionnée pour le nombre de boutons RÉELLEMENT
-    /// affichés par la source active — pas un espace fixe dimensionné pour le pire cas. Radio
-    /// (un seul bouton stop/relance) et les récepteurs passifs (aucun bouton : AirPlay, DLNA,
-    /// Qobuz) gagnent donc plus de place pour le titre que Spotify/bibliothèque musicale/CD/TIDAL
-    /// (play-pause + suivant).
+    /// The width of the title/artist column, sized for the number of buttons ACTUALLY
+    /// displayed by the active source — not a fixed space sized for the worst case. Radio
+    /// (a single stop/restart button) and the passive receivers (no button: AirPlay, DLNA,
+    /// Qobuz) therefore gain more room for the title than Spotify/music library/CD/TIDAL
+    /// (play-pause + next).
     static func textWidth(controlCount: Int) -> CGFloat {
         let controlsWidth = controlCount == 0 ? 0
             : CGFloat(controlCount) * controlSize + CGFloat(controlCount - 1) * controlGap
@@ -362,16 +362,16 @@ private enum NowPlayingMetrics {
     }
 }
 
-/// Bandeau « now playing » : pochette 48×48 à gauche, titre puis artiste au milieu, contrôles
-/// de lecture à droite quand la source active en propose. Affiché entre le titre du panneau et
-/// le slider de volume dès qu'un morceau (ou, pour Radio, une station) est chargé — voir
-/// `MiloStore.nowPlaying` pour le mapping des champs.
+/// The "now playing" banner: 48×48 cover art on the left, title then artist in the middle, playback
+/// controls on the right when the active source offers any. Displayed between the panel's title and
+/// the volume slider as soon as a song (or, for Radio, a station) is loaded — see
+/// `MiloStore.nowPlaying` for the field mapping.
 struct NowPlayingRow: View {
     @Bindable var store: MiloStore
     let info: NowPlayingInfo
 
-    /// Radio n'a ni vraie pause ni morceau suivant : un seul bouton stop/relance, distinct du
-    /// couple générique play-pause/suivant des autres sources — voir
+    /// Radio has neither a real pause nor a next song: a single stop/restart button, distinct from
+    /// the generic play-pause/next pair of the other sources — see
     /// `MiloStore.toggleRadioNowPlaying`.
     private enum Controls {
         case none
@@ -452,8 +452,8 @@ struct NowPlayingRow: View {
     }
 }
 
-/// Bouton de contrôle (play/pause, suivant, stop/relance) — même idiome que `MuteButton` de la
-/// sous-section multiroom.
+/// A control button (play/pause, next, stop/restart) — the same idiom as the multiroom
+/// sub-section's `MuteButton`.
 private struct NowPlayingControlButton: View {
     let systemName: String
     let iconSize: CGFloat
@@ -472,14 +472,14 @@ private struct NowPlayingControlButton: View {
     }
 }
 
-/// Pochette de la ligne « now playing ». Même idiome que `StationFavicon` (chargement direct,
-/// sans cache partagé) : cette vue ne bouge jamais dans l'arbre — elle n'est ni recréée par un
-/// `ForEach` ni échangée entre deux couches de morphing — donc `AsyncImage` ne recharge que
-/// lorsque l'URL change réellement (nouveau morceau), jamais à chaque rendu.
+/// The "now playing" row's cover art. The same idiom as `StationFavicon` (direct loading,
+/// with no shared cache): this view never moves within the tree — it is neither recreated by a
+/// `ForEach` nor swapped between two morph layers — so `AsyncImage` only reloads
+/// when the URL really changes (a new song), never on every render.
 private struct NowPlayingArtwork: View {
     let url: URL?
-    /// Logo de la station en médaillon — voir `NowPlayingInfo.badgeArtworkURL`. `nil` partout
-    /// sauf Radio sur un morceau reconnu avec sa propre pochette.
+    /// The station's logo as a badge — see `NowPlayingInfo.badgeArtworkURL`. `nil` everywhere
+    /// except Radio on a recognized song with its own cover art.
     let badgeURL: URL?
     let size: CGFloat
     let cornerRadius: CGFloat
@@ -525,8 +525,8 @@ private struct NowPlayingArtwork: View {
     }
 }
 
-/// Le logo de la station lui-même, carré arrondi, posé bien centré dans le trou découpé par
-/// `NowPlayingArtwork` — voir `NowPlayingInfo.badgeArtworkURL`.
+/// The station's logo itself, a rounded square, placed well centred in the hole cut out by
+/// `NowPlayingArtwork` — see `NowPlayingInfo.badgeArtworkURL`.
 private struct NowPlayingBadge: View {
     let url: URL
 
@@ -569,7 +569,7 @@ struct VolumeRow: View {
     }
 }
 
-// MARK: - Source audio
+// MARK: - Audio source
 
 struct SourceRow: View {
     @Bindable var store: MiloStore
@@ -579,25 +579,25 @@ struct SourceRow: View {
 
     @State private var isHovering = false
 
-    /// Appui maintenu sur la source active : la ferme. `@GestureState` se remet seul à false
-    /// dès que le doigt se lève ou que le geste est annulé (déplacement au-delà de
-    /// `maximumDistance`) — rien à nettoyer à la main.
+    /// A press-and-hold on the active source: closes it. `@GestureState` resets itself to false
+    /// as soon as the finger lifts or the gesture is cancelled (movement beyond
+    /// `maximumDistance`) — nothing to clean up by hand.
     @GestureState private var isHoldPressing = false
-    /// Horodatage plutôt que booléen : le clic de relâchement qui suit l'appui doit être avalé,
-    /// mais si jamais il n'arrive pas, un drapeau resterait armé et mangerait le clic suivant.
+    /// A timestamp rather than a boolean: the release click following the press has to be swallowed,
+    /// but if it never arrives, a flag would stay armed and would eat the next click.
     @State private var holdFiredAt: Date?
 
-    /// Aligné sur HOLD_DELAY du frontend web (useDockAppHold.js).
+    /// Aligned on the web frontend's HOLD_DELAY (useDockAppHold.js).
     private static let holdDelay: TimeInterval = 0.5
 
-    /// La source « Mac » a besoin du driver roc-vad. Sans lui, la ligne reste visible mais
-    /// renvoie vers les Réglages plutôt que d'échouer en silence.
+    /// The "Mac" source needs the roc-vad driver. Without it, the row stays visible but
+    /// leads to Settings rather than failing silently.
     private var needsSetup: Bool {
         source.id == "mac" && !store.isRocVADReady
     }
 
-    /// Seule la source active se ferme à l'appui maintenu, et pas pendant une transition
-    /// déjà en vol.
+    /// Only the active source closes on press-and-hold, and not during a transition
+    /// already in flight.
     private var canCloseByHold: Bool {
         isActive && !isLoading && !needsSetup
     }
@@ -606,8 +606,8 @@ struct SourceRow: View {
         store.state?.activeSource == source.id
     }
 
-    /// Spinner si le backend signale une transition vers cette source, OU si un clic local
-    /// vient de partir (loadingStates, posé avant la requête HTTP).
+    /// A spinner if the backend reports a transition towards this source, OR if a local click
+    /// has just gone out (loadingStates, set before the HTTP request).
     private var isLoading: Bool {
         let transitioning = (store.state?.sourceState.lowercased() == "starting")
             || (store.state?.transitioning ?? false)
@@ -616,7 +616,7 @@ struct SourceRow: View {
 
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: activate) {
-            // Spinner de transition DANS la pastille.
+            // The transition spinner sits INSIDE the badge.
             RowIcon(icon: source.icon, isActive: isActive, isLoading: isLoading)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -635,36 +635,36 @@ struct SourceRow: View {
             Spacer(minLength: 4)
 
             if !isLoading, showsChevron {
-                // La ligne Radio porte DEUX commandes : activer la source (le corps de la
-                // ligne) et ouvrir les stations (le caret). Contrairement à Multiroom, activer
-                // Radio alors qu'elle l'est déjà ne fait rien (voir le garde de
-                // `MiloStore.selectSource`) — donc le caret doit rester la SEULE cible pour
-                // ouvrir les stations ; lui laisser tout le vide à droite du libellé ferait
-                // naviguer accidentellement au moindre clic sur la ligne.
+                // The Radio row carries TWO commands: activating the source (the row's
+                // body) and opening the stations (the chevron). Unlike Multiroom, activating
+                // Radio when it already is does nothing (see the guard in
+                // `MiloStore.selectSource`) — so the chevron has to remain the ONLY target for
+                // opening the stations; giving it all the empty space to the right of the label would
+                // navigate accidentally on the slightest click on the row.
                 //
-                // Imbriquer un bouton dans un bouton fonctionne — le plus intérieur gagne dans
-                // sa propre zone — mais ici sa zone reste celle du chevron (plus un peu de marge
-                // de confort), pas tout le reste de la ligne.
+                // Nesting a button inside a button works — the innermost wins within
+                // its own area — but here its area stays that of the chevron (plus a little comfort
+                // margin), not the whole rest of the row.
                 Button { onChevron?() } label: {
                     ChevronCircle()
                         .padding(.horizontal, 6)
-                        // Sans ça, le bouton se moule sur le chevron et sa zone ne fait que sa
-                        // hauteur d'encre. On l'étire sur la hauteur de la ligne, que fixe la
-                        // pastille de la source (26 pt).
+                        // Without this, the button moulds itself onto the chevron and its area is only its
+                        // ink's height. We stretch it over the row's height, which the source's
+                        // badge sets (26 pt).
                         .frame(maxHeight: .infinity)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        // Le contenu s'atténue pendant l'appui pour dire que quelque chose se prépare. Le fondu
-        // est nettement plus court que le geste : la ligne accuse le coup tout de suite, puis
-        // reste atténuée jusqu'au déclenchement. Étalé sur les 500 ms, il se lisait comme une
-        // latence plutôt que comme une réponse.
+        // The content dims during the press to say that something is being prepared. The fade
+        // is markedly shorter than the gesture: the row acknowledges it right away, then
+        // stays dimmed until it fires. Spread over the 500 ms, it read like a
+        // latency rather than a response.
         .opacity(needsSetup ? 0.55 : (isHoldPressing ? 0.35 : 1))
         .animation(.easeOut(duration: isHoldPressing ? 0.15 : 0.12), value: isHoldPressing)
-        // `simultaneousGesture` et non `gesture` : le bouton de MenuRowContainer garde son clic,
-        // les deux cohabitent. Le geste n'est armé que sur la source active.
+        // `simultaneousGesture` and not `gesture`: MenuRowContainer's button keeps its click,
+        // the two coexist. The gesture is only armed on the active source.
         .simultaneousGesture(holdToClose, including: canCloseByHold ? .all : .none)
     }
 
@@ -678,8 +678,8 @@ struct SourceRow: View {
     }
 
     private func activate() {
-        // Le relâchement qui suit un appui maintenu déclenche aussi le clic du bouton :
-        // on l'avale pour ne pas réactiver la source qu'on vient de fermer.
+        // The release that follows a press-and-hold also triggers the button's click:
+        // we swallow it so as not to reactivate the source we have just closed.
         if let firedAt = holdFiredAt {
             holdFiredAt = nil
             if Date().timeIntervalSince(firedAt) < Self.holdDelay + 0.1 { return }
@@ -693,23 +693,23 @@ struct SourceRow: View {
     }
 }
 
-// MARK: - Fonctionnalité
+// MARK: - Feature
 
-/// Multiroom, Égaliseur.
+/// Multiroom, Equalizer.
 ///
-/// Même ligne qu'une source, et non un interrupteur : c'est la pastille qui porte l'état,
-/// bleue quand la fonctionnalité est active, grise sinon — exactement le langage de la
-/// section « Sortie » de « Son », où le périphérique en cours est une pastille bleue.
+/// The same row as a source, and not a switch: it is the badge that carries the state,
+/// blue when the feature is active, grey otherwise — exactly the language of the
+/// "Output" section of "Sound", where the current device is a blue badge.
 ///
-/// Un `Toggle` posait en plus deux cibles de clic concurrentes dans une ligne déjà
-/// cliquable : cliquer le libellé ne faisait rien, cliquer l'interrupteur agissait.
+/// A `Toggle` additionally put two competing click targets in an already clickable
+/// row: clicking the label did nothing, clicking the switch acted.
 struct FeatureRow: View {
     @Bindable var store: MiloStore
     let feature: FeatureDescriptor
 
-    /// Multiroom porte, comme la ligne Radio, DEUX commandes : le corps bascule la
-    /// fonctionnalité, le chevron à droite déplie la sous-section (zones/clients). Le chevron
-    /// n'apparaît que lorsqu'il y a quelque chose à déplier (`store.canShowMultiroom`).
+    /// Multiroom carries, like the Radio row, TWO commands: the body toggles the
+    /// feature, the chevron on the right expands the sub-section (zones/clients). The chevron
+    /// only appears when there is something to expand (`store.canShowMultiroom`).
     var showsChevron: Bool = false
     var isExpanded: Bool = false
     var onChevron: (() -> Void)? = nil
@@ -721,7 +721,7 @@ struct FeatureRow: View {
 
     var body: some View {
         MenuRowContainer(isHovering: $isHovering, action: toggle) {
-            // Le spinner de bascule vit DANS la pastille (comme les sources), pas à droite.
+            // The toggle's spinner lives INSIDE the badge (like the sources'), not on the right.
             RowIcon(icon: feature.icon, isActive: isOn, isLoading: isLoading)
 
             Text(feature.title)
@@ -729,9 +729,9 @@ struct FeatureRow: View {
                 .lineLimit(1)
 
             if showsChevron {
-                // Même construction que le caret Radio (SourceRow) : le bouton d'expansion
-                // prend tout le vide à droite du libellé, pas juste l'encre du chevron —
-                // une cible large pour une commande utilisée autant que la ligne.
+                // The same construction as the Radio chevron (SourceRow): the expand button
+                // takes all the empty space to the right of the label, not just the chevron's ink —
+                // a wide target for a command used as much as the row.
                 Button { onChevron?() } label: {
                     HStack(spacing: 0) {
                         Spacer(minLength: 4)
@@ -747,22 +747,22 @@ struct FeatureRow: View {
         }
     }
 
-    /// Le clic est ignoré pendant la bascule — c'est ce que faisait le `.disabled(isLoading)`
-    /// de l'interrupteur, qu'une ligne cliquable ne donne plus gratuitement.
+    /// The click is ignored during the toggle — which is what the switch's `.disabled(isLoading)`
+    /// did, and which a clickable row no longer gives for free.
     private func toggle() {
         guard !isLoading else { return }
         store.toggleFeature(feature.id)
     }
 }
 
-// MARK: - Sous-section Multiroom (accordéon inline)
+// MARK: - Multiroom sub-section (inline accordion)
 
-/// Géométrie de la sous-section multiroom, en cartes « inset-grouped » façon macOS.
+/// The geometry of the multiroom sub-section, in macOS-style "inset-grouped" cards.
 private enum MultiroomMetrics {
-    /// Fond des cartes, RELEVÉ AU PIXEL sur le panneau « Son » déplié sous AirPods (capture 2×) :
-    /// verre à 32,32,32, inset à 52,52,52 — soit un voile **blanc à 9 %** (identique sur les
-    /// trois canaux), un fond plus CLAIR que le verre. Dynamique pour rester juste en clair
-    /// (bascule sur du noir à 9 %), comme `secondarySystemFill` inverse blanc/noir.
+    /// The cards' background, MEASURED TO THE PIXEL on the "Sound" panel expanded under AirPods (2× capture):
+    /// glass at 32,32,32, inset at 52,52,52 — that is a **white veil at 9%** (identical on all
+    /// three channels), a background LIGHTER than the glass. Dynamic so as to stay right in light
+    /// (switching to black at 9%), the way `secondarySystemFill` inverts white/black.
     static let cardFill: Color = {
         let ns = NSColor(name: nil) { appearance in
             let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -771,50 +771,50 @@ private enum MultiroomMetrics {
         return Color(nsColor: ns)
     }()
 
-    /// Écart de verre entre la ligne Multiroom et la première carte. Mesuré sur « Son » : 5 pt.
+    /// The gap of glass between the Multiroom row and the first card. Measured on "Sound": 5 pt.
     static let gapAboveCards: CGFloat = 5
-    /// Marge des cartes vis-à-vis des bords du panneau.
+    /// The cards' margin from the panel's edges.
     static let cardHInset: CGFloat = 10
-    /// Écart de verre entre deux cartes distinctes (zone, client standalone).
+    /// The gap of glass between two distinct cards (a zone, a standalone client).
     static let cardSpacing: CGFloat = 6
     static let cardCornerRadius: CGFloat = 9
 
-    /// Retraits internes d'une ligne dans une carte.
+    /// A row's internal insets within a card.
     static let rowHInset: CGFloat = 10
     static let rowVInset: CGFloat = 6
 
-    /// Retrait de GAUCHE d'une ligne, calé pour que le NOM (après la pastille et l'écart) tombe
-    /// à la même abscisse que le libellé « Multiroom » de la ligne parente — soit
-    /// `contentInset + iconSize + iconTextGap` du bord du panneau. On le déduit des métriques
-    /// plutôt que de le coder en dur : `cardHInset + rowLeadingInset + iconSize + gap` doit
-    /// égaler ce libellé, d'où la soustraction. (Le côté droit garde `rowHInset`.)
+    /// A row's LEADING inset, set so that the NAME (after the badge and the gap) lands
+    /// at the same x-coordinate as the parent row's "Multiroom" label — that is
+    /// `contentInset + iconSize + iconTextGap` from the panel's edge. We derive it from the metrics
+    /// rather than hardcoding it: `cardHInset + rowLeadingInset + iconSize + gap` must
+    /// equal that label, hence the subtraction. (The right side keeps `rowHInset`.)
     static let rowLeadingInset: CGFloat =
         MenuRowMetrics.contentInset + MenuRowMetrics.iconSize + MenuRowMetrics.iconTextGap
         - cardHInset - iconSize - gap
 
     static let iconSize: CGFloat = 18
     static let muteIconSize: CGFloat = 22
-    /// Écart icône → nom, et nom → contrôles.
+    /// The icon → name, and name → controls gap.
     static let gap: CGFloat = 7
 
-    /// Largeur FIXE de la colonne de nom, pour que tous les sliders (zone comme client)
-    /// s'alignent sur la même largeur. Un nom plus long est fondu (dégradé) plutôt que coupé
-    /// par « … ». Volontairement serrée pour laisser le plus de place aux barres de volume :
-    /// les noms un peu longs partent en fondu, c'est assumé.
+    /// The FIXED width of the name column, so that every slider (zone as well as client)
+    /// aligns on the same width. A longer name is faded (a gradient) rather than cut off
+    /// by "…". Deliberately tight so as to leave as much room as possible for the volume bars:
+    /// slightly long names go off in a fade, and that is accepted.
     static let nameWidth: CGFloat = 64
-    /// Longueur du fondu en fin de nom.
+    /// The fade's length at the end of a name.
     static let nameFade: CGFloat = 14
 
-    /// Intervalle mini entre deux envois réseau pendant un glissement de slider. À chaque
-    /// pixel on rafraîchit le pouce localement, mais on n'envoie au backend qu'à cette cadence
-    /// (la valeur finale part toujours au relâchement). Sans ça, le flot de PATCH fait
-    /// rediffuser le backend en continu et toute la section se re-rend → glissement saccadé.
+    /// The minimum interval between two network sends during a slider drag. On every
+    /// pixel we refresh the thumb locally, but we only send to the backend at this rate
+    /// (the final value always goes out on release). Without this, the flood of PATCHes makes
+    /// the backend rebroadcast continuously and the whole section re-renders → a jerky drag.
     static let sendThrottle: TimeInterval = 0.06
 }
 
-/// La sous-section dépliable sous la ligne Multiroom, en **cartes distinctes** : une carte par
-/// zone (en-tête + filet + clients membres) et une carte par client standalone. Tout est sur
-/// une ligne (icône + nom + slider + mute) et aligné à gauche, sans indentation.
+/// The expandable sub-section under the Multiroom row, in **distinct cards**: one card per
+/// zone (header + hairline + member clients) and one card per standalone client. Everything is on
+/// one line (icon + name + slider + mute) and left-aligned, with no indentation.
 struct MultiroomSection: View {
     @Bindable var store: MiloStore
 
@@ -825,8 +825,8 @@ struct MultiroomSection: View {
                 case .zone(let zone, let clients):
                     MultiroomCard {
                         MultiroomRow(store: store, kind: .zone(zone, clients))
-                        // Un SEUL filet, entre l'en-tête de zone et ses clients — pas entre
-                        // chaque client.
+                        // A SINGLE hairline, between the zone's header and its clients — not between
+                        // each client.
                         if !clients.isEmpty {
                             MultiroomRowSeparator()
                         }
@@ -848,7 +848,7 @@ struct MultiroomSection: View {
     }
 }
 
-/// Une carte grise arrondie qui regroupe ses lignes.
+/// A rounded grey card that groups its rows.
 private struct MultiroomCard<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -861,8 +861,8 @@ private struct MultiroomCard<Content: View>: View {
     }
 }
 
-/// Filet natif entre l'en-tête de zone et ses clients : pleine largeur de la carte, avec un
-/// léger retrait SYMÉTRIQUE de chaque côté.
+/// A native hairline between the zone's header and its clients: the card's full width, with a
+/// slight SYMMETRICAL inset on each side.
 private struct MultiroomRowSeparator: View {
     var body: some View {
         Divider()
@@ -870,8 +870,8 @@ private struct MultiroomRowSeparator: View {
     }
 }
 
-/// Une ligne de carte : icône + nom + slider + mute, sur une seule ligne. Sert aussi bien à
-/// une zone (slider maître en DELTA, mute de tous ses clients) qu'à un client (slider absolu).
+/// A card row: icon + name + slider + mute, on a single line. Serves both
+/// a zone (a master slider in DELTA, muting all its clients) and a client (an absolute slider).
 private struct MultiroomRow: View {
     @Bindable var store: MiloStore
     let kind: Kind
@@ -881,13 +881,13 @@ private struct MultiroomRow: View {
         case client(MultiroomClient)
     }
 
-    /// Dernière valeur ENVOYÉE pendant un glissement (base du prochain delta pour une zone,
-    /// coalescence pour un client). `nil` hors glissement.
+    /// The last value SENT during a drag (the base for the next delta for a zone,
+    /// coalescing for a client). `nil` outside a drag.
     @State private var lastSent: Double?
-    /// Dernière valeur scrubée (envoyée ou non) — envoyée au relâchement pour ne pas perdre
-    /// le dernier mouvement quand il tombe dans un intervalle throttlé.
+    /// The last scrubbed value (sent or not) — sent on release so as not to lose
+    /// the last movement when it falls inside a throttled interval.
     @State private var pending: Double?
-    /// Horodatage du dernier envoi réseau, pour le throttle.
+    /// The timestamp of the last network send, for the throttle.
     @State private var lastSendAt: Date = .distantPast
 
     var body: some View {
@@ -922,15 +922,15 @@ private struct MultiroomRow: View {
                 }
             }
         }
-        // Gauche calée pour aligner le NOM sous le libellé « Multiroom » (voir `rowLeadingInset`) ;
-        // droite en `rowHInset` normal.
+        // The left set to align the NAME under the "Multiroom" label (see `rowLeadingInset`);
+        // the right at the normal `rowHInset`.
         .padding(.leading, MultiroomMetrics.rowLeadingInset)
         .padding(.trailing, MultiroomMetrics.rowHInset)
         .padding(.vertical, MultiroomMetrics.rowVInset)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: Dérivés selon le type
+    // MARK: Type-dependent derivations
 
     private var isZone: Bool { if case .zone = kind { return true }; return false }
 
@@ -952,7 +952,7 @@ private struct MultiroomRow: View {
         }
     }
 
-    /// Le slider n'a de prise que si l'élément est joignable ET pilote son volume.
+    /// The slider only has a grip if the item is reachable AND drives its own volume.
     private var controllable: Bool {
         switch kind {
         case .zone(_, let clients):
@@ -983,8 +983,8 @@ private struct MultiroomRow: View {
 
     // MARK: Actions
 
-    /// Appelé à chaque cran du glissement. Le pouce suit déjà localement (voir
-    /// `MultiroomVolumeSlider`) ; ici on THROTTLE seulement les envois réseau.
+    /// Called on every notch of the drag. The thumb already follows locally (see
+    /// `MultiroomVolumeSlider`); here we only THROTTLE the network sends.
     private func scrub(_ newValue: Double) {
         pending = newValue
         let now = Date()
@@ -994,8 +994,8 @@ private struct MultiroomRow: View {
         }
     }
 
-    /// Au relâchement : on envoie la dernière valeur (au cas où elle est tombée dans un
-    /// intervalle throttlé), puis on remet à zéro le suivi.
+    /// On release: we send the last value (in case it fell inside a throttled
+    /// interval), then reset the tracking.
     private func endScrub() {
         if let pending { flushSend(pending) }
         pending = nil
@@ -1003,9 +1003,9 @@ private struct MultiroomRow: View {
         lastSendAt = .distantPast
     }
 
-    /// Client : volume absolu. Zone : delta depuis la dernière valeur ENVOYÉE (le backend n'a
-    /// pas de volume de zone, il répercute le delta sur ses clients). Comme `lastSent` ne bouge
-    /// qu'à l'envoi réel, throttler ne perd aucun mouvement — le prochain delta le rattrape.
+    /// Client: absolute volume. Zone: a delta from the last value SENT (the backend has
+    /// no zone volume, it passes the delta on to its clients). Since `lastSent` only moves
+    /// on an actual send, throttling loses no movement — the next delta catches it up.
     private func flushSend(_ value: Double) {
         switch kind {
         case .zone(let zone, _):
@@ -1031,20 +1031,20 @@ private struct MultiroomRow: View {
     }
 }
 
-/// Nom d'élément à largeur FIXE, pour aligner toutes les colonnes de slider. Un nom trop long
-/// n'est pas coupé par « … » mais **fondu** en dégradé sur son bord droit — plus propre, et
-/// c'est le langage de macOS (Musique, Réglages). Le fondu ne porte que sur les derniers points
-/// de la largeur : un nom court, qui n'atteint pas cette zone, n'est pas affecté.
+/// A FIXED-width item name, so as to align every slider column. A name that is too long
+/// is not cut off by "…" but **faded** out in a gradient on its right edge — cleaner, and
+/// it is the language of macOS (Music, Settings). The fade only covers the last few points
+/// of the width: a short name, which does not reach that zone, is unaffected.
 private struct FadingText: View {
     let text: String
     let weight: Font.Weight
     var size: CGFloat = 13
     let dimmed: Bool
-    /// Largeur figée de la colonne de texte — appelant par appelant : les noms multiroom
-    /// s'alignent sur `MultiroomMetrics.nameWidth`, la ligne « en cours » réserve la place des
-    /// boutons play/pause et suivant (voir `NowPlayingRow`).
+    /// The text column's frozen width — caller by caller: the multiroom names
+    /// align on `MultiroomMetrics.nameWidth`, the "now playing" row reserves room for the
+    /// play/pause and next buttons (see `NowPlayingRow`).
     let width: CGFloat
-    /// Longueur du fondu en fin de texte.
+    /// The fade's length at the end of the text.
     let fade: CGFloat
 
     var body: some View {
@@ -1052,9 +1052,9 @@ private struct FadingText: View {
             .font(.system(size: size, weight: weight))
             .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
             .lineLimit(1)
-            // Taille NATURELLE (pas de troncature « … »), puis calée dans une largeur fixe et
-            // rognée : le texte qui déborde est masqué, et le dégradé le fait disparaître en
-            // fondu au lieu d'un bord net.
+            // The NATURAL size (no "…" truncation), then set in a fixed width and
+            // clipped: the overflowing text is masked, and the gradient makes it disappear in a
+            // fade instead of a hard edge.
             .fixedSize(horizontal: true, vertical: false)
             .frame(width: width, alignment: .leading)
             .clipped()
@@ -1072,7 +1072,7 @@ private struct FadingText: View {
     }
 }
 
-/// Bouton muet : un haut-parleur qui bascule sur `speaker.slash` une fois coupé.
+/// The mute button: a speaker that switches to `speaker.slash` once muted.
 private struct MuteButton: View {
     let muted: Bool
     let action: () -> Void
@@ -1089,12 +1089,12 @@ private struct MuteButton: View {
     }
 }
 
-/// Slider de volume d'un élément multiroom : le `Slider` natif SwiftUI (comme le volume
-/// global de cette branche), en `.small` pour le rail fin de « Son ».
+/// A multiroom item's volume slider: SwiftUI's native `Slider` (like this branch's global
+/// volume), in `.small` for "Sound"'s thin track.
 ///
-/// Pendant un glissement, on affiche la valeur LOCALE (`dragValue`) et on appelle `onScrub`
-/// à chaque cran ; au relâchement on rend la main à la valeur live du store (échos WebSocket).
-/// Cela évite que l'écho serveur, en retard d'un aller-retour, ne fasse sauter le pouce.
+/// During a drag, we display the LOCAL value (`dragValue`) and call `onScrub`
+/// on every notch; on release we hand control back to the store's live value (WebSocket echoes).
+/// This keeps the server echo, one round trip behind, from making the thumb jump.
 private struct MultiroomVolumeSlider: View {
     let liveValueDb: Double
     let range: (minDb: Double, maxDb: Double)
@@ -1133,7 +1133,7 @@ private struct MultiroomVolumeSlider: View {
     }
 }
 
-// MARK: - Station radio (sous-menu)
+// MARK: - Radio station (sub-menu)
 
 struct RadioStationRow: View {
     @Bindable var store: MiloStore
@@ -1144,9 +1144,9 @@ struct RadioStationRow: View {
     private var isPlaying: Bool { store.playingRadioStationId == station.id }
     private var isLoading: Bool { store.radioStationLoadingId == station.id }
 
-    /// Même empreinte pour les trois états (spinner, stop, play) afin qu'ils tombent
-    /// exactement à la même position — sinon le spinner (mis à l'échelle) et le
-    /// symbole SF (dimensionné par sa police) ne se centrent pas au même endroit.
+    /// The same footprint for all three states (spinner, stop, play) so that they land
+    /// at exactly the same position — otherwise the spinner (scaled) and the
+    /// SF symbol (sized by its font) do not centre in the same place.
     private let trailingIconSize: CGFloat = 20
 
     var body: some View {
@@ -1188,11 +1188,11 @@ struct RadioStationRow: View {
     }
 }
 
-/// Vignette 32×32 à coins arrondis pour une ligne de sous-niveau (station radio, artiste/album/
-/// morceau de la bibliothèque musicale…), avec un repli SF Symbol pour les entrées sans image
-/// (beaucoup de favoris radio n'en ont pas ; tous les résultats de recherche n'ont pas de
-/// pochette). L'image se recadre en `.fill` puis est rognée au carré arrondi, comme la grille de
-/// favoris du frontend Milō.
+/// A 32×32 rounded-corner thumbnail for a sub-level row (a radio station, a music library
+/// artist/album/song…), with an SF Symbol fallback for entries with no image
+/// (many radio favourites have none; not every search result has
+/// cover art). The image is recropped `.fill` then clipped to a rounded square, like the favourites
+/// grid of the Milō frontend.
 private struct MenuThumbnail: View {
     let url: URL?
     let fallbackSystemImage: String
@@ -1200,8 +1200,8 @@ private struct MenuThumbnail: View {
     private let size: CGFloat = 32
     private let cornerRadius: CGFloat = 7
 
-    /// Image déjà chargée par CETTE vue. Le cache partagé sert les vues re-créées, celui-ci évite
-    /// de le relire à chaque passe de rendu.
+    /// The image already loaded by THIS view. The shared cache serves recreated views, this one avoids
+    /// re-reading it on every render pass.
     @State private var loaded: Image?
 
     var body: some View {
@@ -1244,17 +1244,17 @@ private struct MenuThumbnail: View {
     }
 }
 
-/// Vignettes de `MenuThumbnail` déjà chargées, gardées en mémoire pour la durée de la session —
-/// logos de stations radio comme pochettes de résultats de recherche.
+/// The `MenuThumbnail` thumbnails already loaded, kept in memory for the session's duration —
+/// radio station logos as well as search result cover art.
 ///
-/// Le cache HTTP d'URLSession ne suffit pas : une `AsyncImage` re-créée repart d'une passe de
-/// chargement ASYNCHRONE même quand l'octet est déjà en cache, et affiche donc son placeholder
-/// l'espace d'une image ou deux. Or la liste des stations est re-créée à chaque entrée — et une
-/// fois de plus quand la transition passe la main de son overlay à la couche principale : les
-/// logos clignotaient au moment précis où la bascule doit être lisse. Une image déjà vue est
-/// désormais rendue SYNCHRONEMENT.
+/// URLSession's HTTP cache is not enough: a recreated `AsyncImage` starts again from an
+/// ASYNCHRONOUS load pass even when the bytes are already cached, and therefore shows its placeholder
+/// for a frame or two. And the station list is recreated on every entry — and once
+/// more when the transition hands over from its overlay to the main layer: the
+/// logos blinked at the precise moment the switch has to be smooth. An image already seen is
+/// now rendered SYNCHRONOUSLY.
 ///
-/// Quelques dizaines de vignettes 32 pt : le cache n'a pas besoin d'être borné.
+/// A few dozen 32 pt thumbnails: the cache does not need to be bounded.
 @MainActor
 private final class FaviconCache {
     static let shared = FaviconCache()
@@ -1266,7 +1266,7 @@ private final class FaviconCache {
     func store(_ image: Image, for url: URL) { images[url] = image }
 }
 
-/// Ligne affichée quand Radio n'a aucun favori.
+/// The row displayed when Radio has no favourites.
 struct RadioEmptyRow: View {
     var body: some View {
         Text(L("radio.noFavorites"))
@@ -1278,12 +1278,12 @@ struct RadioEmptyRow: View {
     }
 }
 
-// MARK: - Recherche bibliothèque musicale
+// MARK: - Music library search
 
-/// Champ de recherche : icône loupe + `TextField`, sans le chrome par défaut de macOS (bordure,
-/// fond) puisque c'est le verre du panneau qui sert de fond ici. Prend le focus dès l'entrée
-/// dans la route, comme une recherche Spotlight — le panneau force déjà `canBecomeKey`/
-/// `makeKey()` (`MenuBarShell`), donc rien de plus à faire côté fenêtre pour que ça marche.
+/// The search field: a magnifier icon + a `TextField`, without macOS's default chrome (border,
+/// background) since it is the panel's glass that serves as the background here. Takes focus as soon as the
+/// route is entered, like a Spotlight search — the panel already forces `canBecomeKey`/
+/// `makeKey()` (`MenuBarShell`), so there is nothing more to do on the window side for this to work.
 struct MusicLibrarySearchField: View {
     @Bindable var store: MiloStore
     @FocusState private var isFocused: Bool
@@ -1313,7 +1313,7 @@ struct MusicLibrarySearchField: View {
     }
 }
 
-/// Ligne d'état statique (invite avant recherche, "aucun résultat") — même habillage que
+/// A static status row (the prompt before searching, "no results") — the same dressing as
 /// `RadioEmptyRow`.
 private struct MusicLibraryStatusRow: View {
     let text: String
@@ -1341,11 +1341,11 @@ private struct MusicLibraryLoadingRow: View {
     }
 }
 
-/// Le corps du sous-niveau recherche : le champ vit à part (`MiloPanelView.musicLibraryContent`),
-/// cette vue ne porte que ce qui suit — invite / chargement / aucun résultat / les trois
-/// sections de résultats. Même arbitrage de précédence que `SearchView.vue` : le chargement
-/// masque d'éventuels résultats précédents plutôt que de les laisser en arrière-plan pendant le
-/// debounce suivant.
+/// The body of the search sub-level: the field lives apart (`MiloPanelView.musicLibraryContent`),
+/// this view only carries what follows — prompt / loading / no results / the three
+/// result sections. The same precedence arbitration as `SearchView.vue`: loading
+/// hides any previous results rather than leaving them in the background during the
+/// next debounce.
 struct MusicLibrarySearchResultsList: View {
     @Bindable var store: MiloStore
 
@@ -1355,10 +1355,10 @@ struct MusicLibrarySearchResultsList: View {
         !store.musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Ce que montre le sous-niveau tant que rien n'est tapé : les albums récents, à défaut
-    /// l'invite d'origine — bibliothèque vide, ou backend qui n'a pas (encore) répondu. Même
-    /// arbitrage chargement > vide > liste que les résultats de recherche, et la ScrollView
-    /// porte le même retrait bas.
+    /// What the sub-level shows while nothing is typed: the recent albums, failing that
+    /// the original prompt — an empty library, or a backend that has not (yet) answered. The same
+    /// loading > empty > list arbitration as the search results, and the ScrollView
+    /// carries the same bottom inset.
     @ViewBuilder
     private var showcase: some View {
         if store.musicLibraryShowcaseLoading {
@@ -1389,8 +1389,8 @@ struct MusicLibrarySearchResultsList: View {
         } else if results.isEmpty {
             MusicLibraryStatusRow(text: L("musicLibrary.search.noResults"))
         } else {
-            // Comme `radioContent` : la ScrollView est le seul élément élastique du sous-niveau,
-            // elle porte donc elle-même le retrait bas (voir `bottomInset(for:)`).
+            // Like `radioContent`: the ScrollView is the sub-level's only elastic element,
+            // so it carries the bottom inset itself (see `bottomInset(for:)`).
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     if !results.artists.isEmpty {
@@ -1419,9 +1419,9 @@ struct MusicLibrarySearchResultsList: View {
     }
 }
 
-/// Liste des albums de la page artiste (`MiloPanelView.musicLibraryArtistContent`) — même
-/// arbitrage chargement/vide/liste que `MusicLibrarySearchResultsList`, mais sans invite (on
-/// arrive déjà sur une intention explicite, pas un champ vide à remplir).
+/// The artist page's album list (`MiloPanelView.musicLibraryArtistContent`) — the same
+/// loading/empty/list arbitration as `MusicLibrarySearchResultsList`, but with no prompt (we
+/// arrive on an explicit intent already, not an empty field to fill).
 struct MusicLibraryArtistAlbumsList: View {
     @Bindable var store: MiloStore
 
@@ -1444,9 +1444,9 @@ struct MusicLibraryArtistAlbumsList: View {
     }
 }
 
-/// Liste des morceaux de la page album (`MiloPanelView.musicLibraryAlbumContent`) — même
-/// construction que `MusicLibraryArtistAlbumsList`. Ces morceaux (et non ceux d'une éventuelle
-/// recherche en cours) forment le CONTEXTE de lecture passé à chaque `MusicLibrarySongRow`.
+/// The album page's song list (`MiloPanelView.musicLibraryAlbumContent`) — the same
+/// construction as `MusicLibraryArtistAlbumsList`. These songs (and not those of any
+/// search in progress) form the playback CONTEXT passed to each `MusicLibrarySongRow`.
 struct MusicLibraryAlbumSongsList: View {
     @Bindable var store: MiloStore
 
@@ -1469,10 +1469,10 @@ struct MusicLibraryAlbumSongsList: View {
     }
 }
 
-/// Ligne d'artiste — tappable : mène à la page de l'artiste (ses albums), même caret que la
-/// ligne « Bibliothèque musicale » elle-même. Contrairement à `SourceRow`/Radio, le corps de la
-/// ligne n'a pas de second rôle à protéger (activer la source, etc.) : toute la ligne navigue,
-/// le chevron n'est qu'un repère visuel du sens de la navigation.
+/// An artist row — tappable: leads to the artist's page (their albums), the same chevron as the
+/// "Music Library" row itself. Unlike `SourceRow`/Radio, the row's body
+/// has no second role to protect (activating the source, etc.): the whole row navigates,
+/// the chevron is only a visual marker of the navigation's direction.
 struct MusicLibraryArtistRow: View {
     @Bindable var store: MiloStore
     let artist: MusicLibraryArtist
@@ -1504,8 +1504,8 @@ struct MusicLibraryArtistRow: View {
     }
 }
 
-/// Ligne d'album — tappable, même raison que `MusicLibraryArtistRow` : mène à la page de
-/// l'album (ses morceaux), qu'on l'affiche depuis une recherche ou depuis la page d'un artiste.
+/// An album row — tappable, for the same reason as `MusicLibraryArtistRow`: leads to the album's
+/// page (its songs), whether displayed from a search or from an artist's page.
 struct MusicLibraryAlbumRow: View {
     @Bindable var store: MiloStore
     let album: MusicLibraryAlbum
@@ -1537,16 +1537,16 @@ struct MusicLibraryAlbumRow: View {
     }
 }
 
-/// Ligne de morceau — la SEULE des trois dont le tap agit directement plutôt que de naviguer :
-/// il lance la lecture (`play_context` avec `context`, démarré à l'index du morceau touché),
-/// remplaçant ce qui joue déjà, comme un tap sur une station radio. `context` est la liste
-/// d'où vient le tap — les résultats de recherche, ou les morceaux de l'album ouvert — pas
-/// toujours `store.musicLibrarySearchResults.songs`.
+/// A song row — the ONLY one of the three whose tap acts directly rather than navigating:
+/// it starts playback (`play_context` with `context`, started at the index of the song touched),
+/// replacing whatever is already playing, like a tap on a radio station. `context` is the list
+/// the tap came from — the search results, or the open album's songs — not
+/// always `store.musicLibrarySearchResults.songs`.
 ///
-/// Quand CE morceau est celui actuellement chargé par la bibliothèque musicale, l'icône de
-/// droite bascule sur play/pause (au lieu du simple repère au survol) et le tap bascule play/
-/// pause au lieu de relancer `play_context` depuis le début — même bouton, même geste que la
-/// ligne « en cours » de la racine (`NowPlayingRow`/`toggleNowPlayingPause`).
+/// When THIS song is the one currently loaded by the music library, the icon on the
+/// right switches to play/pause (instead of the plain hover marker) and the tap toggles play/
+/// pause instead of restarting `play_context` from the beginning — the same button, the same gesture as
+/// the root's "now playing" row (`NowPlayingRow`/`toggleNowPlayingPause`).
 struct MusicLibrarySongRow: View {
     @Bindable var store: MiloStore
     let song: MusicLibrarySong
@@ -1558,8 +1558,8 @@ struct MusicLibrarySongRow: View {
     private var isCurrent: Bool { store.isCurrentMusicLibrarySong(song) }
     private var isPlayingNow: Bool { isCurrent && (store.nowPlaying?.isPlaying ?? false) }
 
-    /// Même empreinte pour spinner et icône play/pause que `RadioStationRow`, pour la même
-    /// raison : qu'ils tombent exactement à la même position.
+    /// The same footprint for the spinner and the play/pause icon as `RadioStationRow`, for the same
+    /// reason: so that they land at exactly the same position.
     private let trailingIconSize: CGFloat = 20
 
     var body: some View {
@@ -1592,8 +1592,8 @@ struct MusicLibrarySongRow: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 } else if isCurrent {
-                    // Chargé mais en pause : l'icône invite à relancer, comme la ligne
-                    // « en cours » de la racine.
+                    // Loaded but paused: the icon invites a restart, like the root's
+                    // "now playing" row.
                     Image(systemName: "play.fill")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
@@ -1616,7 +1616,7 @@ struct MusicLibrarySongRow: View {
     }
 }
 
-// MARK: - État déconnecté
+// MARK: - Disconnected state
 
 struct DisconnectedRow: View {
     var body: some View {
@@ -1632,12 +1632,12 @@ struct DisconnectedRow: View {
     }
 }
 
-// MARK: - Briques communes
+// MARK: - Shared building blocks
 
-/// Ligne cliquable avec sa surbrillance au survol.
+/// A clickable row with its hover highlight.
 ///
-/// Le panneau étant une fenêtre qu'on dessine soi-même, aucune surbrillance ne vient du
-/// système : chaque ligne peint la sienne, sur son propre survol.
+/// The panel being a window we draw ourselves, no highlight comes from the
+/// system: every row paints its own, on its own hover.
 private struct MenuRowContainer<Content: View>: View {
     @Binding var isHovering: Bool
     let action: () -> Void
@@ -1648,8 +1648,8 @@ private struct MenuRowContainer<Content: View>: View {
             HStack(spacing: MenuRowMetrics.iconTextGap) {
                 content
             }
-            // La surbrillance est en retrait de `highlightInset` ; le contenu doit malgré
-            // tout commencer à `contentInset` du bord du menu, d'où la différence.
+            // The highlight is inset by `highlightInset`; the content nevertheless has to
+            // start at `contentInset` from the menu's edge, hence the difference.
             .padding(.leading, MenuRowMetrics.contentInset - MenuRowMetrics.highlightInset)
             .padding(.trailing, 8)
             .padding(.vertical, MenuRowMetrics.rowVerticalPadding)
@@ -1669,59 +1669,59 @@ private struct MenuRowContainer<Content: View>: View {
     }
 }
 
-/// Caret « voir les stations » de la ligne Radio.
+/// The "see the stations" chevron of the Radio row.
 ///
-/// Visuellement IDENTIQUE au caret Multiroom (`ExpandChevron`) au repos : un chevron nu, non
-/// pastillé, à la même taille et la même teinte. La seule différence est le comportement — celui-ci
-/// est statique et pointe toujours à droite (il MÈNE AILLEURS, vers la liste des stations), là où
-/// celui du Multiroom bascule en dépliant sur place.
+/// Visually IDENTICAL to the Multiroom chevron (`ExpandChevron`) at rest: a bare chevron, not
+/// badged, at the same size and the same tint. The only difference is the behaviour — this one
+/// is static and always points right (it LEADS ELSEWHERE, to the station list), where
+/// Multiroom's swings round as it expands in place.
 private struct ChevronCircle: View {
     var body: some View {
         Image(systemName: "chevron.right")
-            // RELEVÉ AU PIXEL sur le caret « AirPods Pro » du panneau « Son » (capture 2×) : encre
-            // ~10,5 × 6 pt, trait ~1,5 pt — un chevron FIN (`.regular`), pas dense. C'est le poids,
-            // pas la taille, qui le distingue ; `.semibold` le rendait lourd et sombre.
+            // MEASURED TO THE PIXEL on the "AirPods Pro" chevron of the "Sound" panel (2× capture): ink
+            // ~10.5 × 6 pt, stroke ~1.5 pt — a THIN chevron (`.regular`), not dense. It is the weight,
+            // not the size, that distinguishes it; `.semibold` made it heavy and dark.
             .font(.system(size: 11, weight: .regular))
             .foregroundStyle(.secondary)
             .padding(.trailing, 2)
     }
 }
 
-/// Chevron d'expansion de la ligne Multiroom.
+/// The Multiroom row's expand chevron.
 ///
-/// Même chevron nu que la ligne Radio (`ChevronCircle`), mais animé : Radio MÈNE AILLEURS (une
-/// autre vue) et reste figé à droite, là où celui-ci déplie sur PLACE. C'est exactement le langage
-/// du panneau « Son » sous AirPods — un chevron qui pointe à droite fermé, vers le bas ouvert.
+/// The same bare chevron as the Radio row (`ChevronCircle`), but animated: Radio LEADS ELSEWHERE (another
+/// view) and stays fixed pointing right, where this one expands IN PLACE. This is exactly the language
+/// of the "Sound" panel under AirPods — a chevron pointing right when closed, down when open.
 private struct ExpandChevron: View {
     let isExpanded: Bool
 
-    /// La rotation et la « pulsation » (scale + opacity) sont un état LOCAL, purement graphique :
-    /// aucune n'affecte la taille de la ligne, donc pas de risque de faire sauter la fenêtre
-    /// (contrairement à un `withAnimation` sur `multiroomExpanded`, cf. `toggleMultiroom`).
+    /// The rotation and the "pulse" (scale + opacity) are LOCAL state, purely graphical:
+    /// neither affects the row's size, so there is no risk of making the window jump
+    /// (unlike a `withAnimation` on `multiroomExpanded`, cf. `toggleMultiroom`).
     @State private var rotated = false
     @State private var faded = false
 
     var body: some View {
         Image(systemName: "chevron.right")
-            // Identique au caret Radio (`ChevronCircle`) : chevron fin `.regular` relevé sur le
-            // caret « AirPods Pro » du panneau « Son ».
+            // Identical to the Radio chevron (`ChevronCircle`): a thin `.regular` chevron measured on the
+            // "AirPods Pro" chevron of the "Sound" panel.
             .font(.system(size: 11, weight: .regular))
             .foregroundStyle(.secondary)
-            // +90° horaire : « > » fermé bascule sur « ⌄ » ouvert.
+            // +90° clockwise: a closed ">" swings to an open "⌄".
             .rotationEffect(.degrees(rotated ? 90 : 0))
-            // Le caret rétrécit + s'efface, change de sens hors-champ, puis regrandit + réapparaît
-            // à sa nouvelle position — plutôt qu'une rotation nue en place.
+            // The chevron shrinks + fades out, changes direction off-screen, then grows back + reappears
+            // at its new position — rather than a bare in-place rotation.
             .scaleEffect(faded ? 0.4 : 1)
             .opacity(faded ? 0 : 1)
             .padding(.trailing, 2)
             .onAppear { rotated = isExpanded }
             .onChange(of: isExpanded) { _, newValue in
-                // Deux phases ENCHAÎNÉES, pas superposées : le `completion:` garantit que la phase 2
-                // ne part qu'une fois la phase 1 finie. Sans lui, SwiftUI verrait `faded` passer à
-                // `true` puis `false` dans la même passe et n'animerait jamais le fade-out.
-                //   Phase 1 : rétrécir + s'effacer.
-                //   Phase 2 : basculer le sens HORS-CHAMP (le caret est invisible), puis regrandir +
-                //   réapparaître — le nouveau caret « arrive » donc déjà tourné.
+                // Two CHAINED phases, not superimposed: the `completion:` guarantees that phase 2
+                // only starts once phase 1 has finished. Without it, SwiftUI would see `faded` go to
+                // `true` then `false` within the same pass and would never animate the fade-out.
+                //   Phase 1: shrink + fade out.
+                //   Phase 2: swing the direction round OFF-SCREEN (the chevron is invisible), then grow back +
+                //   reappear — so the new chevron "arrives" already turned.
                 withAnimation(.easeIn(duration: 0.18)) {
                     faded = true
                 } completion: {
@@ -1732,11 +1732,11 @@ private struct ExpandChevron: View {
     }
 }
 
-/// Pastille d'icône : accent quand actif, gris sinon — le même langage visuel que la
-/// section « Sortie » du panneau Son.
+/// The icon badge: accent when active, grey otherwise — the same visual language as the
+/// "Output" section of the Sound panel.
 ///
-/// Pendant un chargement, le spinner remplace l'icône DANS la pastille (au lieu de s'afficher
-/// à droite de la ligne), pour les sources comme pour les fonctionnalités.
+/// During a load, the spinner replaces the icon INSIDE the badge (instead of showing
+/// to the right of the row), for the sources as well as the features.
 private struct RowIcon: View {
     let icon: SourceIcon
     let isActive: Bool
@@ -1754,12 +1754,12 @@ private struct RowIcon: View {
                 ProgressView()
                     .controlSize(.small)
                     .scaleEffect(0.85)
-                    // `.tint` ne change rien ici : le spinneur tournant d'AppKit
-                    // (`NSProgressIndicator` style `.spinning`) ignore la teinte et se dessine
-                    // toujours selon l'apparence effective — noir en clair, blanc en sombre.
-                    // Sur la pastille active (bleue) il faut du blanc dans les DEUX apparences,
-                    // donc on force le sous-arbre en apparence sombre pour obtenir ce blanc ;
-                    // sur la pastille grise, le noir/blanc par défaut reste déjà lisible.
+                    // `.tint` changes nothing here: AppKit's spinning indicator
+                    // (`NSProgressIndicator` in `.spinning` style) ignores the tint and always draws
+                    // itself according to the effective appearance — black in light, white in dark.
+                    // On the active (blue) badge we need white in BOTH appearances,
+                    // so we force the subtree into dark appearance to get that white;
+                    // on the grey badge, the default black/white is already legible.
                     .colorScheme(isActive ? .dark : colorScheme)
             } else {
                 icon.image
@@ -1771,53 +1771,53 @@ private struct RowIcon: View {
 }
 
 
-// MARK: - Retour depuis un sous-niveau
+// MARK: - Back from a sub-level
 
-/// Ligne de TITRE, mais cliquable : elle se cale sur `textInset` / `titleTopInset` et pèse le
-/// même semibold qu'un `MenuTitle` — pas de pastille, donc pas de `MenuRowContainer`, dont les
-/// retraits partent de `contentInset`.
+/// A TITLE row, but clickable: it is set on `textInset` / `titleTopInset` and carries the
+/// same semibold as a `MenuTitle` — no badge, hence no `MenuRowContainer`, whose
+/// insets start from `contentInset`.
 ///
-/// Elle s'allume au survol comme toutes les autres lignes cliquables du panneau. Sa boîte est
-/// bâtie à la main, exactement comme celle de `FooterRow` : même remplissage, même rayon, mêmes
-/// retraits — la seule différence est qu'elle s'aligne sur le texte des titres (15 pt) et non
-/// sur les pastilles (14 pt).
+/// It lights up on hover like every other clickable row in the panel. Its box is
+/// built by hand, exactly like `FooterRow`'s: same fill, same radius, same
+/// insets — the only difference is that it aligns on the titles' text (15 pt) and not
+/// on the badges (14 pt).
 ///
-/// Le texte, lui, ne bouge pas : la boîte s'étend de `textRowVerticalPadding` au-dessus de lui,
-/// qu'on retranche donc du retrait haut.
+/// The text itself does not move: the box extends `textRowVerticalPadding` above it,
+/// which is therefore subtracted from the top inset.
 ///
-/// Partagée par tous les sous-niveaux du panneau (stations radio, recherche bibliothèque
-/// musicale…) — seul `title` change au site d'appel.
-/// Bouton de lecture posé à droite du titre d'un sous-niveau, quand ce sous-niveau a quelque
-/// chose à lancer EN ENTIER : les pages artiste et album de la bibliothèque musicale. `nil`
-/// ailleurs (liste des stations, recherche), où le titre ne désigne aucune file.
+/// Shared by every sub-level of the panel (radio stations, music library
+/// search…) — only `title` changes at the call site.
+/// A play button placed to the right of a sub-level's title, when that sub-level has something
+/// to start IN FULL: the music library's artist and album pages. `nil`
+/// elsewhere (the station list, the search), where the title designates no queue.
 struct PanelBackPlayAction {
-    /// La file est en train d'être assemblée : spinner à la place de l'icône.
+    /// The queue is being assembled: a spinner in place of the icon.
     var isLoading: Bool
-    /// Ce que l'icône ANNONCE, c'est-à-dire ce que le clic va faire — `true` montre donc pause.
+    /// What the icon ANNOUNCES, that is, what the click will do — `true` therefore shows pause.
     var isPlaying: Bool
     var action: () -> Void
 }
 
 struct PanelBackRow: View {
     let title: String
-    /// Avant `onBack` dans la liste des paramètres, et pas après : la fermeture finale est celle
-    /// que les sites d'appel passent en trailing closure, ce qui n'est vrai que du DERNIER
-    /// paramètre. Défaut `nil`, donc les sous-niveaux sans lecture globale n'écrivent rien.
+    /// Before `onBack` in the parameter list, and not after: the closure the call sites pass as a
+    /// trailing closure is the final one, which is only true of the LAST
+    /// parameter. Defaults to `nil`, so the sub-levels with no global playback write nothing.
     var play: PanelBackPlayAction? = nil
     let onBack: () -> Void
     @State private var isHovering = false
 
-    /// Même largeur que les icônes de fin de ligne de `MusicLibrarySongRow` — l'en-tête
-    /// surplombe justement leur colonne, spinner et symbole doivent y tomber au même endroit.
+    /// The same width as `MusicLibrarySongRow`'s end-of-row icons — the header overhangs
+    /// precisely their column, and the spinner and the symbol have to land in the same place.
     private let trailingIconSize: CGFloat = 20
 
-    /// Écart entre la fin du titre et l'icône de lecture, à l'image du `textControlsGap` de la
-    /// ligne « en cours » : le fondu meurt là, il ne lèche jamais l'icône.
+    /// The gap between the end of the title and the play icon, in the image of the "now playing"
+    /// row's `textControlsGap`: the fade dies there, it never licks the icon.
     private let titleIconGap: CGFloat = 4
 
-    /// Longueur du fondu de fin de titre — même valeur que la ligne « en cours »
-    /// (`NowPlayingMetrics.textFade`) et que les noms multiroom (`MultiroomMetrics.nameFade`),
-    /// pour un rendu identique d'un bout à l'autre du panneau.
+    /// The length of the title's end fade — the same value as the "now playing" row's
+    /// (`NowPlayingMetrics.textFade`) and as the multiroom names' (`MultiroomMetrics.nameFade`),
+    /// for an identical rendering from one end of the panel to the other.
     private let titleFade: CGFloat = 14
 
     var body: some View {
@@ -1826,17 +1826,17 @@ struct PanelBackRow: View {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 11, weight: .semibold))
 
-                // Le titre prend TOUTE la place restante, au lieu de sa largeur naturelle suivie
-                // d'un `Spacer` : c'est cette largeur que le fondu vient mordre. Un nom d'album
-                // ou d'artiste est arbitrairement long, et se faire couper par « … » jurerait
-                // avec le reste du panneau, où tout déborde en dégradé.
+                // The title takes ALL the remaining room, instead of its natural width followed
+                // by a `Spacer`: it is that width the fade comes to bite into. An album or artist
+                // name is arbitrarily long, and being cut off by "…" would clash
+                // with the rest of the panel, where everything overflows in a gradient.
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
-                    // Taille NATURELLE puis rognée dans la place disponible — même construction
-                    // que `FadingText`, à ceci près qu'ici la largeur n'est pas connue d'avance
-                    // (elle dépend du chevron et de la présence de l'icône), d'où un masque à
-                    // fondu de longueur fixe plutôt que ses `stops` proportionnels.
+                    // The NATURAL size then clipped into the available room — the same construction
+                    // as `FadingText`, except that here the width is not known in advance
+                    // (it depends on the chevron and on whether the icon is present), hence a
+                    // fixed-length fade mask rather than its proportional `stops`.
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .clipped()
@@ -1848,19 +1848,19 @@ struct PanelBackRow: View {
                                 .frame(width: titleFade)
                         }
                     )
-                    // L'icône est posée en overlay, donc elle ne réserve aucune place : c'est ce
-                    // retrait qui la lui garde, et qui fait finir le fondu avant elle.
+                    // The icon is placed in an overlay, so it reserves no room: it is this
+                    // inset that keeps room for it, and that makes the fade end before it.
                     .padding(.trailing, play == nil ? 0 : trailingIconSize + titleIconGap)
             }
-            // En overlay, et NON dans la HStack : un overlay ne dimensionne pas son hôte, donc
-            // l'icône ne peut pas rendre cet en-tête plus haut que ceux des sous-niveaux qui
-            // n'en ont pas — ni le faire tressauter quand elle laisse la place au spinner, qui
-            // ne fait pas la même taille. La ligne reste calée sur son texte, toujours.
+            // In an overlay, and NOT in the HStack: an overlay does not size its host, so
+            // the icon cannot make this header taller than those of the sub-levels that
+            // have none — nor make it jump when it gives way to the spinner, which
+            // is not the same size. The row stays set on its text, always.
             .overlay(alignment: .trailing) {
                 if let play {
-                    // Un bouton DANS le bouton de la ligne : le plus intérieur gagne dans sa
-                    // propre zone, exactement comme le caret de `SourceRow`. Ici cette zone se
-                    // limite à l'icône, le reste de la ligne continue de revenir en arrière.
+                    // A button INSIDE the row's button: the innermost wins within its
+                    // own area, exactly like `SourceRow`'s chevron. Here that area is
+                    // limited to the icon, the rest of the row still goes back.
                     Button(action: play.action) {
                         Group {
                             if play.isLoading {
@@ -1874,8 +1874,8 @@ struct PanelBackRow: View {
                             }
                         }
                         .frame(width: trailingIconSize)
-                        // Toute la hauteur de la ligne comme cible, sans en dicter aucune :
-                        // dans un overlay, `.infinity` se règle sur l'hôte.
+                        // The row's full height as a target, without dictating any:
+                        // in an overlay, `.infinity` settles on the host.
                         .frame(maxHeight: .infinity)
                         .contentShape(Rectangle())
                     }
@@ -1884,10 +1884,10 @@ struct PanelBackRow: View {
                 }
             }
             .padding(.leading, MenuRowMetrics.textInset - MenuRowMetrics.highlightInset)
-            // Le titre s'aligne sur la grille du TEXTE (15 pt), mais l'icône de lecture s'aligne
-            // sur la colonne des icônes de fin de ligne (8 pt du bord de ligne, voir
-            // `MenuRowContainer`) : elle coiffe la colonne play/pause des morceaux juste en
-            // dessous, un retrait de titre l'en décalerait de 2 pt.
+            // The title aligns on the TEXT grid (15 pt), but the play icon aligns
+            // on the end-of-row icon column (8 pt from the row's edge, see
+            // `MenuRowContainer`): it caps the play/pause column of the songs just
+            // below, and a title inset would offset it by 2 pt.
             .padding(.trailing, play == nil ? MenuRowMetrics.textInset - MenuRowMetrics.highlightInset : 8)
             .padding(.vertical, MenuRowMetrics.textRowVerticalPadding)
             .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
@@ -1907,7 +1907,7 @@ struct PanelBackRow: View {
     }
 }
 
-// MARK: - Pied (option-clic)
+// MARK: - Footer (option-click)
 
 struct FooterRow: View {
     let title: String

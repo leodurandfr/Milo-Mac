@@ -1,24 +1,23 @@
 import AppKit
 import Foundation
 
-/// Valeur de `kAXTrustedCheckOptionPrompt` (vérifiée : c'est bien cette chaîne).
+/// The value of `kAXTrustedCheckOptionPrompt` (verified: this really is the string).
 ///
-/// La constante du SDK est importée depuis ApplicationServices comme une **`var` globale**
-/// — comme toutes les `CFString` globales du C. La *lire* revient donc, pour le compilateur,
-/// à lire un état mutable partagé, et aucune annotation posée de notre côté n'y change quoi
-/// que ce soit : c'est la déclaration importée qui est en cause. On recopie donc sa valeur,
-/// qui est une simple clé de dictionnaire, stable par ABI.
+/// The SDK constant is imported from ApplicationServices as a **global `var`** — like every
+/// global `CFString` from C. *Reading* it therefore amounts, as far as the compiler is
+/// concerned, to reading shared mutable state, and no annotation on our side changes that:
+/// the imported declaration is what is at fault. So we copy its value, which is a plain
+/// dictionary key, stable by ABI.
 private let axTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
 
-/// Raccourci clavier de volume (Option droite + flèches).
+/// Volume keyboard shortcut (right Option + arrows).
 ///
-/// Main-thread-only, et vérifié. Ses rappels viennent de trois sources hors du système
-/// de types Swift — un tap CGEvent, un moniteur global NSEvent, des Timers — mais toutes
-/// arrivent **sur le main thread** : la source du tap est installée sur la run loop
-/// principale (`setupEventTap`), les moniteurs NSEvent sont livrés par AppKit sur le main
-/// thread, et les Timers sont posés sur la run loop principale. D'où les
-/// `MainActor.assumeIsolated` : ils affirment au compilateur ce qu'un pointeur de
-/// fonction C ne peut pas lui dire.
+/// Main-thread-only, and checked. Its callbacks come from three sources outside Swift's
+/// type system — a CGEvent tap, a global NSEvent monitor, Timers — but all of them arrive
+/// **on the main thread**: the tap's source is installed on the main run loop
+/// (`setupEventTap`), the NSEvent monitors are delivered by AppKit on the main thread, and
+/// the Timers are scheduled on the main run loop. Hence the `MainActor.assumeIsolated`
+/// calls: they assert to the compiler what a C function pointer cannot tell it.
 @MainActor
 final class GlobalHotkeyManager {
     // MARK: - Dependencies
@@ -51,9 +50,9 @@ final class GlobalHotkeyManager {
     private var isUpArrowPressed = false
     private var isDownArrowPressed = false
 
-    /// Maintien d'une icône du slider (souris), par opposition au maintien d'une flèche
-    /// (clavier) — les deux pilotent le même `repeatTick`, mais leur condition d'arrêt
-    /// diffère : pas de touche à surveiller ici, juste ce booléen.
+    /// Holding a slider icon (mouse), as opposed to holding an arrow (keyboard) — both
+    /// drive the same `repeatTick`, but their stop condition differs: there is no key to
+    /// watch here, just this boolean.
     private var isButtonHeld = false
 
     // MARK: - Constants
@@ -61,11 +60,11 @@ final class GlobalHotkeyManager {
     private let upArrowKeyCode: UInt16 = 126
     private let downArrowKeyCode: UInt16 = 125
     private let rightOptionMask: UInt = 0x40
-    private let defaultVolumeDeltaDb: Double = 3.0  // 3 dB par appui simple
+    private let defaultVolumeDeltaDb: Double = 3.0  // 3 dB per single press
 
-    // MARK: - Volume Delta (en dB)
-    /// Pas du raccourci clavier — réglage local (1 à 6 dB), persisté dans
-    /// UserDefaults. Sans rapport avec le step_mobile_db du backend.
+    // MARK: - Volume Delta (in dB)
+    /// Keyboard shortcut step — a local setting (1 to 6 dB), persisted in
+    /// UserDefaults. Unrelated to the backend's step_mobile_db.
     var volumeDeltaDb: Double {
         get {
             let saved = UserDefaults.standard.double(forKey: DefaultsKey.hotkeyVolumeDeltaDb)
@@ -76,11 +75,11 @@ final class GlobalHotkeyManager {
         }
     }
 
-    /// Calcul du delta progressif basé sur la durée de maintien
+    /// Computes the progressive delta from how long the key has been held
     private func currentDelta(direction: Double) -> Double {
         guard let start = repeatStartTime else { return volumeDeltaDb * direction }
         let elapsed = Date().timeIntervalSince(start)
-        // Accélération : 1x → 4x sur 2 secondes
+        // Acceleration: 1x → 4x over 2 seconds
         let multiplier = 1.0 + min(elapsed / 2.0, 1.0) * 3.0
         return volumeDeltaDb * multiplier * direction * repeatInterval / 0.08
     }
@@ -125,7 +124,7 @@ final class GlobalHotkeyManager {
             flagsChangedMonitor = nil
         }
 
-        // Livré par AppKit sur le main thread.
+        // Delivered by AppKit on the main thread.
         flagsChangedMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             MainActor.assumeIsolated { self?.handleFlagsChanged(event) }
         }
@@ -151,11 +150,11 @@ final class GlobalHotkeyManager {
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: CGEventMask(eventMask),
-            // Pointeur de fonction C : il ne capture rien, et le compilateur ne peut rien
-            // savoir de son isolation. La source du tap étant installée juste en dessous
-            // sur la run loop PRINCIPALE, ce rappel arrive sur le main thread — d'où
-            // l'`assumeIsolated`. Seul un Bool le traverse : `Unmanaged<CGEvent>` n'est pas
-            // Sendable, et `assumeIsolated` n'accepte de rendre que du Sendable.
+            // A C function pointer: it captures nothing, and the compiler can know nothing
+            // about its isolation. Since the tap's source is installed just below on the
+            // MAIN run loop, this callback arrives on the main thread — hence the
+            // `assumeIsolated`. Only a Bool crosses it: `Unmanaged<CGEvent>` is not
+            // Sendable, and `assumeIsolated` only accepts returning Sendable values.
             callback: { (_, type, event, refcon) -> Unmanaged<CGEvent>? in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<GlobalHotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
@@ -171,8 +170,8 @@ final class GlobalHotkeyManager {
 
         self.eventTap = eventTap
 
-        // `CFRunLoopGetCurrent()` — on est sur le main thread (la classe est @MainActor) :
-        // c'est bien la run loop principale, ce dont dépend l'`assumeIsolated` ci-dessus.
+        // `CFRunLoopGetCurrent()` — we are on the main thread (the class is @MainActor):
+        // this really is the main run loop, which the `assumeIsolated` above depends on.
         let runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
@@ -195,7 +194,7 @@ final class GlobalHotkeyManager {
     }
 
     // MARK: - Event Handling
-    /// Renvoie `true` quand l'événement doit être **intercepté** (avalé, pas propagé).
+    /// Returns `true` when the event must be **intercepted** (swallowed, not propagated).
     private func handleCGEvent(type: CGEventType, event: CGEvent) -> Bool {
         // Re-enable tap if OS disabled it (timeout or slow processing)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -286,9 +285,9 @@ final class GlobalHotkeyManager {
         beginRepeat(direction: direction)
     }
 
-    /// Maintien d'une icône du slider — même chemin que le raccourci clavier
-    /// (`beginRepeat`), sans la garde "Option droite enfoncée" qui n'a pas de sens pour
-    /// un bouton de souris : même prédiction locale, même accélération, même HUD.
+    /// Holding a slider icon — the same path as the keyboard shortcut (`beginRepeat`),
+    /// without the "right Option held" guard, which makes no sense for a mouse button:
+    /// same local prediction, same acceleration, same HUD.
     func beginButtonHold(direction: String) {
         isButtonHeld = true
         beginRepeat(direction: direction)
@@ -360,8 +359,8 @@ final class GlobalHotkeyManager {
     private func repeatTick() {
         guard let direction = currentRepeatDirection else { return }
 
-        // Pas de touche à surveiller pour un maintien souris : `isButtonHeld` est mis à
-        // jour directement par `beginButtonHold`/`endButtonHold`.
+        // No key to watch for a mouse hold: `isButtonHeld` is updated directly by
+        // `beginButtonHold`/`endButtonHold`.
         let shouldContinue = isButtonHeld ||
                            (isRightOptionPressed &&
                             ((direction == "up" && isUpArrowPressed) ||
@@ -405,8 +404,8 @@ final class GlobalHotkeyManager {
         lastSentVolumeDb = targetDb
         isSendingVolume = true
 
-        // La classe est main-isolée : cette Task hérite du main actor. Seul l'`await`
-        // part sur le réseau — le reste du corps y revient tout seul, sans MainActor.run.
+        // The class is main-isolated: this Task inherits the main actor. Only the `await`
+        // goes out to the network — the rest of the body returns on its own, no MainActor.run.
         Task {
             do {
                 try await apiService.adjustVolumeDb(delta)
@@ -432,7 +431,7 @@ final class GlobalHotkeyManager {
                 volumeHUD?.updateLimits(minDb: volumeStatus.limitMinDb, maxDb: volumeStatus.limitMaxDb)
                 store?.updateVolumeStatus(volumeStatus)
             } catch {
-                // Silencieux - on garde les valeurs en cache
+                // Silent — we keep the cached values
             }
         }
     }
@@ -472,12 +471,12 @@ final class GlobalHotkeyManager {
     }
 
     private func startPermissionMonitoring() {
-        // Un seul timer de poll, stocké et invalidé : startMonitoring() est
-        // rappelé à chaque reconnexion — sans cela, chaque cycle empilait un
-        // timer répétitif perpétuel de plus.
+        // A single poll timer, stored and invalidated: startMonitoring() is called again
+        // on every reconnection — without this, each cycle stacked up one more perpetual
+        // repeating timer.
         permissionTimer?.invalidate()
-        // Le timer est invalidé hors de `assumeIsolated` (Timer n'est pas Sendable, et
-        // celle-ci n'accepte de rendre que du Sendable) : seul un Bool la traverse.
+        // The timer is invalidated outside `assumeIsolated` (Timer is not Sendable, and
+        // that call only accepts returning Sendable values): only a Bool crosses it.
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             let done = MainActor.assumeIsolated { () -> Bool in
                 guard AXIsProcessTrusted() else { return false }

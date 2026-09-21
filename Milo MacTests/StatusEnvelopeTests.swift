@@ -2,26 +2,26 @@ import Testing
 import Foundation
 @testable import Milo
 
-/// Régression du bug : Milo-Mac ne lisait que le statut HTTP, alors que Milō sert
-/// délibérément certains échecs en 200 + `{"status": "error"}`. Deux routes de la surface
-/// appelée ici portent cette enveloppe, et aucune n'était lue :
+/// Regression for the bug: Milo-Mac only read the HTTP status, while Milō deliberately
+/// serves some failures as 200 + `{"status": "error"}`. Two routes of the surface called
+/// here carry that envelope, and neither was being read:
 ///
-/// - `PUT /api/equalizer/target/local/enabled` — un égaliseur refusé par la cible passait
-///   pour accepté, et son spinner tournait jusqu'au filet de sécurité de 10 s.
-/// - `GET /api/volume/state` — l'échec se présentait comme un `data` absent, donc comme un
-///   état VIDE : `loadMultiroomState` écrasait alors les volumes connus avec zéro client,
-///   remettant à plat les sliders de la sous-section multiroom.
+/// - `PUT /api/equalizer/target/local/enabled` — an equalizer refused by the target passed
+///   for accepted, and its spinner span until the 10 s safety net.
+/// - `GET /api/volume/state` — the failure presented as a missing `data`, hence as an EMPTY
+///   state: `loadMultiroomState` then overwrote the known volumes with zero clients,
+///   flattening the sliders of the multiroom sub-section.
 ///
-/// Comme `BulkSettingsBootstrapTests`, ces tests pilotent un vrai `MiloStore` contre un vrai
-/// serveur HTTP local — c'est la pile URLSession et le parsing réels qui sont exercés, pas
-/// une réimplémentation. Le chemin NOMINAL de ces deux routes, lui, a été vérifié contre le
-/// Pi (200 + `status: "success"`) ; seul le refus, qui ne se commande pas sur un appareil
-/// réel, se teste au stub.
+/// Like `BulkSettingsBootstrapTests`, these tests drive a real `MiloStore` against a real
+/// local HTTP server — the actual URLSession stack and parsing are what get exercised, not
+/// a reimplementation. The NOMINAL path of these two routes was verified against the Pi
+/// (200 + `status: "success"`); only the refusal, which cannot be commanded on a real
+/// device, is tested against the stub.
 @MainActor
 @Suite(.serialized)
 struct StatusEnvelopeTests {
 
-    @Test("Un égaliseur refusé en 200 arrête le spinner au lieu de le laisser tourner")
+    @Test("An equalizer refused with a 200 stops the spinner instead of leaving it running")
     func refusedEqualizerStopsSpinner() async throws {
         let backend = try StubMiloBackend.start()
         defer { backend.stop() }
@@ -34,16 +34,16 @@ struct StatusEnvelopeTests {
         try await waitUntil(timeout: 15) { store.state != nil }
 
         store.toggleFeature("equalizer")
-        #expect(store.loadingStates["equalizer"] == true, "le spinner part dès le clic")
+        #expect(store.loadingStates["equalizer"] == true, "the spinner starts on the click")
 
-        // Il doit tomber par le chemin d'erreur — au plancher d'affichage (1,2 s), très en
-        // deçà du filet de sécurité de 10 s qui le résolvait avant le correctif. C'est cet
-        // écart que la fenêtre de 5 s mesure.
+        // It must fall through the error path — at the display floor (1.2 s), well below
+        // the 10 s safety net that resolved it before the fix. That gap is what the 5 s
+        // window measures.
         try await waitUntil(timeout: 5) { store.loadingStates["equalizer"] != true }
         #expect(store.loadingStates["equalizer"] != true)
     }
 
-    @Test("Un /api/volume/state en erreur ne vide pas les volumes multiroom déjà connus")
+    @Test("A failing /api/volume/state does not empty the multiroom volumes already known")
     func failingVolumeStateKeepsLastKnownMultiroomVolume() async throws {
         let backend = try StubMiloBackend.start()
         defer { backend.stop() }
@@ -54,35 +54,35 @@ struct StatusEnvelopeTests {
         store.connectionManager.injectAPIServiceForTesting(host: "127.0.0.1", port: backend.port)
         store.miloDidConnect()
 
-        // Multiroom actif : le store charge de lui-même la structure ET les volumes.
+        // Multiroom active: the store loads the structure AND the volumes on its own.
         try await waitUntil(timeout: 15) { !store.multiroomVolume.clients.isEmpty }
         #expect(store.multiroomVolume.clients[StubMiloBackend.clientMac]?.volumeDb
                 == StubMiloBackend.clientVolumeDb)
 
-        // Le service volume tombe, puis l'app recharge — ce que fait tout événement de
-        // structure, comme l'ouverture de la sous-section.
+        // The volume service fails, then the app reloads — which is what any structure
+        // event does, such as opening the sub-section.
         let hitsBefore = backend.volumeStateHits
         backend.volumeStateFails = true
         store.loadMultiroomState()
 
         try await waitUntil(timeout: 10) { backend.volumeStateHits > hitsBefore }
-        try await Task.sleep(nanoseconds: 300_000_000)   // laisser l'échec se propager au store
+        try await Task.sleep(nanoseconds: 300_000_000)   // let the failure propagate to the store
 
         #expect(store.multiroomVolume.clients[StubMiloBackend.clientMac]?.volumeDb
                 == StubMiloBackend.clientVolumeDb,
-                "la dernière valeur connue doit survivre à l'échec, pas être écrasée par du vide")
+                "the last known value must survive the failure, not be overwritten with emptiness")
     }
 
-    // MARK: - Utilitaire
+    // MARK: - Helper
 
-    /// Attend qu'une condition devienne vraie, en laissant tourner la boucle principale.
+    /// Waits for a condition to become true, letting the main run loop turn.
     private func waitUntil(timeout: TimeInterval,
                            _ condition: () -> Bool,
                            sourceLocation: SourceLocation = #_sourceLocation) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             if Date() >= deadline {
-                Issue.record("condition non remplie après \(Int(timeout)) s", sourceLocation: sourceLocation)
+                Issue.record("condition not met after \(Int(timeout)) s", sourceLocation: sourceLocation)
                 return
             }
             try await Task.sleep(nanoseconds: 50_000_000)

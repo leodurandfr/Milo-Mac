@@ -1,0 +1,7 @@
+/*
+   InfoPlist.strings (Spanish)
+   Milō Mac
+*/
+
+// MARK: - Permission prompts
+"NSLocalNetworkUsageDescription" = "Milō necesita la red local para detectar y controlar su dispositivo Milō (milo.local).";

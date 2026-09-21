@@ -15,15 +15,15 @@ private class ThinTextField: NSTextField {
     }
 }
 
-/// HUD de volume du raccourci clavier.
+/// The keyboard shortcut's volume HUD.
 ///
-/// Main-thread-only, et désormais vérifié : ses fenêtres, vues et couches sont de
-/// l'AppKit pur. Les rappels de `Timer` et des moniteurs `NSEvent` sont typés
-/// `@Sendable` par le SDK alors qu'ils sont posés sur la run loop principale et n'en
-/// sortent jamais — d'où les `MainActor.assumeIsolated` : ils affirment au compilateur
-/// ce que la run loop garantit déjà, sans différer l'exécution (un saut par `Task`
-/// décalerait d'un tour la boucle d'animation à 120 Hz, et empêcherait le moniteur de
-/// clic de rendre sa valeur de retour).
+/// Main-thread-only, and now checked: its windows, views and layers are pure AppKit.
+/// The `Timer` and `NSEvent` monitor callbacks are typed `@Sendable` by the SDK even
+/// though they are scheduled on the main run loop and never leave it — hence the
+/// `MainActor.assumeIsolated` calls: they assert to the compiler what the run loop
+/// already guarantees, without deferring execution (a hop through `Task` would delay the
+/// 120 Hz animation loop by a run-loop turn, and would stop the click monitor from
+/// returning its value).
 @MainActor
 final class VolumeHUD {
     private var window: NSWindow?
@@ -46,10 +46,10 @@ final class VolumeHUD {
     private var animationTimer: Timer?
     private var currentOffset: CGFloat = 0
 
-    // Police + attributs construits une seule fois : updateVolume() tourne à
-    // ~33 Hz pendant un appui maintenu du raccourci, pas de lookup par tick.
+    // Font + attributes built once: updateVolume() runs at
+    // ~33 Hz while the shortcut is held, no per-tick lookup.
     private lazy var labelFont: NSFont = {
-        // Nom exact de la police (trouvé dans les informations du fichier)
+        // The font's exact name (found in the file's info)
         NSFont(name: "Space Mono Regular", size: 16)
             ?? NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
     }()
@@ -81,10 +81,10 @@ final class VolumeHUD {
 
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) + 1)
         window.backgroundColor = NSColor.clear
-        // Le fond du HUD (matériau .hudWindow + overlay sombre) reste visuellement
-        // sombre quel que soit le mode système. Sans forcer l'apparence, les couleurs
-        // dynamiques comme secondaryLabelColor se résolvent pour un fond clair en light
-        // mode et rendent le texte "-XX dB" quasi noir sur ce fond sombre.
+        // The HUD's background (.hudWindow material + dark overlay) stays visually
+        // dark whatever the system mode. Without forcing the appearance, dynamic
+        // colors such as secondaryLabelColor resolve for a light background in light
+        // mode and render the "-XX dB" text nearly black on that dark background.
         window.appearance = NSAppearance(named: .darkAqua)
         window.isOpaque = false
         window.hasShadow = false
@@ -105,11 +105,11 @@ final class VolumeHUD {
 
         window.alphaValue = 0
 
-        // Le moniteur doit répondre SYNCHRONEMENT (sa valeur de retour décide si le clic
-        // est avalé) : `assumeIsolated`, et non un saut par Task.
+        // The monitor has to answer SYNCHRONOUSLY (its return value decides whether the
+        // click is swallowed): `assumeIsolated`, not a hop through Task.
         //
-        // On ne fait traverser qu'un Bool : `assumeIsolated` exige un résultat Sendable,
-        // et NSEvent ne l'est pas. L'événement, lui, ne quitte jamais le main thread.
+        // Only a Bool crosses: `assumeIsolated` requires a Sendable result,
+        // and NSEvent is not. The event itself never leaves the main thread.
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             let swallowClick = MainActor.assumeIsolated { () -> Bool in
                 guard let self = self, event.window == self.window else { return false }
@@ -187,7 +187,7 @@ final class VolumeHUD {
 
         containerView.addSubview(sliderContainer)
 
-        // Fill view simple
+        // Simple fill view
         fillView = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: sliderHeight))
         guard let fillView = fillView else { return }
 
@@ -197,7 +197,7 @@ final class VolumeHUD {
 
         sliderContainer.addSubview(fillView)
 
-        // Volume label avec Space Mono
+        // Volume label, in Space Mono
         let thinLabel = ThinTextField(labelWithString: "-60 dB")
         volumeLabel = thinLabel
         guard let volumeLabel = volumeLabel else { return }
@@ -263,7 +263,7 @@ final class VolumeHUD {
         borderView.layer?.addSublayer(gradientLayer)
     }
 
-    // Limites de volume en dB (peuvent être mises à jour)
+    // Volume limits in dB (can be updated)
     private var limitMinDb: Double = VolumeDefaults.limitMinDb
     private var limitMaxDb: Double = VolumeDefaults.limitMaxDb
 
@@ -323,14 +323,14 @@ final class VolumeHUD {
         guard let fillView = fillView,
               let volumeLabel = volumeLabel else { return }
 
-        // --- Mise à jour du texte (seulement quand le dB arrondi change) ---
+        // --- Text update (only when the rounded dB value changes) ---
         let volumeText = "\(Int(round(volumeDb))) dB"
         if volumeText != lastRenderedText {
             lastRenderedText = volumeText
             volumeLabel.attributedStringValue = NSAttributedString(string: volumeText, attributes: labelAttributes)
         }
 
-        // --- Calcul largeur/position basé sur les limites dB ---
+        // --- Width/position computed from the dB limits ---
         let sliderWidth = windowWidth - 32
         let range = limitMaxDb - limitMinDb
         let percentage = range > 0 ? (volumeDb - limitMinDb) / range : 0
@@ -340,16 +340,16 @@ final class VolumeHUD {
         let fillX: CGFloat
 
         if targetWidth >= sliderHeight {
-            // Cas normal
+            // Normal case
             fillWidth = targetWidth
             fillX = 0
         } else {
-            // Cas spécial : largeur fixée au diamètre (cercle)
+            // Special case: width pinned to the diameter (a circle)
             fillWidth = sliderHeight
 
-            // Décalage progressif vers la gauche
-            let ratio = targetWidth / sliderHeight // entre 0 et 1
-            let maxOffset = sliderHeight // déplacement max vers la gauche
+            // Progressive shift to the left
+            let ratio = targetWidth / sliderHeight // between 0 and 1
+            let maxOffset = sliderHeight // maximum shift to the left
             fillX = -(1 - ratio) * maxOffset
         }
 
@@ -368,8 +368,8 @@ final class VolumeHUD {
     }
 
     private func scheduleHide() {
-        // Réutiliser le timer en repoussant son échéance : show() est appelé à
-        // chaque tick du raccourci, recréer un Timer 33 fois/s est inutile.
+        // Reuse the timer by pushing its fire date back: show() is called on
+        // every shortcut tick, recreating a Timer 33 times/s is pointless.
         if let timer = hideTimer, timer.isValid {
             timer.fireDate = Date().addingTimeInterval(3.0)
             return
@@ -398,9 +398,9 @@ final class VolumeHUD {
             startAnimation(from: currentOffset, to: slideOffset, duration: 0.3, easing: Self.easeInCubic, animateOpacity: (from: 1, to: 0)) { [weak self] in
                 guard let self = self, !self.isVisible else { return }
                 self.isHiding = false
-                // `self.window`, et non le `window` local : la closure est @Sendable, elle
-                // ne peut capturer que du Sendable — ce que VolumeHUD est (main-isolée),
-                // mais pas NSWindow.
+                // `self.window`, and not the local `window`: the closure is @Sendable, so it
+                // can only capture Sendable values — which VolumeHUD is (main-isolated),
+                // but NSWindow is not.
                 self.window?.orderOut(nil)
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
@@ -422,15 +422,15 @@ final class VolumeHUD {
 
     // MARK: - Animation curves
 
-    // `nonisolated` : maths pures, sans état. Sans ça elles héritent du @MainActor de la
-    // classe et ne peuvent plus être passées comme fonction @Sendable au timer.
+    // `nonisolated`: pure, stateless maths. Without it they inherit the class's @MainActor
+    // and can no longer be passed to the timer as a @Sendable function.
     private nonisolated static let springCurveValues: [CGFloat] = [
         0, 0.0121, 0.0454, 0.0961, 0.1602, 0.2342, 0.3149, 0.3993, 0.4848, 0.5694, 0.6511, 0.7285, 0.8004, 0.866, 0.9247, 0.9761, 1.0203, 1.0572, 1.0871, 1.1105, 1.1276, 1.1391, 1.1456, 1.1477, 1.146, 1.1412, 1.1337, 1.1243, 1.1134, 1.1015, 1.089, 1.0764, 1.0639, 1.0518, 1.0404, 1.0297, 1.02, 1.0113, 1.0037, 0.9971, 0.9917, 0.9872, 0.9838, 0.9812, 0.9795, 0.9785, 0.9782, 0.9784, 0.9791, 0.9802, 0.9816, 0.9832, 0.985, 0.9868, 0.9887, 0.9905, 0.9923, 0.994, 0.9956, 0.997, 0.9983, 0.9994, 1.0004, 1.0012, 1.0019, 1.0024, 1.0028, 1.003, 1.0032, 1.0032, 1.0032, 1.0031, 1.0029, 1.0027, 1.0025, 1.0022, 1.002, 1.0017, 1.0014, 1.0011, 1.0009, 1.0007, 1.0004, 1.0003, 1.0001, 0.9999, 0.9998, 0.9997, 0.9996, 0.9996, 0.9996, 0.9995, 0.9995, 0.9995, 0.9995, 0.9996, 0.9996, 0.9996, 0.9997, 0.9997, 1
     ]
 
-    // Des closures `@Sendable`, et non des méthodes statiques : une *référence* de méthode
-    // ne se convertit pas en fonction @Sendable, or c'est sous cette forme que la boucle
-    // d'animation (une closure @Sendable de Timer) les reçoit. Elles ne capturent rien.
+    // `@Sendable` closures, and not static methods: a method *reference* does not convert
+    // to a @Sendable function, and that is the form in which the animation loop (a
+    // @Sendable Timer closure) receives them. They capture nothing.
     private nonisolated static let springEasing: @Sendable (CGFloat) -> CGFloat = { t in
         let maxIndex = CGFloat(springCurveValues.count - 1)
         let scaledIndex = t * maxIndex
@@ -454,9 +454,9 @@ final class VolumeHUD {
         animationTimer?.invalidate()
         let startTime = CACurrentMediaTime()
 
-        // Le timer est invalidé DEPUIS la closure @Sendable, à l'extérieur de
-        // `assumeIsolated` : celle-ci n'accepte de faire traverser que du Sendable, et
-        // Timer ne l'est pas. Seul un Bool « l'animation continue-t-elle ? » traverse.
+        // The timer is invalidated FROM the @Sendable closure, outside
+        // `assumeIsolated`: that call only accepts carrying Sendable values across, and
+        // Timer is not. Only a Bool, "is the animation still running?", crosses.
         animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120.0, repeats: true) { [weak self] timer in
             let isRunning = MainActor.assumeIsolated { () -> Bool in
                 self?.advanceAnimation(startTime: startTime,
@@ -471,8 +471,8 @@ final class VolumeHUD {
         }
     }
 
-    /// Un pas de la boucle d'animation. Renvoie `false` quand elle est terminée — ou que
-    /// la fenêtre a disparu — auquel cas l'appelant invalide le timer.
+    /// One step of the animation loop. Returns `false` when it is done — or when the
+    /// window has gone — in which case the caller invalidates the timer.
     private func advanceAnimation(startTime: CFTimeInterval,
                                   from: CGFloat,
                                   to: CGFloat,
@@ -515,8 +515,8 @@ final class VolumeHUD {
         return false
     }
 
-    /// `isolated deinit` : la classe est main-only, et ce nettoyage touche fenêtre,
-    /// timers et moniteur d'événements — tous main-only eux aussi.
+    /// `isolated deinit`: the class is main-only, and this cleanup touches the window,
+    /// the timers and the event monitor — all main-only as well.
     isolated deinit {
         if let clickMonitor = clickMonitor {
             NSEvent.removeMonitor(clickMonitor)

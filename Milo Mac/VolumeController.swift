@@ -1,15 +1,14 @@
 import Foundation
 
-/// Envoi du volume vers le backend, avec debounce.
+/// Sends the volume to the backend, with debouncing.
 ///
-/// Ne connaît plus aucune vue : le slider SwiftUI écrit dans `MiloStore.sliderVolumeDb`
-/// et appelle `handleVolumeChange`. La seule chose que ce contrôleur expose à l'UI est
-/// `isUserInteracting`, qui sert à ne pas écraser la valeur que l'utilisateur est en
-/// train de manipuler avec l'écho (retardé) du serveur.
+/// It no longer knows about any view: the SwiftUI slider writes into
+/// `MiloStore.sliderVolumeDb` and calls `handleVolumeChange`. The only thing this
+/// controller exposes to the UI is `isUserInteracting`, which keeps the server's (delayed)
+/// echo from overwriting the value the user is currently dragging.
 ///
-/// Comme le reste de l'app, cette classe s'utilise exclusivement depuis le main thread —
-/// et `@MainActor` le fait désormais vérifier par le compilateur, au lieu de le promettre
-/// en commentaire.
+/// Like the rest of the app, this class is used exclusively from the main thread — and
+/// `@MainActor` now has the compiler check that, instead of promising it in a comment.
 @MainActor
 final class VolumeController {
     weak var apiService: MiloAPIService?
@@ -18,15 +17,15 @@ final class VolumeController {
     private var lastVolumeAPICall: Date?
     private var volumeDebounceWorkItem: DispatchWorkItem?
 
-    /// Lu par MiloStore pour ignorer l'écho serveur pendant que l'utilisateur
-    /// fait glisser le slider (sinon la valeur locale et la valeur serveur,
-    /// en retard, se disputent le contrôle).
+    /// Read by MiloStore to ignore the server echo while the user is dragging
+    /// the slider (otherwise the local value and the lagging server value
+    /// fight over control).
     private(set) var isUserInteracting = false
     private var lastUserInteraction: Date?
 
-    /// Dernière valeur connue du serveur : les commandes envoyées sont des
-    /// deltas (`/api/volume/adjust`), pas des valeurs absolues, donc il faut
-    /// une référence pour calculer l'écart.
+    /// Last value known to the server: the commands sent are deltas
+    /// (`/api/volume/adjust`), not absolute values, so a reference point is
+    /// needed to compute the difference.
     private var referenceVolumeDb: Double = 0
 
     private let volumeDebounceDelay: TimeInterval = 0.03
@@ -34,7 +33,7 @@ final class VolumeController {
     private let userInteractionTimeout: TimeInterval = 0.3
 
     func setCurrentVolume(_ volume: VolumeStatus) {
-        // Le serveur est la source de vérité tant que l'utilisateur ne touche à rien.
+        // The server is the source of truth as long as the user touches nothing.
         if !isUserInteracting {
             referenceVolumeDb = volume.volumeDb
         }
@@ -82,8 +81,8 @@ final class VolumeController {
         referenceVolumeDb = volumeDb
         lastVolumeAPICall = Date()
 
-        // La classe est main-isolée : cette Task hérite du main actor, et `pendingVolumeDb`
-        // se relit donc sur le main thread après l'await, sans MainActor.run explicite.
+        // The class is main-isolated: this Task inherits the main actor, so `pendingVolumeDb`
+        // is read back on the main thread after the await, with no explicit MainActor.run.
         Task {
             do {
                 try await apiService.adjustVolumeDb(delta)

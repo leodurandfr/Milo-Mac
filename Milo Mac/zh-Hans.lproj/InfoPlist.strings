@@ -1,0 +1,7 @@
+/*
+   InfoPlist.strings (Simplified Chinese)
+   Milō Mac
+*/
+
+// MARK: - Permission prompts
+"NSLocalNetworkUsageDescription" = "Milō 需要本地网络来发现和控制您的 Milō 设备 (milo.local)。";

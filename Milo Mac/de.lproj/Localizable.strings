@@ -31,7 +31,7 @@
 "musicLibrary.search.artists" = "Künstler";
 "musicLibrary.search.albums" = "Alben";
 "musicLibrary.search.songs" = "Titel";
-// Pluriel géré par Localizable.stringsdict — cette valeur est le repli.
+// Plural handled by Localizable.stringsdict — this value is the fallback.
 "musicLibrary.search.albumsCount" = "%d Alben";
 "musicLibrary.artist.noAlbums" = "Keine Alben";
 "musicLibrary.album.noSongs" = "Keine Titel";

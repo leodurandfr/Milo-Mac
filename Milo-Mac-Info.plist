@@ -26,7 +26,7 @@
     <key>CFBundleGetInfoString</key>
     <string>Milo Mac Audio Controller</string>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Milō a besoin du réseau local pour découvrir et contrôler votre appareil Milō (milo.local).</string>
+    <string>Milō needs the local network to discover and control your Milō device (milo.local).</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_http._tcp</string>

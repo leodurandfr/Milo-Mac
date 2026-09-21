@@ -31,6 +31,6 @@ buildServer.json
 .bsp/
 
 
-# Claude Code : settings.json est partagé, settings.local.json est personnel
-# (allowlist de permissions propre à chaque machine, chemins absolus compris).
+# Claude Code: settings.json is shared, settings.local.json is personal
+# (a per-machine permission allowlist, absolute paths included).
 .claude/settings.local.json

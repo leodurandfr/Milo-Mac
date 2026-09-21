@@ -1,48 +1,46 @@
 import SwiftUI
 
-/// Slider de volume : le `Slider` **natif** de SwiftUI, sans surcouche.
+/// Volume slider: SwiftUI's **native** `Slider`, with no layer on top.
 ///
-/// Aucun style forcé (pas de `.controlSize(.extraLarge)`, pas de pastille masquée, pas
-/// d'icône superposée) : le contrôle système adopte Liquid Glass de lui-même à
-/// l'interaction, et on hérite du clavier et de l'accessibilité sans rien écrire.
-/// L'icône de haut-parleur est posée à côté du rail, comme le fait le natif.
+/// No forced styling (no `.controlSize(.extraLarge)`, no hidden thumb, no overlaid icon):
+/// the system control adopts Liquid Glass on its own when interacted with, and we inherit
+/// keyboard support and accessibility without writing a line.
+/// The speaker icon sits next to the track, the way the native control does it.
 struct VolumeSlider: View {
     @Binding var valueDb: Double
     let range: (minDb: Double, maxDb: Double)
     let onChange: (Double) -> Void
-    /// Maintien d'une icône (`true` = augmenter, `false` = diminuer) : `true`/`false`
-    /// pour le second paramètre marque le début/la fin de la pression, exactement les
-    /// deux bords qu'il faut pour piloter le "hold" du raccourci clavier depuis un
-    /// bouton de souris plutôt qu'une touche.
+    /// Holding an icon (`true` = increase, `false` = decrease): `true`/`false` for the
+    /// second parameter marks the start/end of the press, exactly the two edges needed
+    /// to drive the keyboard shortcut's "hold" from a mouse button rather than a key.
     let onHoldChange: (_ increase: Bool, _ isHolding: Bool) -> Void
 
-    /// Grossissement de l'icône pendant le "bounce" qui signale qu'on a atteint une
-    /// extrémité. Repart tout seul à 1 une fois le spring de retour terminé.
+    /// Icon magnification during the "bounce" that signals an end of the range has been
+    /// reached. Returns to 1 on its own once the spring back is done.
     @State private var minIconScale: CGFloat = 1
     @State private var maxIconScale: CGFloat = 1
 
-    /// N'arme le bounce qu'à l'ENTRÉE dans l'extrémité, pas à chaque valeur reçue tant
-    /// qu'on y reste collé (le thumb continue d'émettre pendant qu'on le maintient en
-    /// butée) — sans ça le spring se relance en boucle et ne finit jamais sa course.
+    /// Arms the bounce only on ENTERING the end of the range, not on every value received
+    /// while pinned there (the thumb keeps emitting while held against the stop) — without
+    /// this the spring restarts in a loop and never finishes its travel.
     @State private var wasAtMin = false
     @State private var wasAtMax = false
 
     var body: some View {
-        // Deux icônes encadrent le rail, comme le panneau « Son » : un haut-parleur nu à
-        // gauche, un haut-parleur avec ondes à droite. Elles bornent l'échelle et,
-        // cliquées, crantent le volume d'un pas — exactement ce que fait le raccourci
-        // clavier, en façade.
+        // Two icons frame the track, like the "Sound" panel: a bare speaker on the left,
+        // a speaker with waves on the right. They bound the scale and, when clicked, notch
+        // the volume by one step — exactly what the keyboard shortcut does, in visible form.
         //
-        // Posées AUTOUR du Slider, dans ce HStack, et non via `minimumValueLabel` /
-        // `maximumValueLabel` : ces labels-là ignorent la police qu'on leur passe et se
-        // dimensionnent eux-mêmes (vérifié — passer de 14 à 10,5 pt ne changeait rien au
-        // rendu). En les sortant, on reprend la main sur leur taille, et le Slider reste
-        // natif.
+        // Placed AROUND the Slider, in this HStack, rather than via `minimumValueLabel` /
+        // `maximumValueLabel`: those labels ignore the font handed to them and size
+        // themselves (verified — going from 14 to 10.5 pt changed nothing in the render).
+        // Taking them out puts us back in control of their size, and the Slider stays
+        // native.
         HStack(spacing: MenuRowMetrics.sliderIconGap) {
-            // Le pas et la répétition accélérée vivent dans `onHoldChange` (câblé sur
-            // `GlobalHotkeyManager` côté appelant) — pas d'action ici : `isPressed`
-            // (via le `ButtonStyle`) est le seul signal utile, il porte à la fois le
-            // début et la fin du maintien.
+            // The step and the accelerating repeat live in `onHoldChange` (wired to
+            // `GlobalHotkeyManager` on the caller's side) — no action here: `isPressed`
+            // (via the `ButtonStyle`) is the only useful signal, and it carries both the
+            // start and the end of the hold.
             Button {} label: {
                 Image(systemName: "speaker.fill")
                     .font(.system(size: MenuRowMetrics.sliderIconSize))
@@ -54,8 +52,8 @@ struct VolumeSlider: View {
             .accessibilityLabel(L("accessibility.volume_decrease"))
 
             Slider(value: binding, in: bounds)
-                // `.small` amincit le rail : le Slider par défaut a un rail de 6 px là où
-                // celui de « Son » n'en fait que 4.
+                // `.small` thins the track: the default Slider has a 6 px track where
+                // "Sound" has only 4.
                 .controlSize(.small)
                 .accessibilityLabel(L("accessibility.volume_slider"))
 
@@ -81,9 +79,9 @@ struct VolumeSlider: View {
         }
     }
 
-    /// Grossit puis relâche — même ressort qu'au premier jet (l'amplitude et le rebond
-    /// élastique du retour étaient bons), mais étiré dans le temps : montée plus lente,
-    /// pause plus longue en haut, retour plus lent.
+    /// Grows then releases — the same spring as the first pass (the amplitude and the
+    /// elastic rebound on the way back were right), but stretched in time: slower rise,
+    /// longer pause at the top, slower return.
     private func bounce(_ scale: Binding<CGFloat>) {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.35)) {
             scale.wrappedValue = 1.3
@@ -95,7 +93,7 @@ struct VolumeSlider: View {
         }
     }
 
-    // MARK: - Valeur
+    // MARK: - Value
 
     private var binding: Binding<Double> {
         Binding(
@@ -104,8 +102,8 @@ struct VolumeSlider: View {
         )
     }
 
-    /// Les limites viennent du backend et peuvent arriver dégénérées (0/0) le temps que
-    /// le cache s'amorce — un `Slider` avec un intervalle vide plante.
+    /// The limits come from the backend and can arrive degenerate (0/0) while the cache
+    /// bootstraps — a `Slider` with an empty range crashes.
     private var bounds: ClosedRange<Double> {
         guard range.maxDb > range.minDb else {
             return VolumeDefaults.limitMinDb...VolumeDefaults.limitMaxDb
@@ -120,19 +118,18 @@ private extension Double {
     }
 }
 
-/// Couleur ET signal de maintien des icônes de haut-parleur, tous deux câblés sur
-/// `isPressed` plutôt que sur une action de `Button` — un tap classique ne distingue
-/// pas "début" de "fin" de pression, alors que c'est justement ce dont a besoin le
-/// "hold" façon raccourci clavier (voir `onHoldChange` sur `VolumeSlider`).
+/// Both the color AND the hold signal of the speaker icons, wired to `isPressed` rather
+/// than to a `Button` action — a plain tap does not distinguish "start" from "end" of a
+/// press, and that is precisely what the keyboard-shortcut-style "hold" needs (see
+/// `onHoldChange` on `VolumeSlider`).
 ///
-/// Couleur : au repos, `.secondary` (le style hiérarchique) s'assombrit en composant
-/// avec le style primaire de l'environnement — visible à travers le verre du panneau,
-/// où il rend nettement plus gris que dans « Son ». `secondaryLabelColor` est la même
-/// couleur sémantique système, mais appliquée à plat (une seule passe d'opacité, pas de
-/// composition hiérarchique), ce qui est exactement ce que fait le natif. Tenue,
-/// l'icône passe à `labelColor` — le même gris à pleine opacité, donc blanc en
-/// apparence sombre. Aucune `withAnimation` : le changement suit `isPressed` sans
-/// fondu, gris dès le relâchement, comme demandé.
+/// Color: at rest, `.secondary` (the hierarchical style) darkens by compositing with the
+/// environment's primary style — visible through the panel's glass, where it renders
+/// markedly greyer than in "Sound". `secondaryLabelColor` is the same semantic system
+/// color, but applied flat (a single opacity pass, no hierarchical compositing), which is
+/// exactly what the native control does. While held, the icon switches to `labelColor` —
+/// the same grey at full opacity, hence white in dark appearance. No `withAnimation`: the
+/// change follows `isPressed` with no fade, grey the moment it is released, as intended.
 private struct VolumeIconButtonStyle: ButtonStyle {
     let onPressedChange: (Bool) -> Void
 

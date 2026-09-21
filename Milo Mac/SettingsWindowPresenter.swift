@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// Présente la fenêtre de Réglages, qui héberge la vue SwiftUI `SettingsView`.
+/// Presents the Settings window, which hosts the SwiftUI `SettingsView`.
 ///
-/// Comme MenuBarShell, c'est une coquille AppKit minimale autour d'une vue 100 % SwiftUI.
-/// La scène `Settings` de SwiftUI n'est pas utilisable ici : `SettingsLink` ne s'ouvre
-/// que depuis l'arbre de scènes de l'App, or notre panneau vit dans une NSPanel présentée
-/// par un NSStatusItem — hors de cet arbre.
+/// Like MenuBarShell, this is a minimal AppKit shell around a 100% SwiftUI view.
+/// SwiftUI's `Settings` scene is not usable here: `SettingsLink` only opens from the
+/// App's scene tree, and our panel lives in an NSPanel presented by an NSStatusItem —
+/// outside that tree.
 @MainActor
 enum SettingsWindowPresenter {
     private static var controller: SettingsWindowController?
@@ -50,17 +50,17 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         )
         let hosting = NSHostingController(rootView: SettingsView(vm: viewModel, store: store))
 
-        // ⚠️ Surtout PAS `.preferredContentSize` : AppKit lit alors `preferredContentSize`
-        // depuis `-[NSViewController updateViewConstraints]`, donc PENDANT la passe de mise à
-        // jour des contraintes de la fenêtre. SwiftUI mesure, et cette mesure ré-invalide les
-        // contraintes — la passe ne converge jamais et AppKit lève, au bout de N tours :
-        // « The window has been marked as needing another Update Constraints in Window pass,
+        // ⚠️ Definitely NOT `.preferredContentSize`: AppKit then reads `preferredContentSize`
+        // from `-[NSViewController updateViewConstraints]`, hence DURING the window's constraint
+        // update pass. SwiftUI measures, and that measurement re-invalidates the constraints —
+        // the pass never converges and AppKit throws, after N rounds:
+        // "The window has been marked as needing another Update Constraints in Window pass,
         // but it has already had more Update Constraints in Window passes than there are views
-        // in the window. » (crash à l'ouverture des Réglages depuis le panneau).
+        // in the window." (a crash when opening Settings from the panel).
         //
-        // `.intrinsicContentSize` donne la même mesure (fittingSize) sans cette lecture pendant
-        // la passe. La fenêtre, elle, est dimensionnée ici puis par `resizeWindowToFit()` —
-        // ce qu'elle faisait déjà pour le dépliage de la section « Audio Mac ».
+        // `.intrinsicContentSize` gives the same measurement (fittingSize) without that read
+        // during the pass. The window itself is sized here and then by `resizeWindowToFit()` —
+        // which it already did for the "Mac Audio" section's expansion.
         hosting.sizingOptions = [.intrinsicContentSize]
 
         let window = NSWindow(contentViewController: hosting)
@@ -70,7 +70,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.delegate = self
         window.setContentSize(hosting.view.fittingSize)
 
-        // La section « Audio Mac » se déplie/replie : la fenêtre doit suivre.
+        // The "Mac Audio" section expands and collapses: the window has to follow.
         viewModel.onNeedsResize = { [weak self] in
             DispatchQueue.main.async { self?.resizeWindowToFit() }
         }
@@ -85,19 +85,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func resizeWindowToFit() {
         guard let window, let hostingController else { return }
-        // Mesurer le nouveau contenu tout de suite : sans ça, `fittingSize` renverrait encore
-        // la hauteur d'AVANT le dépliage, et la fenêtre se redimensionnerait un tour trop tard.
+        // Measure the new content right away: without this, `fittingSize` would still return
+        // the height from BEFORE the expansion, and the window would resize one round too late.
         hostingController.view.layoutSubtreeIfNeeded()
         let fittingSize = hostingController.view.fittingSize
         var frame = window.frame
         let titleBarHeight = frame.height - window.contentLayoutRect.height
         let newHeight = fittingSize.height + titleBarHeight
-        // Ancrer par le haut : sinon la fenêtre « descend » à chaque dépliage.
+        // Anchor by the top: otherwise the window "walks down" on every expansion.
         frame.origin.y -= (newHeight - frame.height)
         frame.size.height = newHeight
-        // `animate: false` : le contenu, lui, apparaît instantanément (la Section a déjà
-        // `.animation(nil, …)`). Animer la fenêtre la ferait traîner ~0,2 s derrière son
-        // contenu — c'est ce décalage qu'on lisait comme « lent à s'ouvrir ».
+        // `animate: false`: the content itself appears instantly (the Section already has
+        // `.animation(nil, …)`). Animating the window would make it lag ~0.2 s behind its
+        // content — that lag is what read as "slow to open".
         window.setFrame(frame, display: true, animate: false)
     }
 

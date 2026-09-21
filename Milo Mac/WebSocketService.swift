@@ -1,45 +1,45 @@
 import Foundation
 import Synchronization
 
-/// Comme MiloConnectionManagerDelegate : les rappels sont resynchronisés sur le main
-/// thread avant d'être émis (voir `parseMessage`).
+/// Like MiloConnectionManagerDelegate: the callbacks are resynchronized onto the main
+/// thread before being emitted (see `parseMessage`).
 @MainActor
 protocol WebSocketServiceDelegate: AnyObject {
     func webSocketDidConnect()
     func webSocketDidDisconnect()
-    /// La tentative de connexion a échoué avant que le handshake n'aboutisse
-    /// (didOpen jamais reçu). Distinct de webSocketDidDisconnect pour que le
-    /// connection manager puisse relancer la découverte depuis la phase
-    /// .connecting au lieu d'y rester bloqué.
+    /// The connection attempt failed before the handshake completed
+    /// (didOpen never received). Distinct from webSocketDidDisconnect so the
+    /// connection manager can restart discovery from the .connecting phase
+    /// instead of staying stuck there.
     func webSocketDidFailToConnect()
     func didReceiveStateUpdate(_ state: MiloState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
-    /// La *structure* multiroom a changé (un client s'est connecté/déconnecté, une zone a
-    /// été créée/modifiée/supprimée). Le store re-fetch `/api/multiroom/state` plutôt que de
-    /// réappliquer le diff d'union du wire — plus robuste, et la liste n'est pas assez grande
-    /// pour que le coût compte.
+    /// The multiroom *structure* has changed (a client connected/disconnected, a zone was
+    /// created/modified/deleted). The store re-fetches `/api/multiroom/state` rather than
+    /// reapplying the wire's union diff — more robust, and the list is not large enough for
+    /// the cost to matter.
     func didReceiveMultiroomStructureChanged()
-    /// Volume/mute LIVE par client et par zone (porté par `volume/volume_changed` en mode
-    /// multiroom). Alimente les sliders de la sous-section.
+    /// LIVE volume/mute per client and per zone (carried by `volume/volume_changed` in
+    /// multiroom mode). Feeds the sub-section's sliders.
     func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
 }
 
-/// Transport WebSocket : les mises à jour poussées par le backend.
+/// WebSocket transport: the updates pushed by the backend.
 ///
-/// L'état de connexion (`webSocketTask`, `isOpen`, `isConnecting`, le timer de ping)
-/// appartient au **main actor** — d'où `@MainActor` sur la classe. Mais URLSession livre
-/// ses rappels sur SA queue déléguée : la boucle de réception, les rappels de ping et les
-/// méthodes de `URLSessionWebSocketDelegate` sont donc `nonisolated`, et se resynchronisent
-/// explicitement sur le main thread. C'est délibéré, et c'est ce que faisait déjà le code.
+/// The connection state (`webSocketTask`, `isOpen`, `isConnecting`, the ping timer)
+/// belongs to the **main actor** — hence `@MainActor` on the class. But URLSession delivers
+/// its callbacks on ITS delegate queue: the receive loop, the ping callbacks and the
+/// `URLSessionWebSocketDelegate` methods are therefore `nonisolated`, and resynchronize
+/// explicitly onto the main thread. This is deliberate, and it is what the code already did.
 ///
-/// La **génération** est la seule donnée qui franchisse cette frontière : elle est lue
-/// depuis la queue déléguée pour écarter les rappels d'une connexion périmée (un ping ou
-/// une erreur de l'ancienne socket, arrivant après une reconnexion sleep/wake, ne doit pas
-/// détruire la nouvelle). D'où le `Mutex` — là où un `NSLock` demandait au compilateur de
-/// nous croire, il vérifie.
+/// The **generation** is the only piece of data that crosses that boundary: it is read from
+/// the delegate queue to discard callbacks from a stale connection (a ping or an error from
+/// the old socket, arriving after a sleep/wake reconnection, must not tear down the new
+/// one). Hence the `Mutex` — where an `NSLock` asked the compiler to take our word for it,
+/// this one checks.
 @MainActor
 final class WebSocketService: NSObject {
     weak var delegate: WebSocketServiceDelegate?
@@ -48,10 +48,10 @@ final class WebSocketService: NSObject {
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var isOpen = false
-    // true entre connect() et didOpen — permet de signaler un échec de handshake.
+    // true between connect() and didOpen — lets a handshake failure be reported.
     private var isConnecting = false
 
-    /// Voir l'en-tête de classe : franchit la frontière d'isolation, donc sous verrou.
+    /// See the class header: it crosses the isolation boundary, hence the lock.
     private nonisolated let generation = Mutex(0)
 
     private nonisolated var currentGeneration: Int {
@@ -80,8 +80,8 @@ final class WebSocketService: NSObject {
         NSLog("🔌 WebSocket connecting to %@ (gen %d)", urlString, newGeneration)
 
         cleanupCurrentConnection()
-        // Ne pas dépendre de l'ordre d'appel du caller (resetSession avant
-        // connect) : l'état "ouvert" appartient au cycle de vie de la connexion.
+        // Do not depend on the caller's call order (resetSession before
+        // connect): the "open" state belongs to the connection's lifecycle.
         isOpen = false
         generation.withLock { $0 = newGeneration }
 
@@ -123,12 +123,12 @@ final class WebSocketService: NSObject {
         webSocketTask = nil
     }
 
-    /// La boucle de réception capture sa propre task : le callback (queue
-    /// déléguée URLSession) ne relit jamais self.webSocketTask, qui est écrit
-    /// sur le main thread — pas de lecture croisée non synchronisée.
+    /// The receive loop captures its own task: the callback (URLSession's
+    /// delegate queue) never reads back self.webSocketTask, which is written
+    /// on the main thread — no unsynchronized cross-reads.
     ///
-    /// `nonisolated` : elle tourne sur la queue déléguée d'URLSession, et se rappelle
-    /// elle-même depuis ce même rappel.
+    /// `nonisolated`: it runs on URLSession's delegate queue, and calls itself back from
+    /// that same callback.
     private nonisolated func startListening(task: URLSessionWebSocketTask, generation: Int) {
         task.receive { [weak self] result in
             guard let self = self, self.currentGeneration == generation else { return }
@@ -163,9 +163,9 @@ final class WebSocketService: NSObject {
             isConnecting = false
             delegate?.webSocketDidDisconnect()
         } else if isConnecting {
-            // Handshake jamais abouti (port fermé, backend WS pas encore prêt) :
-            // sans ce signal, le connection manager resterait en .connecting
-            // pour toujours — aucune autre voie de récupération n'est active.
+            // The handshake never completed (closed port, WS backend not ready yet):
+            // without this signal the connection manager would stay in .connecting
+            // forever — no other recovery path is active.
             isConnecting = false
             delegate?.webSocketDidFailToConnect()
         }
@@ -186,16 +186,16 @@ final class WebSocketService: NSObject {
         }
     }
 
-    /// Un événement **décodé**, prêt à être livré au delegate.
+    /// A **decoded** event, ready to be delivered to the delegate.
     ///
-    /// Sendable, et c'est tout l'intérêt : le décodage a lieu sur la queue déléguée
-    /// d'URLSession, la livraison sur le main actor. Faire traverser le `[String: Any]`
-    /// brut (non-Sendable) obligerait à mentir au compilateur ; on fait donc traverser le
-    /// résultat typé, ce qui déplace au passage tout le parsing hors du main thread.
+    /// Sendable, and that is the whole point: decoding happens on URLSession's delegate
+    /// queue, delivery on the main actor. Carrying the raw `[String: Any]` (non-Sendable)
+    /// across would mean lying to the compiler; so we carry the typed result across, which
+    /// also moves all the parsing off the main thread.
     private enum DecodedEvent: Sendable {
-        /// Toute mise à jour d'état portant full_state (catégories "source" et "system",
-        /// _FULL_STATE_CATEGORIES côté backend). L'état EQ arrive via le system/state_changed
-        /// compagnon, pas via equalizer/enabled_changed.
+        /// Any state update carrying full_state (the "source" and "system" categories,
+        /// _FULL_STATE_CATEGORIES on the backend side). The EQ state arrives via the
+        /// companion system/state_changed, not via equalizer/enabled_changed.
         case state(MiloState, multiroomChanged: Bool)
         case volume(VolumeStatus, multiroom: MultiroomVolume?)
         case multiroomFailed
@@ -213,12 +213,12 @@ final class WebSocketService: NSObject {
             return
         }
 
-        // Le backend diffuse en broadcast à TOUS les clients : milo-mac reçoit
-        // donc aussi quantité d'events destinés au frontend web
+        // The backend broadcasts to ALL clients: milo-mac therefore also receives
+        // plenty of events meant for the web frontend
         // (settings/fan_status_changed, settings/bt_remote_status_changed,
         // settings/mac_roc_changed, routing/multiroom_ready, equalizer/levels,
-        // system/ping…) qu'il ne consomme pas. On ne logge et ne traite QUE les
-        // events utiles — le reste est ignoré silencieusement, sans hop main-thread.
+        // system/ping…) that it does not consume. We log and handle ONLY the
+        // useful events — the rest is ignored silently, with no main-thread hop.
         let decoded: DecodedEvent?
         switch (category, eventType) {
         case ("system", "state_changed"),
@@ -232,8 +232,8 @@ final class WebSocketService: NSObject {
             decoded = .multiroomFailed
         case ("multiroom", "client_state_changed"),
              ("multiroom", "zone_changed"):
-            // Un seul signal côté store : la structure a bougé, re-fetch. On ne distingue
-            // pas client vs zone — le re-fetch couvre les deux.
+            // A single signal on the store side: the structure moved, re-fetch. We do not
+            // distinguish client from zone — the re-fetch covers both.
             decoded = .multiroomStructureChanged
         case ("settings", "volume_limits_changed"):
             decoded = Self.decodeVolumeLimits(eventData)
@@ -269,9 +269,9 @@ final class WebSocketService: NSObject {
 
         case .volume(let volume, let multiroom):
             delegate?.didReceiveVolumeUpdate(volume)
-            // En mode multiroom, le même événement porte le volume/mute par client et par
-            // zone (`state.clients` / `state.zones`) — la source LIVE des sliders de la
-            // sous-section.
+            // In multiroom mode, the same event carries the per-client and per-zone
+            // volume/mute (`state.clients` / `state.zones`) — the LIVE source of the
+            // sub-section's sliders.
             if let multiroom {
                 delegate?.didReceiveMultiroomVolumeUpdate(multiroom)
             }
@@ -290,7 +290,7 @@ final class WebSocketService: NSObject {
         }
     }
 
-    // MARK: - Décodage (hors main thread)
+    // MARK: - Decoding (off the main thread)
 
     private nonisolated static func decodeState(_ data: [String: Any]) -> DecodedEvent? {
         guard let fullState = data["full_state"] as? [String: Any] else { return nil }
@@ -302,7 +302,7 @@ final class WebSocketService: NSObject {
         let volumeDb: Double
         let state = data["state"] as? [String: Any]
 
-        // Priorité au nouveau format (state.global_volume_db)
+        // The new format takes priority (state.global_volume_db)
         if let state = state, let db = state["global_volume_db"] as? Double {
             volumeDb = db
         } else if let state = state, let globalStr = state["global_volume_db"] as? String,
@@ -319,8 +319,8 @@ final class WebSocketService: NSObject {
         let mode = state?["mode"] as? String
         let multiroomEnabled = (mode == "multiroom") || (data["multiroom_enabled"] as? Bool ?? false)
 
-        // Volume/mute par client et par zone : seulement en mode multiroom, et seulement s'il
-        // y a effectivement des clients/zones (sinon nil, on ne réveille pas le store pour rien).
+        // Per-client and per-zone volume/mute: only in multiroom mode, and only if there
+        // really are clients/zones (otherwise nil, so we do not wake the store for nothing).
         let multiroom: MultiroomVolume?
         if let state, mode == "multiroom" {
             let mv = MultiroomVolume(state: state)
@@ -329,8 +329,8 @@ final class WebSocketService: NSObject {
             multiroom = nil
         }
 
-        // Les limites ne sont pas dans les événements WebSocket ; elles sont préservées
-        // depuis le cache API par `MiloStore.didReceiveVolumeUpdate`.
+        // The limits are not in the WebSocket events; they are preserved from the API cache
+        // by `MiloStore.didReceiveVolumeUpdate`.
         return .volume(VolumeStatus(
             volumeDb: volumeDb,
             multiroomEnabled: multiroomEnabled,
@@ -340,12 +340,12 @@ final class WebSocketService: NSObject {
     }
 
     // settings/volume_limits_changed → data.limits.{min_db,max_db}
-    // (même enveloppe "limits" que l'ancienne route /api/settings/volume-limits)
+    // (the same "limits" envelope as the old /api/settings/volume-limits route)
     private nonisolated static func decodeVolumeLimits(_ data: [String: Any]) -> DecodedEvent? {
         guard let limits = data["limits"] as? [String: Any],
               let minDb = (limits["min_db"] as? Double) ?? (limits["min_db"] as? Int).map(Double.init),
               let maxDb = (limits["max_db"] as? Double) ?? (limits["max_db"] as? Int).map(Double.init),
-              minDb < maxDb else { return nil }  // garde-fou : jamais de 0/0 ni de plage inversée
+              minDb < maxDb else { return nil }  // guard rail: never 0/0, never an inverted range
 
         return .volumeLimits(minDb: minDb, maxDb: maxDb)
     }
@@ -362,9 +362,9 @@ final class WebSocketService: NSObject {
 
     private func startPingTimer() {
         pingTimer?.invalidate()
-        // Mode .common : le keepalive doit survivre au suivi de la souris — glisser le slider
-        // ou faire défiler la liste des stations bascule la run loop en `.eventTracking`, où
-        // un timer posé dans le seul mode par défaut ne se déclencherait plus.
+        // .common mode: the keepalive has to survive mouse tracking — dragging the slider
+        // or scrolling the station list flips the run loop into `.eventTracking`, where a
+        // timer scheduled in the default mode alone would stop firing.
         let timer = Timer(timeInterval: pingInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.sendPing() }
         }
@@ -375,12 +375,12 @@ final class WebSocketService: NSObject {
     private func sendPing() {
         guard isOpen else { return }
 
-        // Capturer la génération : un ping de l'ancienne connexion dont le
-        // callback d'erreur arrive après une reconnexion (sleep/wake) ne doit
-        // pas détruire la nouvelle connexion, déjà ouverte.
+        // Capture the generation: a ping from the old connection whose error
+        // callback arrives after a reconnection (sleep/wake) must not tear down
+        // the new connection, already open.
         let pingGeneration = currentGeneration
         webSocketTask?.sendPing { [weak self] error in
-            // Rappel livré sur la queue déléguée d'URLSession.
+            // Callback delivered on URLSession's delegate queue.
             if let error = error {
                 NSLog("❌ Ping failed: %@", error.localizedDescription)
                 DispatchQueue.main.async {
@@ -400,8 +400,8 @@ final class WebSocketService: NSObject {
 
 // MARK: - URLSessionWebSocketDelegate
 
-/// Livrées sur la queue déléguée d'URLSession, d'où `nonisolated` : chacune se
-/// resynchronise sur le main thread, où vit l'état de connexion.
+/// Delivered on URLSession's delegate queue, hence `nonisolated`: each one
+/// resynchronizes onto the main thread, where the connection state lives.
 extension WebSocketService: URLSessionWebSocketDelegate {
     nonisolated func urlSession(_ session: URLSession, webSocketTask task: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         NSLog("✅ WebSocket connected (gen %d)", currentGeneration)

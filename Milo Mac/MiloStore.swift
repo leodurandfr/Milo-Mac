@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// Ce que le panneau peut afficher. Le panneau n'a pas de sous-menus natifs : la liste des
-/// stations radio n'est pas un flyout, elle remplace le contenu racine sur place.
+/// What the panel can display. The panel has no native submenus: the radio station list
+/// is not a flyout, it replaces the root content in place.
 enum PanelRoute: Hashable, Sendable {
     case root
     case radioStations
@@ -10,9 +10,9 @@ enum PanelRoute: Hashable, Sendable {
     case musicLibraryArtist
     case musicLibraryAlbum
 
-    /// Les routes du fil « bibliothèque musicale » : y circuler garde recherche et pages, en
-    /// sortir les efface (voir `MiloStore.finishRouteMorph`). Un `switch` exhaustif plutôt qu'un
-    /// `Set` littéral — une route ajoutée plus tard ne pourra pas oublier de se positionner.
+    /// The routes of the "music library" thread: moving within it keeps the search and the pages,
+    /// leaving it clears them (see `MiloStore.finishRouteMorph`). An exhaustive `switch` rather than
+    /// a literal `Set` — a route added later cannot forget to place itself.
     var isMusicLibrary: Bool {
         switch self {
         case .musicLibrarySearch, .musicLibraryArtist, .musicLibraryAlbum: true
@@ -21,60 +21,60 @@ enum PanelRoute: Hashable, Sendable {
     }
 }
 
-/// Morceau affiché par `NowPlayingRow`, tous sources confondues — voir `MiloStore.nowPlaying`.
+/// A song displayed by `NowPlayingRow`, whatever the source — see `MiloStore.nowPlaying`.
 struct NowPlayingInfo: Equatable {
-    /// Identifiant Subsonic du morceau (`track_id`), pour l'instant seulement pour la
-    /// bibliothèque musicale (`nil` partout ailleurs, radio compris) — sert à savoir si UNE
-    /// ligne précise de résultat de recherche/album est celle en cours (voir
+    /// The song's Subsonic identifier (`track_id`), for now only for the
+    /// music library (`nil` everywhere else, radio included) — used to tell whether ONE
+    /// specific search-result/album row is the current one (see
     /// `MiloStore.isCurrentMusicLibrarySong`).
     let id: String?
     let title: String
     let artist: String?
     let artworkURL: URL?
-    /// Médaillon affiché dans un coin de la pochette — pour l'instant, uniquement le logo de la
-    /// STATION quand Radio joue un morceau reconnu avec sa propre pochette (voir
-    /// `MiloStore.radioNowPlaying`). `nil` partout ailleurs.
+    /// A badge displayed in a corner of the cover art — for now, only the STATION's logo
+    /// when Radio is playing a recognized song with its own cover art (see
+    /// `MiloStore.radioNowPlaying`). `nil` everywhere else.
     let badgeArtworkURL: URL?
     let isPlaying: Bool
 }
 
-/// Sources qui exposent une vraie télécommande côté backend (`COMMANDS` non vide dans Milo),
-/// et donc les seules pour qui `NowPlayingRow` peut afficher un bouton play/pause générique et
-/// un bouton suivant. Radio n'y figure pas : elle n'a pas de vraie pause ni de morceau suivant,
-/// elle a son propre bouton stop/relance dédié (`MiloStore.toggleRadioNowPlaying`).
+/// The sources that expose a genuine remote control on the backend side (a non-empty `COMMANDS`
+/// in Milo), and therefore the only ones for which `NowPlayingRow` can display a generic
+/// play/pause button and a next button. Radio is not among them: it has no real pause and no next
+/// song, it has its own dedicated stop/restart button (`MiloStore.toggleRadioNowPlaying`).
 ///
-/// AirPlay, DLNA et Qobuz sont des récepteurs PASSIFS : AirPlay 2 ne supporte pas le contrôle
-/// distant, DLNA et Qobuz sont pilotés par l'émetteur ou l'application tierce — leur
-/// `COMMANDS` est vide côté backend, et lui envoyer pause/next échouerait en 400 : elles
-/// n'apparaissent dans aucune des deux listes. Podcast n'a pas de notion d'épisode suivant
-/// (pas de commande `next` dans sa table), d'où son absence de `nextSources`.
+/// AirPlay, DLNA and Qobuz are PASSIVE receivers: AirPlay 2 does not support remote
+/// control, DLNA and Qobuz are driven by the sender or by the third-party app — their
+/// `COMMANDS` is empty on the backend side, and sending them pause/next would fail with a 400:
+/// they appear in neither list. Podcast has no notion of a next episode
+/// (no `next` command in its table), hence its absence from `nextSources`.
 ///
-/// TIDAL, en revanche, est un lecteur ACTIF comme Spotify malgré son statut de récepteur
-/// Connect : le daemon tisoc expose pause/resume/next/prev (`COMMANDS` de
-/// `backend/sources/tidal/source.py`), donc la source figure dans les deux listes. Seul `seek`
-/// lui manque — le protocole contrôleur ne l'expose pas —, ce qui ne change rien ici : le
-/// panneau n'offre pas de barre de progression cliquable.
+/// TIDAL, on the other hand, is an ACTIVE player like Spotify despite its status as a
+/// Connect receiver: the tisoc daemon exposes pause/resume/next/prev (the `COMMANDS` of
+/// `backend/sources/tidal/source.py`), so the source appears in both lists. Only `seek`
+/// is missing — the controller protocol does not expose it — which changes nothing here: the
+/// panel offers no scrubbable progress bar.
 private enum NowPlayingControls {
     static let pauseResumeSources: Set<String> = ["spotify", "music_library", "cd", "podcast", "tidal"]
     static let nextSources: Set<String> = ["spotify", "music_library", "cd", "tidal"]
 }
 
-/// Source de vérité de l'UI : les vues SwiftUI observent ces propriétés et se re-rendent
-/// seules. Rien ne reconstruit de menu à chaque événement.
+/// The UI's source of truth: the SwiftUI views observe these properties and re-render
+/// themselves. Nothing rebuilds a menu on every event.
 ///
-/// La machine à états de chargement (les spinners) est la partie subtile de cette classe —
-/// voir les commentaires en regard de `syncLoadingStatesWithBackend`.
+/// The loading state machine (the spinners) is the subtle part of this class —
+/// see the comments alongside `syncLoadingStatesWithBackend`.
 ///
-/// Cette classe s'utilise **exclusivement depuis le main thread**, et `@MainActor` le fait
-/// vérifier par le compilateur au lieu de le confier à ce commentaire : MiloConnectionManager
-/// et WebSocketService livrent déjà tous leurs appels delegate sur le main actor, et les
-/// Timers/asyncAfter d'ici y tournent aussi. Les `Task` créées ici en héritent — d'où
-/// l'absence de `MainActor.run` : après un `await` réseau, on est déjà revenu sur le main.
+/// This class is used **exclusively from the main thread**, and `@MainActor` has the
+/// compiler check that instead of entrusting it to this comment: MiloConnectionManager
+/// and WebSocketService already deliver all their delegate calls on the main actor, and the
+/// Timers/asyncAfter calls here run there too. The `Task`s created here inherit it — hence
+/// the absence of `MainActor.run`: after a network `await`, we are already back on main.
 @MainActor
 @Observable
 final class MiloStore {
 
-    // MARK: - État observé par les vues
+    // MARK: - State observed by the views
 
     private(set) var isConnected = false
     private(set) var state: MiloState?
@@ -82,157 +82,157 @@ final class MiloStore {
     private(set) var enabledApps: [String]?
     private(set) var radioFavorites: [RadioStation]?
 
-    /// Terme tapé dans le champ de recherche de la bibliothèque musicale. Vide au repos —
-    /// c'est cette valeur (pas encore débattue) qu'affiche le `TextField`.
+    /// The term typed in the music library's search field. Empty at rest —
+    /// this is the value (not yet debounced) that the `TextField` displays.
     private(set) var musicLibrarySearchTerm = ""
     private(set) var musicLibrarySearchResults: MusicLibrarySearchResults = .empty
-    /// Vrai le temps d'un aller-retour réseau — PAS le temps du debounce, qui lui ne pose rien
-    /// (voir `updateMusicLibrarySearchTerm`).
+    /// True for the span of a network round trip — NOT for the debounce, which sets nothing
+    /// (see `updateMusicLibrarySearchTerm`).
     private(set) var musicLibrarySearchLoading = false
-    /// Vrai dès la première recherche non vide envoyée — distingue « pas encore cherché »
-    /// (ligne d'invite) de « cherché, zéro résultat » (ligne « aucun résultat »).
+    /// True from the first non-empty search sent — tells "not searched yet"
+    /// (the prompt row) from "searched, zero results" (the "no results" row).
     private(set) var musicLibrarySearchHasSearched = false
-    /// Morceau dont la mise en lecture est en vol : sa ligne affiche un spinner.
+    /// The song whose playback is in flight: its row shows a spinner.
     private(set) var musicLibrarySongLoadingId: String?
-    /// Artiste dont le bouton d'en-tête a lancé la file en cours. Le backend ne publie PAS ce
-    /// qu'est la file — seulement le morceau du moment — donc rien ne permet de redécouvrir
-    /// après coup qu'« on écoute cet artiste ». C'est une mémoire d'affichage, pas un état du
-    /// système : elle s'efface dès qu'une autre mise en lecture prend la main (un morceau, un
-    /// album) ou qu'on rouvre une page artiste, où le bouton repart donc sur play.
+    /// The artist whose header button started the current queue. The backend does NOT publish
+    /// what the queue is — only the current song — so nothing allows rediscovering
+    /// after the fact that "we are listening to this artist". This is display memory, not system
+    /// state: it clears as soon as another playback takes over (a song, an
+    /// album) or an artist page is reopened, where the button therefore goes back to play.
     ///
-    /// L'album, lui, n'a pas besoin de cette béquille : sa liste de morceaux est affichée, donc
-    /// `isCurrentMusicLibraryAlbum` peut le DÉDUIRE du morceau en cours, et survit à un
-    /// aller-retour hors de la page.
+    /// The album needs no such crutch: its song list is displayed, so
+    /// `isCurrentMusicLibraryAlbum` can INFER it from the current song, and it survives a
+    /// round trip away from the page.
     private(set) var musicLibraryPlayingArtistId: String?
 
-    /// Album ou artiste dont la FILE est en train d'être assemblée par le bouton de lecture de
-    /// l'en-tête : son icône laisse la place à un spinner. Distinct de
-    /// `musicLibrarySongLoadingId` — lancer un artiste demande un fetch d'album par sortie et
-    /// peut durer, là où un morceau part en une requête, et les deux spinners ne visent pas la
-    /// même ligne.
+    /// The album or artist whose QUEUE is being assembled by the header's play button:
+    /// its icon gives way to a spinner. Distinct from
+    /// `musicLibrarySongLoadingId` — starting an artist requires one album fetch per release and
+    /// can take a while, where a song goes off in a single request, and the two spinners do not
+    /// target the same row.
     private(set) var musicLibraryContextLoadingId: String?
     private var musicLibrarySearchTask: Task<Void, Never>?
 
-    /// Artiste dont on visite la page (albums) — `nil` hors de cette route. Posé par
-    /// `showMusicLibraryArtist(_:)`, qui charge aussi `musicLibraryArtistAlbums`.
+    /// The artist whose page (albums) we are visiting — `nil` outside that route. Set by
+    /// `showMusicLibraryArtist(_:)`, which also loads `musicLibraryArtistAlbums`.
     private(set) var musicLibraryViewedArtist: MusicLibraryArtist?
     private(set) var musicLibraryArtistAlbums: [MusicLibraryAlbum] = []
     private(set) var musicLibraryArtistAlbumsLoading = false
 
-    /// Album dont on visite la page (morceaux) — `nil` hors de cette route. Posé par
-    /// `showMusicLibraryAlbum(_:)`, qui charge aussi `musicLibraryAlbumSongs`. Ce sont CES
-    /// morceaux (et non ceux de la recherche) que `play_context` reçoit comme file quand on
-    /// lance la lecture depuis cette page — voir `playMusicLibrarySong(_:from:)`.
+    /// The album whose page (songs) we are visiting — `nil` outside that route. Set by
+    /// `showMusicLibraryAlbum(_:)`, which also loads `musicLibraryAlbumSongs`. It is THESE
+    /// songs (and not the search's) that `play_context` receives as the queue when
+    /// playback is started from this page — see `playMusicLibrarySong(_:from:)`.
     private(set) var musicLibraryViewedAlbum: MusicLibraryAlbum?
     private(set) var musicLibraryAlbumSongs: [MusicLibrarySong] = []
     private(set) var musicLibraryAlbumSongsLoading = false
 
-    /// Ce qu'affiche le sous-niveau recherche tant que le champ est vide : les albums écoutés
-    /// récemment — à défaut, ajoutés récemment (voir `loadMusicLibraryShowcase()`), ce que dit
-    /// `musicLibraryShowcaseIsRecentlyAdded`.
+    /// What the search sub-level displays while the field is empty: the recently played
+    /// albums — failing that, the recently added ones (see `loadMusicLibraryShowcase()`), which
+    /// is what `musicLibraryShowcaseIsRecentlyAdded` says.
     private(set) var musicLibraryShowcaseAlbums: [MusicLibraryAlbum] = []
     private(set) var musicLibraryShowcaseLoading = false
     private(set) var musicLibraryShowcaseIsRecentlyAdded = false
     private var musicLibraryShowcaseTask: Task<Void, Never>?
 
-    /// Taille de la vitrine. Le panneau est plafonné à la hauteur de l'écran et la liste défile,
-    /// donc ce nombre borne le transfert, pas l'affichage.
+    /// The showcase's size. The panel is capped to the screen's height and the list scrolls,
+    /// so this number bounds the transfer, not the display.
     private static let musicLibraryShowcaseSize = 20
 
-    /// Dernier morceau détecté, tous sources confondues — alimente `NowPlayingAccordion`, PAS
-    /// `nowPlaying` directement : contrairement à ce dernier, il reste peuplé un instant après
-    /// l'arrêt de la lecture, le temps que `MenuBarShell` anime le repli de la ligne à zéro
-    /// (`nowPlayingRevealFraction`). Sans lui, la ligne perdrait son contenu AVANT d'avoir fini
-    /// de se refermer. Voir `syncDisplayedNowPlaying`.
+    /// The last detected song, whatever the source — feeds `NowPlayingAccordion`, NOT
+    /// `nowPlaying` directly: unlike the latter, it stays populated for a moment after
+    /// playback stops, long enough for `MenuBarShell` to animate the row's collapse to zero
+    /// (`nowPlayingRevealFraction`). Without it, the row would lose its content BEFORE it had
+    /// finished closing. See `syncDisplayedNowPlaying`.
     private(set) var displayedNowPlaying: NowPlayingInfo?
 
-    /// Structure multiroom (zones + clients), lue quand le multiroom est activé. Vide sinon.
-    /// Alimente la sous-section dépliable de la ligne Multiroom.
+    /// The multiroom structure (zones + clients), read when multiroom is enabled. Empty otherwise.
+    /// Feeds the expandable sub-section of the Multiroom row.
     private(set) var multiroom: MultiroomSnapshot = .empty
 
-    /// Volume/mute EN DIRECT par client et par zone (moyennes de zone incluses). Amorcé avec
-    /// la structure, puis poussé par `volume/volume_changed`. Alimente les sliders et boutons
-    /// muet de la sous-section.
+    /// LIVE volume/mute per client and per zone (zone averages included). Bootstrapped with
+    /// the structure, then pushed by `volume/volume_changed`. Feeds the sub-section's sliders
+    /// and mute buttons.
     private(set) var multiroomVolume: MultiroomVolume = .empty
 
-    /// Spinners en cours, indexés par identifiant de source ("spotify"…) ou de
-    /// fonctionnalité ("multiroom", "equalizer").
+    /// The spinners in progress, indexed by source id ("spotify"…) or by
+    /// feature id ("multiroom", "equalizer").
     private(set) var loadingStates: [String: Bool] = [:]
 
-    /// Station radio dont la lecture est en vol : sa ligne affiche un spinner.
+    /// The radio station whose playback is in flight: its row shows a spinner.
     private(set) var radioStationLoadingId: String?
 
-    /// Valeur affichée par le slider. Écrite par l'utilisateur (drag) et par
-    /// l'écho serveur — mais jamais par le serveur pendant que l'utilisateur
-    /// manipule le slider (cf. `volumeController.isUserInteracting`).
+    /// The value displayed by the slider. Written by the user (drag) and by
+    /// the server echo — but never by the server while the user is
+    /// manipulating the slider (cf. `volumeController.isUserInteracting`).
     var sliderVolumeDb: Double = VolumeDefaults.limitMinDb
 
-    /// Vrai tant que le panneau est ouvert. Sert uniquement à ne pas afficher le
-    /// HUD de volume par-dessus le panneau, et à mettre en pause le poll de fond.
+    /// True as long as the panel is open. Used only to avoid showing the
+    /// volume HUD over the panel, and to pause the background poll.
     var isPanelOpen = false
 
-    /// Vrai quand le panneau a été ouvert avec la touche Option enfoncée : le pied
-    /// (Paramètres, Quitter) n'apparaît qu'alors. Posé par MenuBarShell à l'ouverture.
+    /// True when the panel was opened with the Option key held: the footer
+    /// (Settings, Quit) only appears then. Set by MenuBarShell on opening.
     var showsPreferences = false
 
-    /// Vrai quand la sous-section multiroom est dépliée sous la ligne Multiroom.
+    /// True when the multiroom sub-section is expanded under the Multiroom row.
     ///
-    /// Dans le store, et non en `@State` local de la vue, pour deux raisons : `MenuBarShell`
-    /// l'observe pour redimensionner la fenêtre (le panneau grandit/rétrécit avec l'accordéon,
-    /// comme le panneau « Son » sous AirPods) ; et il doit se refermer à la fermeture du panneau
-    /// ou quand le multiroom est coupé.
+    /// In the store, and not in the view's local `@State`, for two reasons: `MenuBarShell`
+    /// observes it to resize the window (the panel grows/shrinks with the accordion,
+    /// like the "Sound" panel under AirPods); and it has to close when the panel closes
+    /// or when multiroom is switched off.
     var multiroomExpanded = false
 
-    /// Fraction d'ouverture de l'accordéon multiroom, de 0 (replié) à 1 (déplié). Animée par un
-    /// timer dans `MenuBarShell` (et NON par `withAnimation`) : la sous-section a une hauteur de
-    /// `naturelle × fraction`, si bien qu'à chaque pas le contenu SwiftUI a une taille CONCRÈTE,
-    /// sur laquelle `MenuBarShell` recale la fenêtre — là où `withAnimation` rapporterait la
-    /// taille finale d'un coup à `NSHostingController`, faisant sauter la fenêtre.
+    /// The multiroom accordion's opening fraction, from 0 (collapsed) to 1 (expanded). Animated by a
+    /// timer in `MenuBarShell` (and NOT by `withAnimation`): the sub-section has a height of
+    /// `natural × fraction`, so that at every step the SwiftUI content has a CONCRETE size,
+    /// on which `MenuBarShell` resets the window — where `withAnimation` would report the
+    /// final size in one go to `NSHostingController`, making the window jump.
     var multiroomRevealFraction: CGFloat = 0
 
-    /// Fraction de repli/déploiement de la ligne « en cours », de 0 (masquée) à 1 (pleine
-    /// hauteur) — même mécanique que `multiroomRevealFraction`, pour la même raison : animée
-    /// pas à pas par un timer dans `MenuBarShell`, jamais par `withAnimation`.
+    /// The collapse/expand fraction of the "now playing" row, from 0 (hidden) to 1 (full
+    /// height) — the same mechanism as `multiroomRevealFraction`, for the same reason: animated
+    /// step by step by a timer in `MenuBarShell`, never by `withAnimation`.
     ///
-    /// Synchronisée à l'état RÉEL sans animation à l'ouverture du panneau (`MenuBarShell.
-    /// showPanel`) — l'utilisateur vient d'ouvrir, il n'y a rien à faire glisser. Seuls les
-    /// changements survenant PENDANT que le panneau est ouvert sont animés.
+    /// Synchronized to the REAL state without animation when the panel opens (`MenuBarShell.
+    /// showPanel`) — the user has just opened it, there is nothing to slide. Only the
+    /// changes occurring WHILE the panel is open are animated.
     var nowPlayingRevealFraction: CGFloat = 0
 
-    // MARK: - Navigation du panneau
+    // MARK: - Panel navigation
 
-    /// Vue courante du panneau. Un panneau n'a pas de sous-menus natifs : la liste des stations
-    /// radio remplace le contenu racine sur place.
+    /// The panel's current view. A panel has no native submenus: the radio station
+    /// list replaces the root content in place.
     ///
-    /// Dans le store, et non en `@State` local de la vue, pour la même raison que
-    /// `multiroomExpanded` : `MenuBarShell` doit l'observer pour animer la hauteur de la fenêtre.
+    /// In the store, and not in the view's local `@State`, for the same reason as
+    /// `multiroomExpanded`: `MenuBarShell` has to observe it to animate the window's height.
     private(set) var panelRoute: PanelRoute = .root
 
-    /// Routes déjà quittées, la plus proche en dernier — permet à `navigateBack()` de remonter
-    /// d'un cran exact (album → artiste → recherche), plutôt que de toujours retomber à la
-    /// racine comme le ferait un simple `navigate(to: .root)`. Radio n'a qu'un seul sous-niveau,
-    /// donc n'en a jamais eu besoin ; la bibliothèque musicale en empile jusqu'à trois.
+    /// The routes already left, the nearest one last — lets `navigateBack()` go up
+    /// exactly one level (album → artist → search), rather than always falling back to the
+    /// root as a plain `navigate(to: .root)` would. Radio has only one sub-level,
+    /// so it never needed this; the music library stacks up to three.
     private(set) var panelRouteStack: [PanelRoute] = []
 
-    /// Route qui s'efface pendant la transition ; nil au repos. Sert de discriminateur : c'est
-    /// sa mise à jour (et non celle de `panelRoute`) qui déclenche le morphing dans
-    /// `MenuBarShell`, si bien qu'un retour à la racine à la fermeture du panneau — qui passe par
-    /// `resetPanelRoute()` — n'anime rien.
+    /// The route fading out during the transition; nil at rest. Serves as a discriminator: it is
+    /// its update (and not `panelRoute`'s) that triggers the morph in
+    /// `MenuBarShell`, so that a return to the root when the panel closes — which goes through
+    /// `resetPanelRoute()` — animates nothing.
     private(set) var outgoingPanelRoute: PanelRoute?
 
-    /// Avancement du morphing d'une route à l'autre : 0 au clic, 1 quand la nouvelle vue est en
-    /// place. Déjà LISSÉE (le timer applique la courbe), donc directement interpolable.
+    /// The progress of the morph from one route to the other: 0 on click, 1 when the new view is in
+    /// place. Already EASED (the timer applies the curve), hence directly interpolable.
     ///
-    /// Même idiome que `multiroomRevealFraction`, et pour la même raison : la hauteur du panneau
-    /// change, et seul un timer donne au contenu SwiftUI une taille concrète à chaque pas.
+    /// The same idiom as `multiroomRevealFraction`, and for the same reason: the panel's height
+    /// changes, and only a timer gives the SwiftUI content a concrete size at every step.
     var routeMorphFraction: CGFloat = 1
 
-    /// Vrai pendant la transition entre deux routes.
+    /// True during the transition between two routes.
     var isRouteMorphing: Bool { outgoingPanelRoute != nil }
 
-    /// Navigue vers une route en armant le morphing, et empile la route quittée pour que
-    /// `navigateBack()` puisse y revenir précisément. L'animation elle-même est pilotée par
-    /// `MenuBarShell`, qui observe `outgoingPanelRoute`.
+    /// Navigates to a route, arming the morph, and pushes the route being left so that
+    /// `navigateBack()` can return to it precisely. The animation itself is driven by
+    /// `MenuBarShell`, which observes `outgoingPanelRoute`.
     func navigate(to route: PanelRoute) {
         guard route != panelRoute else { return }
         panelRouteStack.append(panelRoute)
@@ -240,14 +240,14 @@ final class MiloStore {
         routeMorphFraction = 0
         panelRoute = route
 
-        // Entrer dans la recherche charge sa vitrine. C'est le SEUL déclencheur : revenir depuis
-        // une page artiste/album passe par `navigateBack()`, qui retrouve celle déjà chargée —
-        // la recharger ferait clignoter un spinner sur un retour en arrière.
+        // Entering the search loads its showcase. This is the ONLY trigger: coming back from
+        // an artist/album page goes through `navigateBack()`, which finds the one already loaded —
+        // reloading it would flash a spinner on a step backwards.
         if route == .musicLibrarySearch { loadMusicLibraryShowcase() }
     }
 
-    /// Revient à la route parente exacte (dépile), et non systématiquement à la racine — c'est
-    /// ce qu'appelle la ligne de retour de chaque sous-niveau de la bibliothèque musicale.
+    /// Returns to the exact parent route (pops), and not systematically to the root — this is
+    /// what each music library sub-level's back row calls.
     func navigateBack() {
         let previous = panelRouteStack.popLast() ?? .root
         guard previous != panelRoute else { return }
@@ -256,11 +256,11 @@ final class MiloStore {
         panelRoute = previous
     }
 
-    /// Retour à la racine en vidant TOUTE la pile, animé — contrairement à `navigateBack()`, qui
-    /// ne remonte que d'un cran. Utilisé quand la capacité qui justifiait tout le fil de
-    /// navigation en cours disparaît (la source active change pendant qu'on parcourt artiste →
-    /// album de la bibliothèque musicale) : il n'y a alors plus de parent valide à retrouver, on
-    /// saute directement à la racine.
+    /// A return to the root emptying the WHOLE stack, animated — unlike `navigateBack()`, which
+    /// only goes up one level. Used when the capability that justified the whole current
+    /// navigation thread disappears (the active source changes while browsing artist →
+    /// album in the music library): there is then no valid parent left to return to, so we
+    /// jump straight to the root.
     func exitToRoot() {
         panelRouteStack = []
         guard panelRoute != .root else { return }
@@ -269,8 +269,8 @@ final class MiloStore {
         panelRoute = .root
     }
 
-    /// Retour immédiat à la racine, sans transition — à la fermeture du panneau, quand il n'y a
-    /// plus rien à animer et qu'on ne veut surtout pas rouvrir sur une animation à moitié jouée.
+    /// An immediate return to the root, with no transition — when the panel closes, when there is
+    /// nothing left to animate and we definitely do not want to reopen on a half-played animation.
     func resetPanelRoute() {
         panelRoute = .root
         panelRouteStack = []
@@ -278,24 +278,24 @@ final class MiloStore {
         routeMorphFraction = 1
     }
 
-    /// Fin du morphing : la route cible est seule en place.
+    /// End of the morph: the target route is alone in place.
     func finishRouteMorph() {
         outgoingPanelRoute = nil
         routeMorphFraction = 1
 
-        // Le fil bibliothèque musicale ne se vide qu'ICI, à la toute fin de la transition, et
-        // jamais au clic : la couche qu'on quitte reste affichée pendant tout le morphing, donc
-        // l'effacer au clic donnait à voir la recherche se réinitialiser en plein fondu — le
-        // terme disparaissait et l'invite « Rechercher dans votre bibliothèque » revenait sous
-        // les yeux de l'utilisateur, en guise d'adieu.
+        // The music library thread is only cleared HERE, at the very end of the transition, and
+        // never on click: the layer being left stays displayed for the whole morph, so
+        // clearing it on click showed the search resetting itself mid-fade — the
+        // term disappeared and the "Search your library" prompt came back before the
+        // user's eyes, by way of a farewell.
         //
-        // Effet de bord voulu : revenir sur ses pas pendant la transition (re-cliquer sur la
-        // source avant la fin) retrouve la recherche intacte, puisque la route d'arrivée est de
-        // nouveau celle du fil.
+        // A deliberate side effect: retracing your steps during the transition (clicking the
+        // source again before it ends) finds the search intact, since the destination route is
+        // once again one of the thread's.
         if !panelRoute.isMusicLibrary { clearMusicLibraryBrowsing() }
     }
 
-    // MARK: - Dépendances
+    // MARK: - Dependencies
 
     let connectionManager = MiloConnectionManager()
     let volumeController = VolumeController()
@@ -303,15 +303,15 @@ final class MiloStore {
 
     // MARK: - roc-vad
 
-    /// Le driver audio virtuel n'est requis que par la source « Mac ». L'app fonctionne
-    /// sans lui : il est exposé comme un **état** (la source apparaît désactivée, les
-    /// Réglages proposent de l'installer), jamais comme une condition de démarrage.
+    /// The virtual audio driver is only required by the "Mac" source. The app works
+    /// without it: it is exposed as a **state** (the source shows up disabled, Settings
+    /// offers to install it), never as a condition for starting.
     @ObservationIgnored private(set) var rocVADManager: RocVADManager?
 
-    /// Vrai quand le binaire est installé **et** que le driver répond.
+    /// True when the binary is installed **and** the driver answers.
     private(set) var isRocVADReady = false
 
-    /// Vrai entre la fin d'une installation et le redémarrage qui l'activera.
+    /// True between the end of an installation and the restart that will activate it.
     private(set) var rocVADNeedsRestart = false
 
     private(set) var isInstallingRocVAD = false
@@ -321,8 +321,8 @@ final class MiloStore {
         connectionManager.rocVADManager = manager
     }
 
-    /// Vérifie le driver et configure le device, en arrière-plan. Ne montre aucune alerte
-    /// et ne bloque rien : si roc-vad manque, on se contente de le refléter dans l'UI.
+    /// Checks the driver and configures the device, in the background. Shows no alert
+    /// and blocks nothing: if roc-vad is missing, we merely reflect that in the UI.
     func prepareRocVADIfInstalled() {
         guard let rocVADManager, RocVADManager.isBinaryInstalled else {
             isRocVADReady = false
@@ -330,8 +330,8 @@ final class MiloStore {
         }
 
         Task {
-            // `roc-vad info` interroge le driver via gRPC et peut prendre plusieurs
-            // secondes — d'où l'await, qui n'immobilise pas le main thread.
+            // `roc-vad info` queries the driver through gRPC and can take several
+            // seconds — hence the await, which does not tie up the main thread.
             let driverLoaded = await rocVADManager.checkInstallation()
             isRocVADReady = driverLoaded
 
@@ -346,7 +346,7 @@ final class MiloStore {
         }
     }
 
-    /// Installe roc-vad à la demande, depuis les Réglages.
+    /// Installs roc-vad on demand, from Settings.
     func installRocVAD(completion: @escaping @MainActor (Bool) -> Void) {
         guard let rocVADManager, !isInstallingRocVAD else { return }
         isInstallingRocVAD = true
@@ -354,14 +354,14 @@ final class MiloStore {
         Task {
             let success = await rocVADManager.performInstallation()
             isInstallingRocVAD = false
-            // Le driver n'est chargé qu'après redémarrage : on ne prétend pas être
-            // prêt, on annonce ce qui reste à faire.
+            // The driver is only loaded after a restart: we do not claim to be
+            // ready, we announce what is left to do.
             rocVADNeedsRestart = success
             completion(success)
         }
     }
 
-    // MARK: - Limites de volume
+    // MARK: - Volume limits
 
     var volumeLimits: (minDb: Double, maxDb: Double) {
         guard let volume else {
@@ -370,7 +370,7 @@ final class MiloStore {
         return (volume.limitMinDb, volume.limitMaxDb)
     }
 
-    // MARK: - Loading (non observé : plomberie interne)
+    // MARK: - Loading (not observed: internal plumbing)
 
     @ObservationIgnored private var loadingTimers: [String: Timer] = [:]
     @ObservationIgnored private var loadingStartTimes: [String: Date] = [:]
@@ -378,40 +378,40 @@ final class MiloStore {
     @ObservationIgnored private var expectedFunctionalityStates: [String: Bool] = [:]
     @ObservationIgnored private var radioStationLoadingTimer: Timer?
 
-    /// Dernière station radio connue (identifiant, nom, logo) — voir `radioNowPlaying`. Non
-    /// observée : elle ne change jamais sans que `state` change aussi dans le même appel
-    /// (`syncLastRadioStation`), et c'est `state` qui déclenche le nouveau rendu.
+    /// The last known radio station (id, name, logo) — see `radioNowPlaying`. Not
+    /// observed: it never changes without `state` changing in the same call
+    /// (`syncLastRadioStation`), and it is `state` that triggers the re-render.
     @ObservationIgnored private var lastRadioStation: (id: String, name: String, favicon: String?)?
 
-    // MARK: - Poll de fond (non observé)
+    // MARK: - Background poll (not observed)
 
     @ObservationIgnored private var backgroundRefreshTimer: Timer?
     @ObservationIgnored private var consecutiveRefreshFailures = 0
     @ObservationIgnored private var refreshPausedUntil: Date?
 
-    // MARK: - Constantes
+    // MARK: - Constants
 
     private let loadingTimeoutDuration: TimeInterval = 15.0
     private let functionalityLoadingTimeout: TimeInterval = 10.0
-    // Multiroom prend plus longtemps côté backend (démarrage snapserver,
-    // wait_for_ready jusqu'à 15 s, push du volume) — timeout de sécurité plus haut.
+    // Multiroom takes longer on the backend side (snapserver startup,
+    // wait_for_ready up to 15 s, volume push) — a higher safety timeout.
     private let multiroomLoadingTimeout: TimeInterval = 35.0
     private let minimumFunctionalityLoadingDuration: TimeInterval = 1.2
-    // Fenêtre de grâce après un clic source : le temps que le backend prenne en
-    // charge la transition (transition_start). Tant qu'elle court et que le backend
-    // n'a pas encore confirmé, un état "non transitoire" est interprété comme
-    // l'ancien état (race clic↔transition_start) et le spinner est gardé. Une fois
-    // la transition prise en charge, on n'attend plus ce délai : le spinner s'efface
-    // dès la fin de transition (comme le frontend web).
+    // The grace window after a source click: the time it takes the backend to take
+    // charge of the transition (transition_start). While it runs and the backend
+    // has not confirmed yet, a "non-transitional" state is interpreted as
+    // the old state (the click↔transition_start race) and the spinner is kept. Once
+    // the transition is taken in charge, we no longer wait out this delay: the spinner clears
+    // as soon as the transition ends (like the web frontend).
     private let manualLoadingGraceDuration: TimeInterval = 2.0
     private let radioStationLoadingTimeout: TimeInterval = 15.0
     private let maxConsecutiveFailures = 3
-    // Le WebSocket pousse tous les changements d'état en temps réel : ce poll n'est
-    // qu'un filet de sécurité lent pour rattraper un événement manqué.
+    // The WebSocket pushes every state change in real time: this poll is
+    // only a slow safety net to catch a missed event.
     private let backgroundRefreshInterval: TimeInterval = 30.0
     private let refreshPauseDuration: TimeInterval = 60.0
 
-    // MARK: - Cycle de vie
+    // MARK: - Lifecycle
 
     init() {
         connectionManager.delegate = self
@@ -437,41 +437,41 @@ final class MiloStore {
         let activeSource = state?.activeSource ?? "none"
         guard activeSource != sourceId else { return }
 
-        // Éviter les actions concurrentes pendant qu'une requête est en vol.
+        // Avoid concurrent actions while a request is in flight.
         guard loadingStates[sourceId] != true else { return }
 
-        // Démarrer le loading AVANT la requête : spinner immédiat et anti
-        // double-clic pendant les ~3 s que peut durer le POST.
+        // Start the loading BEFORE the request: an immediate spinner, and a guard against
+        // double-clicks during the ~3 s the POST can take.
         startLoading(for: sourceId, timeout: loadingTimeoutDuration)
 
         Task {
             do {
                 try await apiService.changeSource(sourceId)
             } catch {
-                // Échec HTTP ou {"status": "error"} in-band : pas de transition
-                // à attendre, on arrête le spinner tout de suite.
+                // HTTP failure or in-band {"status": "error"}: there is no transition
+                // to wait for, so we stop the spinner right away.
                 NSLog("❌ Source change to %@ failed: %@", sourceId, error.localizedDescription)
                 stopLoading(for: sourceId)
             }
         }
     }
 
-    /// Ferme la source active — le backend repasse à `active_source = none`.
-    /// Déclenché par un appui maintenu sur la ligne, comme le hold sur le dock
-    /// du frontend web.
+    /// Closes the active source — the backend goes back to `active_source = none`.
+    /// Triggered by a press-and-hold on the row, like the hold on the web
+    /// frontend's dock.
     func closeSource(_ sourceId: String) {
         guard let apiService = connectionManager.apiService, isConnected else { return }
 
-        // L'état a pu changer pendant l'appui : ne fermer que si la source visée
-        // est toujours l'active, et qu'aucune requête n'est en vol.
+        // The state may have changed during the press: only close if the target source
+        // is still the active one, and no request is in flight.
         guard state?.activeSource == sourceId, loadingStates[sourceId] != true else { return }
 
-        // Pas de startLoading ici, contrairement à selectSource : la fermeture n'a pas de
-        // phase de démarrage côté backend (juste plugin.stop()), et surtout
-        // syncLoadingStatesWithBackend ne saurait pas résoudre ce spinner — sa branche
-        // « transition confirmée » teste `identifier == activeSource`, or activeSource devient
-        // "none". Le spinner tiendrait donc la fenêtre de grâce entière (2 s) sur une ligne déjà
-        // éteinte. Le broadcast d'état suffit. Même choix que le frontend web (onCloseActive).
+        // No startLoading here, unlike selectSource: closing has no
+        // startup phase on the backend side (just plugin.stop()), and above all
+        // syncLoadingStatesWithBackend would not know how to resolve that spinner — its
+        // "transition confirmed" branch tests `identifier == activeSource`, and activeSource
+        // becomes "none". The spinner would therefore hold for the whole grace window (2 s) on a row
+        // already switched off. The state broadcast is enough. Same choice as the web frontend (onCloseActive).
         Task {
             do {
                 try await apiService.changeSource("none")
@@ -500,10 +500,10 @@ final class MiloStore {
                     return
                 }
             } catch {
-                // Multiroom : le PUT peut échouer même avec le timeout étendu pendant
-                // que le backend termine la transition. On garde le spinner — il sera
-                // résolu par multiroom_changed / multiroom_error via WebSocket, ou par
-                // le timeout de sécurité. Pour les autres toggles, on arrête tout de suite.
+                // Multiroom: the PUT can fail even with the extended timeout while
+                // the backend finishes the transition. We keep the spinner — it will be
+                // resolved by multiroom_changed / multiroom_error over WebSocket, or by
+                // the safety timeout. For the other toggles, we stop right away.
                 if toggleId != "multiroom" {
                     stopFunctionalityLoading(for: toggleId)
                 } else {
@@ -521,16 +521,16 @@ final class MiloStore {
         }
     }
 
-    /// État à afficher pour un toggle : pendant une transition on montre l'état
-    /// **attendu**, pas celui du backend, sinon l'interrupteur reviendrait en
-    /// arrière le temps de la requête.
+    /// The state to display for a toggle: during a transition we show the
+    /// **expected** state, not the backend's, otherwise the switch would flip
+    /// back for the duration of the request.
     func displayedToggleState(_ toggleId: String) -> Bool {
         expectedFunctionalityStates[toggleId] ?? currentToggleState(toggleId)
     }
 
     // MARK: - Volume
 
-    /// Appelé par le slider pendant que l'utilisateur le manipule.
+    /// Called by the slider while the user is manipulating it.
     func setVolume(_ db: Double) {
         sliderVolumeDb = db
         volumeController.handleVolumeChange(db)
@@ -542,41 +542,41 @@ final class MiloStore {
         applyServerVolume(volumeStatus.volumeDb)
     }
 
-    /// Applique au slider une valeur venue du SERVEUR. Point de passage unique de tous les
-    /// chemins serveur : écho WebSocket, poll de fond, et le `GET /api/volume/state` que le
-    /// raccourci déclenche en début de séquence (`refreshVolumeLimitsInBackground`).
+    /// Applies a value coming from the SERVER to the slider. The single point of passage for every
+    /// server path: the WebSocket echo, the background poll, and the `GET /api/volume/state` that the
+    /// shortcut triggers at the start of a sequence (`refreshVolumeLimitsInBackground`).
     ///
-    /// Le slider a deux pilotes possibles, et il ne faut jamais laisser le second écraser le
-    /// premier : une valeur LOCALE (immédiate, exacte) et l'écho SERVEUR de cette même valeur
-    /// (qui arrive un aller-retour réseau plus tard). D'où les trois gardes ci-dessous — une
-    /// par pilote local, plus la fenêtre d'écoulement qui suit.
+    /// The slider has two possible drivers, and the second must never be allowed to overwrite the
+    /// first: a LOCAL value (immediate, exact) and the SERVER echo of that same value
+    /// (which arrives one network round trip later). Hence the three guards below — one
+    /// per local driver, plus the drain window that follows.
     ///
-    /// - `isUserInteracting` : l'utilisateur fait glisser le slider à la souris.
-    /// - `isActivelyAdjusting` : le raccourci clavier tient sa prédiction locale. Sans cette
-    ///   garde, le `GET` de début de séquence renvoie le volume d'AVANT le delta (son `adjust`
-    ///   n'a pas encore atterri) et ramenait le thumb en arrière.
-    /// - `isHotkeySettling` : voir ci-dessous.
+    /// - `isUserInteracting`: the user is dragging the slider with the mouse.
+    /// - `isActivelyAdjusting`: the keyboard shortcut is holding its local prediction. Without this
+    ///   guard, the sequence's opening `GET` returns the volume from BEFORE the delta (its `adjust`
+    ///   has not landed yet) and used to drag the thumb backwards.
+    /// - `isHotkeySettling`: see below.
     private func applyServerVolume(_ db: Double) {
         guard !volumeController.isUserInteracting else { return }
         guard hotkeyManager?.isActivelyAdjusting != true, !isHotkeySettling else { return }
         setSliderVolume(db)
     }
 
-    /// Fenêtre pendant laquelle les échos serveur restent ignorés APRÈS le dernier cran du
-    /// raccourci.
+    /// The window during which server echoes stay ignored AFTER the shortcut's last
+    /// notch.
     ///
-    /// `isActivelyAdjusting` retombe à faux dès le relâchement de la touche — au pire instant
-    /// possible. Un maintien tique toutes les 30 ms, bien plus vite que l'aller-retour vers le
-    /// Pi, et les `adjust` sont sérialisés : au relâchement, les échos des crans précédents
-    /// sont donc encore en vol. La garde s'ouvrant pile à ce moment, ils atterrissaient tous,
-    /// ramenaient le thumb sur une valeur périmée, et le dernier écho le rattrapait ensuite —
-    /// le petit saut au relâchement.
+    /// `isActivelyAdjusting` falls back to false as soon as the key is released — at the worst
+    /// possible moment. A hold ticks every 30 ms, far faster than the round trip to the
+    /// Pi, and the `adjust` calls are serialized: on release, the echoes of the previous notches
+    /// are therefore still in flight. With the guard opening at exactly that moment, they all landed,
+    /// dragged the thumb onto a stale value, and the last echo then caught it up —
+    /// the little jump on release.
     ///
-    /// On rend donc la main au serveur non pas au relâchement, mais une fois ses échos écoulés.
-    /// C'est exactement la parade (et la durée) que `VolumeController` applique déjà au
-    /// glissement souris, où les échos accusent le même retard : `userInteractionTimeout`.
-    /// Non observée : plomberie interne, et réécrite à chaque cran (30 Hz) — l'exposer au
-    /// graphe d'observation ferait tourner les vues pour rien.
+    /// So we hand control back to the server not on release, but once its echoes have drained.
+    /// This is exactly the counter (and the duration) that `VolumeController` already applies to
+    /// the mouse drag, where the echoes lag by the same amount: `userInteractionTimeout`.
+    /// Not observed: internal plumbing, and rewritten on every notch (30 Hz) — exposing it to the
+    /// observation graph would spin the views for nothing.
     @ObservationIgnored private var hotkeySettleUntil: Date?
     private let hotkeySettleDuration: TimeInterval = 0.3
 
@@ -585,7 +585,7 @@ final class MiloStore {
         return Date() < hotkeySettleUntil
     }
 
-    /// Zone morte : sous 0,1 dB, réécrire ne ferait que déclencher un rendu pour rien.
+    /// A dead zone: below 0.1 dB, rewriting would only trigger a render for nothing.
     private func setSliderVolume(_ db: Double) {
         guard abs(sliderVolumeDb - db) > 0.1 else { return }
         sliderVolumeDb = db
@@ -597,12 +597,12 @@ final class MiloStore {
         volume = volumeStatus
         volumeController.setCurrentVolume(volumeStatus)
 
-        // Chaque cran repousse la fenêtre : elle court donc 0,3 s après le DERNIER, qu'il y ait
-        // eu maintien ou simple appui.
+        // Every notch pushes the window back: it therefore runs 0.3 s after the LAST one, whether
+        // there was a hold or a single press.
         hotkeySettleUntil = Date().addingTimeInterval(hotkeySettleDuration)
 
-        // La prédiction LOCALE du raccourci, et non un écho serveur : elle court-circuite
-        // `applyServerVolume`, dont c'est justement elle qui arme les gardes.
+        // The shortcut's LOCAL prediction, and not a server echo: it short-circuits
+        // `applyServerVolume`, whose guards it is precisely what arms.
         setSliderVolume(volumeStatus.volumeDb)
     }
 
@@ -613,8 +613,8 @@ final class MiloStore {
         NSLog("📻 playRadioStation: %@", stationId)
 
         beginRadioStationLoading(stationId: stationId)
-        // Lire l'état sur le main thread (il y est possédé) plutôt que dans la
-        // Task : la valeur pertinente est celle qu'a vue l'utilisateur au clic.
+        // Read the state on the main thread (where it is owned) rather than in the
+        // Task: the relevant value is the one the user saw at click time.
         let needsSourceSwitch = state?.activeSource != "radio"
 
         Task {
@@ -630,8 +630,8 @@ final class MiloStore {
         }
     }
 
-    /// Arrête la lecture, sans dire laquelle : `/api/radio/stop` ne prend pas de station —
-    /// le backend n'en joue qu'une à la fois.
+    /// Stops playback, without saying which: `/api/radio/stop` takes no station —
+    /// the backend only plays one at a time.
     func stopRadioPlayback() {
         guard let apiService = connectionManager.apiService else { return }
         NSLog("📻 stopRadioPlayback")
@@ -645,41 +645,41 @@ final class MiloStore {
         }
     }
 
-    /// URL absolue du logo d'une station, ou nil s'il n'en a pas (l'appelant
-    /// affiche alors un fallback). Délègue à `MiloAPIService`, qui connaît le
-    /// host/port résolus et la règle de proxy des favicons.
+    /// The absolute URL of a station's logo, or nil if it has none (the caller
+    /// then shows a fallback). Delegates to `MiloAPIService`, which knows the
+    /// resolved host/port and the favicon proxy rule.
     func radioFaviconURL(for favicon: String?) -> URL? {
         connectionManager.apiService?.radioFaviconURL(for: favicon)
     }
 
-    /// Identifiant de la station en cours de lecture, ou nil.
+    /// The identifier of the station currently playing, or nil.
     var playingRadioStationId: String? {
         let metadataIsPlaying = state?.metadata["is_playing"] as? Int == 1
         guard state?.activeSource == "radio", metadataIsPlaying else { return nil }
         return state?.metadata["station_id"] as? String
     }
 
-    /// Morceau en cours de lecture, tous sources confondues, ou nil si rien de détecté.
+    /// The song currently playing, whatever the source, or nil if nothing is detected.
     ///
-    /// Le backend expose une projection canonique (`title`/`artist`/`album_art_url`, voir
-    /// `PlaybackMetadata` côté Milo) commune à Spotify, AirPlay, DLNA, CD, Qobuz et la
-    /// bibliothèque musicale. Radio fait exception, déléguée à `radioNowPlaying`. Les sources
-    /// sans notion de lecture (Bluetooth, Mac) n'émettent aucune de ces clés : `title` reste
-    /// vide et la ligne ne s'affiche pas.
+    /// The backend exposes a canonical projection (`title`/`artist`/`album_art_url`, see
+    /// `PlaybackMetadata` on the Milo side) common to Spotify, AirPlay, DLNA, CD, Qobuz and the
+    /// music library. Radio is the exception, delegated to `radioNowPlaying`. The sources
+    /// with no notion of playback (Bluetooth, Mac) emit none of these keys: `title` stays
+    /// empty and the row is not displayed.
     ///
-    /// Gardé sur la présence d'un TITRE, pas sur `is_playing` : une source en pause
-    /// (Spotify, bibliothèque musicale, CD, Podcast) garde son titre/artiste en métadonnées
-    /// avec `is_playing` à faux — masquer la ligne à ce moment-là ferait disparaître le bouton
-    /// pause juste après l'avoir pressé. Le backend vide `metadata` (donc `title`) quand la
-    /// source s'arrête réellement ou change (voir `_metadata = {}` des sources concernées).
+    /// Guarded on the presence of a TITLE, not on `is_playing`: a paused source
+    /// (Spotify, music library, CD, Podcast) keeps its title/artist in the metadata
+    /// with `is_playing` false — hiding the row at that point would make the pause button
+    /// disappear right after it was pressed. The backend empties `metadata` (hence `title`) when the
+    /// source really stops or changes (see the `_metadata = {}` of the sources concerned).
     var nowPlaying: NowPlayingInfo? {
         guard let state, isConnected else { return nil }
         return nowPlayingInfo(for: state)
     }
 
-    /// Calcul pur derrière `nowPlaying`, factorisé pour être rejouable sur un `MiloState`
-    /// explicite — c'est ce que `syncDisplayedNowPlaying` utilise depuis `refreshState`/
-    /// `didReceiveStateUpdate`, avant que `state` lui-même ne soit forcément à jour.
+    /// The pure computation behind `nowPlaying`, factored out so it can be replayed on an explicit
+    /// `MiloState` — which is what `syncDisplayedNowPlaying` uses from `refreshState`/
+    /// `didReceiveStateUpdate`, before `state` itself is necessarily up to date.
     private func nowPlayingInfo(for state: MiloState) -> NowPlayingInfo? {
         if state.activeSource == "radio" { return radioNowPlaying(state) }
 
@@ -698,12 +698,12 @@ final class MiloStore {
         )
     }
 
-    /// Projection Radio de `nowPlaying` : le morceau reconnu (Shazam/in-band) s'il y en a un,
-    /// sinon le nom + le logo de la STATION elle-même — pour toujours montrer quelque chose
-    /// pendant une écoute radio, même sans reconnaissance. `lastRadioStation` couvre le cas du
-    /// stop, où le backend vide justement ces champs de `metadata` (voir
-    /// `_handle_stop_playback` côté Milo) : sans lui, la ligne disparaîtrait avec la station et
-    /// le bouton « relancer » n'aurait plus rien à relancer.
+    /// Radio's projection of `nowPlaying`: the recognized song (Shazam/in-band) if there is one,
+    /// otherwise the name + the logo of the STATION itself — so as to always show something
+    /// while listening to the radio, even without recognition. `lastRadioStation` covers the case of
+    /// a stop, where the backend empties precisely those fields of `metadata` (see
+    /// `_handle_stop_playback` on the Milo side): without it, the row would disappear with the station and
+    /// the "restart" button would have nothing left to restart.
     private func radioNowPlaying(_ state: MiloState) -> NowPlayingInfo? {
         let isRecognizedTrack = (state.metadata["track_title"] as? String)?.isEmpty == false
         let stationName = (state.metadata["station_name"] as? String) ?? lastRadioStation?.name
@@ -717,10 +717,10 @@ final class MiloStore {
         let trackArtworkURL = connectionManager.apiService?.nowPlayingArtworkURL(for: trackArtworkPath)
         let stationArtworkURL = radioFaviconURL(for: stationFavicon)
 
-        // Le logo de la station se glisse en médaillon sur la pochette SEULEMENT quand celle-ci
-        // est la pochette PROPRE au morceau reconnu (Shazam) : sans artwork à lui, la pochette
-        // affichée EST déjà le logo de la station (repli juste en dessous) — le redoubler en
-        // médaillon serait redondant.
+        // The station's logo slips in as a badge over the cover art ONLY when the latter
+        // is the recognized song's OWN cover art (Shazam): with no artwork of its own, the displayed
+        // cover art already IS the station's logo (the fallback just below) — doubling it up in a
+        // badge would be redundant.
         let badgeArtworkURL = trackArtworkURL != nil ? stationArtworkURL : nil
 
         return NowPlayingInfo(
@@ -733,19 +733,19 @@ final class MiloStore {
         )
     }
 
-    /// Vrai si la source active accepte pause/resume — voir `NowPlayingControls`.
+    /// True if the active source accepts pause/resume — see `NowPlayingControls`.
     var nowPlayingSupportsPauseResume: Bool {
         state.map { NowPlayingControls.pauseResumeSources.contains($0.activeSource) } ?? false
     }
 
-    /// Vrai si la source active accepte de passer au morceau suivant.
+    /// True if the active source accepts skipping to the next song.
     var nowPlayingSupportsNext: Bool {
         state.map { NowPlayingControls.nextSources.contains($0.activeSource) } ?? false
     }
 
-    /// Bascule play/pause de la source active. Fire-and-forget, comme les actions multiroom :
-    /// le prochain `state_changed` (WebSocket ou poll de fond) rediffuse `is_playing` et met la
-    /// ligne à jour tout seule — pas de spinner ni d'état optimiste à gérer ici.
+    /// Toggles play/pause on the active source. Fire-and-forget, like the multiroom actions:
+    /// the next `state_changed` (WebSocket or background poll) rebroadcasts `is_playing` and updates
+    /// the row on its own — no spinner and no optimistic state to manage here.
     func toggleNowPlayingPause() {
         guard let apiService = connectionManager.apiService,
               let source = state?.activeSource,
@@ -757,7 +757,7 @@ final class MiloStore {
         }
     }
 
-    /// Passe au morceau suivant de la source active.
+    /// Skips to the active source's next song.
     func advanceToNextTrack() {
         guard let apiService = connectionManager.apiService, let source = state?.activeSource else { return }
         Task {
@@ -766,10 +766,10 @@ final class MiloStore {
         }
     }
 
-    /// Bascule stop/relance pour Radio : contrairement à `toggleNowPlayingPause`, ce n'est PAS
-    /// une vraie pause (Radio n'en a pas) — soit on stoppe le flux en cours, soit on relance la
-    /// DERNIÈRE station connue (`lastRadioStation`, qui survit à un stop côté client alors que
-    /// le backend a déjà vidé ses champs de `metadata`).
+    /// Toggles stop/restart for Radio: unlike `toggleNowPlayingPause`, this is NOT
+    /// a real pause (Radio has none) — either we stop the current stream, or we restart the
+    /// LAST known station (`lastRadioStation`, which survives a stop on the client side even though
+    /// the backend has already emptied its `metadata` fields).
     func toggleRadioNowPlaying() {
         guard state?.activeSource == "radio" else { return }
         if nowPlaying?.isPlaying == true {
@@ -779,7 +779,7 @@ final class MiloStore {
         }
     }
 
-    /// Vrai quand la source Radio est posée et que ses favoris peuvent s'afficher.
+    /// True when the Radio source is settled and its favourites can be displayed.
     var canShowRadioStations: Bool {
         state?.activeSource == "radio"
             && state?.isSourceSettled == true
@@ -822,23 +822,23 @@ final class MiloStore {
         }
     }
 
-    // MARK: - Bibliothèque musicale
+    // MARK: - Music library
 
-    /// Vrai quand la source Bibliothèque musicale est posée : la recherche se fait à la demande,
-    /// il n'y a donc rien d'équivalent à `radioFavorites != nil` à attendre ici.
+    /// True when the Music Library source is settled: the search is done on demand,
+    /// so there is nothing equivalent to `radioFavorites != nil` to wait for here.
     var canShowMusicLibrarySearch: Bool {
         state?.activeSource == "music_library"
             && state?.isSourceSettled == true
     }
 
-    /// Résout une pochette de résultat de recherche — même indirection que `radioFaviconURL`.
+    /// Resolves a search result's cover art — the same indirection as `radioFaviconURL`.
     func musicLibraryCoverURL(for coverId: String?) -> URL? {
         connectionManager.apiService?.musicLibraryCoverURL(for: coverId)
     }
 
-    /// Met à jour le terme tapé et (re)programme la recherche débattue. Un terme vide efface
-    /// immédiatement — pas de debounce à payer pour revenir à l'invite, comme côté frontend web
-    /// (`onInput` y court-circuite `store.clearSearch()` de la même façon).
+    /// Updates the typed term and (re)schedules the debounced search. An empty term clears
+    /// immediately — no debounce to pay to get back to the prompt, as on the web frontend
+    /// (`onInput` there short-circuits `store.clearSearch()` in the same way).
     func updateMusicLibrarySearchTerm(_ term: String) {
         musicLibrarySearchTerm = term
         musicLibrarySearchTask?.cancel()
@@ -863,8 +863,8 @@ final class MiloStore {
         guard let apiService = connectionManager.apiService else { return }
         do {
             let results = try await apiService.searchMusicLibrary(query: query)
-            // Une réponse en retard sur un terme déjà remplacé/effacé ne doit pas écraser
-            // l'affichage courant.
+            // A late answer to a term already replaced/cleared must not overwrite
+            // the current display.
             guard musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines) == query else { return }
             musicLibrarySearchResults = results
             musicLibrarySearchHasSearched = true
@@ -874,23 +874,23 @@ final class MiloStore {
         musicLibrarySearchLoading = false
     }
 
-    /// Charge la vitrine montrée tant que le champ de recherche est vide : les albums ÉCOUTÉS
-    /// récemment (`getAlbumList2` `type=recent`), à défaut les albums AJOUTÉS récemment
+    /// Loads the showcase shown while the search field is empty: the recently PLAYED
+    /// albums (`getAlbumList2` `type=recent`), failing that the recently ADDED albums
     /// (`type=newest`).
     ///
-    /// Le repli n'est pas une précaution de principe : Navidrome ne compte une lecture que sur un
-    /// `scrobble` (`submission=true`), jamais sur l'endpoint `stream`. Le backend Milō scrobble
-    /// depuis le 13/09/2026 seulement — avant ça `recent`, `frequent` et `starred` revenaient
-    /// vides (mesuré sur l'appareil), et une install dont l'historique est encore vierge les
-    /// retrouve vides. `newest`, lui, dérive de la date d'import et répond toujours.
+    /// The fallback is not a precaution on principle: Navidrome only counts a play on a
+    /// `scrobble` (`submission=true`), never on the `stream` endpoint. The Milō backend has scrobbled
+    /// only since 2026-09-13 — before that `recent`, `frequent` and `starred` came back
+    /// empty (measured on the device), and an install whose history is still untouched finds them
+    /// empty. `newest`, by contrast, derives from the import date and always answers.
     ///
-    /// Un album remonte en tête dès qu'UNE de ses pistes franchit le seuil de scrobble (la
-    /// moitié de sa durée, ou 4 minutes) : Navidrome propage la date de lecture de la piste à
-    /// son album, et c'est sur cette date que `recent` trie. Écouter un album entier n'est donc
-    /// pas nécessaire — vérifié sur l'appareil, un album de 9 pistes classé après une seule.
+    /// An album rises to the top as soon as ONE of its tracks crosses the scrobble threshold (half
+    /// its duration, or 4 minutes): Navidrome propagates the track's play date to
+    /// its album, and it is on that date that `recent` sorts. Listening to a whole album is therefore
+    /// not necessary — verified on the device, a 9-track album ranked after a single one.
     ///
-    /// Les deux requêtes sont en série et non en parallèle : la seconde ne sert que si la
-    /// première ne rapporte rien, ce qui sera le cas de moins en moins souvent.
+    /// The two requests are serial and not parallel: the second is only of use if the
+    /// first returns nothing, which will be the case less and less often.
     func loadMusicLibraryShowcase() {
         guard let apiService = connectionManager.apiService else { return }
         musicLibraryShowcaseTask?.cancel()
@@ -908,8 +908,8 @@ final class MiloStore {
             } catch {
                 NSLog("❌ Music library showcase failed: %@", error.localizedDescription)
             }
-            // Annulée = une autre entrée dans la route a pris la main (ou on en est sorti) :
-            // l'état appartient à celle-là, on ne l'écrase pas.
+            // Cancelled = another entry into the route has taken over (or we have left it):
+            // the state belongs to that one, we do not overwrite it.
             guard let self, !Task.isCancelled else { return }
             musicLibraryShowcaseAlbums = albums
             musicLibraryShowcaseIsRecentlyAdded = isRecentlyAdded
@@ -917,12 +917,12 @@ final class MiloStore {
         }
     }
 
-    /// Vrai quand le sous-niveau recherche rend une ScrollView plutôt qu'une ligne unique
-    /// (vitrine, chargement, invite, « aucun résultat ») — c'est elle qui porte alors le retrait
-    /// bas du panneau, voir `MiloPanelView.bottomInset(for:)`. Reproduit exactement l'arbitrage
-    /// de `MusicLibrarySearchResultsList`, y compris sa précédence chargement > résultats : des
-    /// résultats encore à l'écran pendant le debounce suivant sont masqués par le spinner, et
-    /// c'est bien une ligne unique qui est rendue à ce moment-là.
+    /// True when the search sub-level renders a ScrollView rather than a single row
+    /// (showcase, loading, prompt, "no results") — it is then the one that carries the panel's
+    /// bottom inset, see `MiloPanelView.bottomInset(for:)`. Reproduces exactly the arbitration
+    /// of `MusicLibrarySearchResultsList`, including its loading > results precedence: results
+    /// still on screen during the next debounce are hidden by the spinner, and
+    /// it really is a single row that is rendered at that point.
     var musicLibrarySearchShowsList: Bool {
         guard !musicLibrarySearchTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return !musicLibraryShowcaseLoading && !musicLibraryShowcaseAlbums.isEmpty
@@ -930,12 +930,12 @@ final class MiloStore {
         return !musicLibrarySearchLoading && !musicLibrarySearchResults.isEmpty
     }
 
-    /// Efface tout l'état de navigation de la bibliothèque musicale (recherche ET pages
-    /// artiste/album) — à la sortie complète vers la racine, à la fermeture du panneau, ou quand
-    /// la source cesse d'être affichable (voir `MiloPanelView`). PAS appelé par la navigation
-    /// interne (album → artiste → recherche) : chaque page garde ses propres données tant qu'on
-    /// reste dans le fil de navigation, `showMusicLibraryArtist`/`showMusicLibraryAlbum` les
-    /// écrasant de toute façon à chaque nouvelle visite.
+    /// Clears all of the music library's navigation state (search AND
+    /// artist/album pages) — on a full exit to the root, when the panel closes, or when
+    /// the source stops being displayable (see `MiloPanelView`). NOT called by internal
+    /// navigation (album → artist → search): each page keeps its own data as long as we
+    /// stay within the navigation thread, `showMusicLibraryArtist`/`showMusicLibraryAlbum`
+    /// overwriting them on every new visit anyway.
     func clearMusicLibraryBrowsing() {
         musicLibrarySearchTask?.cancel()
         musicLibrarySearchTerm = ""
@@ -960,14 +960,14 @@ final class MiloStore {
         musicLibraryPlayingArtistId = nil
     }
 
-    /// Ouvre la page d'un artiste (ses albums) — accessible depuis la section Artistes d'une
-    /// recherche. Charge en tâche de fond ; le garde après l'`await` évite qu'une réponse en
-    /// retard (l'utilisateur a déjà rouvert un AUTRE artiste entre-temps) n'écrase le bon
-    /// affichage.
+    /// Opens an artist's page (their albums) — reachable from a search's Artists section.
+    /// Loads in the background; the guard after the `await` prevents a late answer
+    /// (the user has already opened ANOTHER artist in the meantime) from overwriting the right
+    /// display.
     func showMusicLibraryArtist(_ artist: MusicLibraryArtist) {
-        // Rouvrir une page artiste — la même ou une autre — repart d'un bouton play, comme une
-        // page qu'on découvre. Un aller-retour vers un de ses albums, lui, ne passe pas par ici
-        // et garde donc la mémoire de la file.
+        // Reopening an artist page — the same one or another — starts again from a play button, like
+        // a page being discovered. A round trip to one of their albums, by contrast, does not go
+        // through here and therefore keeps the queue's memory.
         musicLibraryPlayingArtistId = nil
         musicLibraryViewedArtist = artist
         musicLibraryArtistAlbums = []
@@ -990,8 +990,8 @@ final class MiloStore {
         }
     }
 
-    /// Ouvre la page d'un album (ses morceaux) — accessible depuis la section Albums d'une
-    /// recherche OU depuis la page d'un artiste. Même garde anti-réponse-en-retard que
+    /// Opens an album's page (its songs) — reachable from a search's Albums section
+    /// OR from an artist's page. The same late-answer guard as
     /// `showMusicLibraryArtist`.
     func showMusicLibraryAlbum(_ album: MusicLibraryAlbum) {
         musicLibraryViewedAlbum = album
@@ -1015,23 +1015,23 @@ final class MiloStore {
         }
     }
 
-    /// Vrai si CE morceau est celui actuellement chargé par la bibliothèque musicale (en lecture
-    /// OU en pause) — distingue la ligne « en cours » des autres dans une liste de résultats/
-    /// d'album, pour lui afficher play/pause plutôt que le survol générique.
+    /// True if THIS song is the one currently loaded by the music library (playing
+    /// OR paused) — tells the "current" row from the others in a results/album
+    /// list, so as to show it play/pause rather than the generic hover.
     func isCurrentMusicLibrarySong(_ song: MusicLibrarySong) -> Bool {
         state?.activeSource == "music_library" && nowPlaying?.id == song.id
     }
 
-    /// Lance la lecture d'un morceau : la file envoyée au backend est la liste COMPLÈTE des
-    /// morceaux du CONTEXTE d'où vient le tap (résultats de recherche, ou morceaux de l'album
-    /// ouvert), démarrée à l'index de celui touché — même geste que `playContext(songs, idx)`
-    /// côté frontend web.
+    /// Starts playback of a song: the queue sent to the backend is the COMPLETE list of
+    /// songs from the CONTEXT the tap came from (search results, or the open album's
+    /// songs), starting at the index of the one touched — the same gesture as `playContext(songs, idx)`
+    /// on the web frontend.
     func playMusicLibrarySong(_ song: MusicLibrarySong, from context: [MusicLibrarySong]) {
         guard let apiService = connectionManager.apiService,
               let index = context.firstIndex(where: { $0.id == song.id }) else { return }
 
         let tracks = context.map { $0.raw }
-        // Cette file remplace celle qu'avait lancée une page artiste, le cas échéant.
+        // This queue replaces the one an artist page had started, if any.
         musicLibraryPlayingArtistId = nil
         musicLibrarySongLoadingId = song.id
         Task {
@@ -1044,39 +1044,39 @@ final class MiloStore {
         }
     }
 
-    /// Vrai si le morceau en cours sort de l'album ouvert — donc si le bouton de lecture de son
-    /// en-tête doit basculer play/pause plutôt que relancer la file depuis la première piste.
+    /// True if the current song comes from the open album — hence whether its header's play
+    /// button should toggle play/pause rather than restart the queue from the first track.
     ///
-    /// On teste l'appartenance du morceau en cours à la liste affichée, et non un « id d'album
-    /// en cours » : le backend n'en publie pas, et un album multi-disque fusionné porte un id
-    /// synthétique (`mdisc:…`) que ses morceaux, eux, ne portent pas — la comparaison d'ids
-    /// échouerait précisément sur les albums que le backend a recollés.
+    /// We test the current song's membership of the displayed list, and not a "current album
+    /// id": the backend does not publish one, and a merged multi-disc album carries a
+    /// synthetic id (`mdisc:…`) that its songs do not — an id comparison
+    /// would fail precisely on the albums the backend has glued back together.
     var isCurrentMusicLibraryAlbum: Bool {
         guard state?.activeSource == "music_library", let currentId = nowPlaying?.id else { return false }
         return musicLibraryAlbumSongs.contains { $0.id == currentId }
     }
 
-    /// Vrai quand l'album ouvert est en train de jouer (et non simplement chargé) : c'est ce qui
-    /// décide si l'en-tête montre pause ou play.
+    /// True when the open album is playing (and not merely loaded): this is what
+    /// decides whether the header shows pause or play.
     var isMusicLibraryAlbumPlaying: Bool {
         isCurrentMusicLibraryAlbum && (nowPlaying?.isPlaying ?? false)
     }
 
-    /// Vrai quand la file en cours est celle qu'a lancée la page artiste ouverte — donc quand
-    /// son bouton doit basculer play/pause au lieu de rebâtir la file depuis le début.
+    /// True when the current queue is the one the open artist page started — hence when
+    /// its button should toggle play/pause instead of rebuilding the queue from the start.
     var isMusicLibraryArtistQueued: Bool {
         guard state?.activeSource == "music_library", let artist = musicLibraryViewedArtist else { return false }
         return musicLibraryPlayingArtistId == artist.id
     }
 
-    /// Vrai quand cette file joue vraiment (et n'est pas simplement en pause) : ce qui décide si
-    /// l'en-tête artiste montre pause ou play.
+    /// True when this queue is really playing (and not merely paused): what decides whether
+    /// the artist header shows pause or play.
     var isMusicLibraryArtistPlaying: Bool {
         isMusicLibraryArtistQueued && (nowPlaying?.isPlaying ?? false)
     }
 
-    /// Vrai quand c'est la file de CETTE page qui s'assemble — et pas celle de l'autre page du
-    /// fil de navigation, dont le spinner ne regarde pas celle-ci.
+    /// True when it is THIS page's queue being assembled — and not the other page's in the
+    /// navigation thread, whose spinner is none of this one's business.
     var isMusicLibraryArtistPlayLoading: Bool {
         musicLibraryViewedArtist.map { musicLibraryContextLoadingId == $0.id } ?? false
     }
@@ -1085,11 +1085,11 @@ final class MiloStore {
         musicLibraryViewedAlbum.map { musicLibraryContextLoadingId == $0.id } ?? false
     }
 
-    /// Lance l'album ouvert depuis sa première piste — ou bascule play/pause s'il est déjà celui
-    /// qui joue, même geste que la ligne de son morceau en cours (`MusicLibrarySongRow`).
+    /// Starts the open album from its first track — or toggles play/pause if it is already the
+    /// one playing, the same gesture as its current song's row (`MusicLibrarySongRow`).
     ///
-    /// La file envoyée est la liste AFFICHÉE : un album multi-disque part donc déjà concaténé
-    /// dans l'ordre où on le lit, sans rien à recoller ici (le backend l'a fait en servant
+    /// The queue sent is the DISPLAYED list: a multi-disc album therefore goes off already concatenated
+    /// in the order it is read, with nothing to glue back together here (the backend did that when serving
     /// `mdisc:…`).
     func playMusicLibraryAlbum() {
         if isCurrentMusicLibraryAlbum {
@@ -1114,12 +1114,12 @@ final class MiloStore {
         }
     }
 
-    /// Lance TOUT l'artiste ouvert, ses albums bout à bout dans l'ordre de la page.
+    /// Starts the WHOLE open artist, their albums end to end in the page's order.
     ///
-    /// La charge utile `getArtist` ne contient aucune piste (elle ne liste que des albums), donc
-    /// la file s'assemble ici : un fetch par album, tous en parallèle, puis remis dans l'ordre
-    /// d'affichage — c'est le geste de `playAll()` du frontend web (ArtistView.vue), y compris sa
-    /// tolérance aux albums qui échouent (ils sont sautés, on ne perd pas toute la file pour un).
+    /// The `getArtist` payload contains no tracks (it only lists albums), so
+    /// the queue is assembled here: one fetch per album, all in parallel, then put back into the
+    /// display order — this is the web frontend's `playAll()` gesture (ArtistView.vue), including its
+    /// tolerance for albums that fail (they are skipped, we do not lose the whole queue over one).
     func playMusicLibraryArtist() {
         if isMusicLibraryArtistQueued {
             toggleNowPlayingPause()
@@ -1142,10 +1142,10 @@ final class MiloStore {
                         do {
                             return (index, try await apiService.fetchMusicLibraryAlbumSongs(albumId: albumId))
                         } catch {
-                            // L'album est sauté, pas toute la file (comme le web). Mais il est
-                            // tracé : une file amputée est indiscernable d'un album vide à
-                            // l'écran, et c'est ici qu'un Pi qui bronche sous N fetchs
-                            // simultanés se voit.
+                            // The album is skipped, not the whole queue (as on the web). But it is
+                            // logged: a truncated queue is indistinguishable from an empty album
+                            // on screen, and this is where a Pi that falters under N simultaneous
+                            // fetches shows itself.
                             NSLog("⚠️ Music library artist play: album %@ skipped: %@",
                                   albumId, error.localizedDescription)
                             return (index, [])
@@ -1155,20 +1155,20 @@ final class MiloStore {
                 for await (index, songs) in group { songsByAlbum[index] = songs }
             }
 
-            // L'utilisateur a pu ouvrir un autre artiste pendant les fetchs : lancer maintenant
-            // démarrerait une file qu'il a déjà laissée derrière lui (même garde que le web, et
-            // que `showMusicLibraryArtist`).
+            // The user may have opened another artist during the fetches: starting now
+            // would start a queue they have already left behind (the same guard as the web's, and
+            // as `showMusicLibraryArtist`'s).
             guard musicLibraryViewedArtist?.id == artist.id else { return }
 
-            // Les tâches se terminent dans le désordre : c'est l'index qui rétablit l'ordre des
-            // albums tel que la page les montre.
+            // The tasks finish out of order: it is the index that restores the order of the
+            // albums as the page shows them.
             let tracks = albumIds.indices.flatMap { songsByAlbum[$0] ?? [] }.map(\.raw)
             guard !tracks.isEmpty else { return }
 
             do {
                 try await apiService.playMusicLibraryContext(tracks: tracks, startIndex: 0)
-                // Après l'envoi seulement : un échec doit laisser le bouton sur play, sans quoi
-                // il proposerait de mettre en pause une file qui n'a jamais démarré.
+                // Only after the send: a failure must leave the button on play, otherwise
+                // it would offer to pause a queue that never started.
                 musicLibraryPlayingArtistId = artist.id
             } catch {
                 NSLog("❌ Music library artist play_context failed: %@", error.localizedDescription)
@@ -1178,24 +1178,24 @@ final class MiloStore {
 
     // MARK: - Multiroom
 
-    /// Vrai quand la sous-section multiroom peut s'afficher : le multiroom est actif ET le
-    /// registre a au moins un élément à montrer. Le chevron de la ligne Multiroom n'apparaît
-    /// qu'alors (comme le caret Radio, gardé par `canShowRadioStations`).
+    /// True when the multiroom sub-section can be displayed: multiroom is active AND the
+    /// registry has at least one item to show. The Multiroom row's chevron only appears
+    /// then (like the Radio chevron, guarded by `canShowRadioStations`).
     var canShowMultiroom: Bool {
         state?.multiroomEnabled == true && !multiroomDisplayItems.isEmpty
     }
 
-    /// La liste ordonnée pour l'affichage : les zones (chacune avec ses clients membres),
-    /// puis les clients standalone. Trié en-ligne-d'abord, zones avant clients, puis
-    /// alphabétique — le même langage que la section « Sortie » de « Son » et que le
-    /// frontend web du multiroom.
+    /// The list ordered for display: the zones (each with its member clients),
+    /// then the standalone clients. Sorted online-first, zones before clients, then
+    /// alphabetically — the same language as the "Output" section of "Sound" and as the
+    /// multiroom web frontend.
     var multiroomDisplayItems: [MultiroomDisplayItem] {
         let clientsInZones = Set(multiroom.zones.values.flatMap { $0.clientIds })
 
         var items: [MultiroomDisplayItem] = []
 
         for zone in multiroom.zones.values {
-            // On garde l'ordre des membres tel que le backend l'a trié (local d'abord).
+            // We keep the members' order as the backend sorted it (local first).
             let members = zone.clientIds.compactMap { multiroom.clients[$0] }
             guard !members.isEmpty else { continue }
             items.append(.zone(zone, clients: members))
@@ -1213,9 +1213,9 @@ final class MiloStore {
         }
     }
 
-    /// Recharge la structure multiroom ET le volume live depuis le backend. Appelé à
-    /// l'ouverture de la sous-section, quand le multiroom passe actif, et sur tout événement
-    /// WebSocket de structure. Silencieux en cas d'échec : on garde la dernière valeur connue.
+    /// Reloads the multiroom structure AND the live volume from the backend. Called when
+    /// the sub-section opens, when multiroom becomes active, and on any structure
+    /// WebSocket event. Silent on failure: we keep the last known value.
     func loadMultiroomState() {
         guard let apiService = connectionManager.apiService else { return }
         Task {
@@ -1230,10 +1230,10 @@ final class MiloStore {
         }
     }
 
-    // MARK: - Actions multiroom (volume / mute)
+    // MARK: - Multiroom actions (volume / mute)
 
-    /// Fixe le volume ABSOLU d'un client. Fire-and-forget : le backend rediffuse le nouvel
-    /// état par `volume/volume_changed`, qui met `multiroomVolume` à jour.
+    /// Sets a client's ABSOLUTE volume. Fire-and-forget: the backend rebroadcasts the new
+    /// state through `volume/volume_changed`, which updates `multiroomVolume`.
     func setClientVolume(mac: String, volumeDb: Double) {
         guard let apiService = connectionManager.apiService else { return }
         Task {
@@ -1242,7 +1242,7 @@ final class MiloStore {
         }
     }
 
-    /// Bascule le mute d'un client.
+    /// Toggles a client's mute.
     func setClientMute(mac: String, muted: Bool) {
         guard let apiService = connectionManager.apiService else { return }
         Task {
@@ -1251,7 +1251,7 @@ final class MiloStore {
         }
     }
 
-    /// Applique un DELTA de volume à une zone (le backend le répercute sur ses clients).
+    /// Applies a volume DELTA to a zone (the backend passes it on to its clients).
     func setZoneVolumeDelta(zoneId: String, deltaDb: Double) {
         guard let apiService = connectionManager.apiService else { return }
         Task {
@@ -1260,8 +1260,8 @@ final class MiloStore {
         }
     }
 
-    /// Mute/démute une zone entière — le backend n'a pas d'endpoint de zone pour le mute, on
-    /// le pose donc client par client (comme le frontend web), sur les seuls MAC fournis.
+    /// Mutes/unmutes a whole zone — the backend has no zone endpoint for mute, so we
+    /// set it client by client (like the web frontend), on the supplied MACs only.
     func setZoneMute(clientMacs: [String], muted: Bool) {
         guard let apiService = connectionManager.apiService else { return }
         Task {
@@ -1272,9 +1272,9 @@ final class MiloStore {
         }
     }
 
-    /// Synchronise le cache multiroom avec l'état courant : on le charge dès que le
-    /// multiroom est actif (et pas encore chargé), on le vide quand il est coupé. Appelé sur
-    /// chaque nouvel état (fetch HTTP comme push WebSocket).
+    /// Keeps the multiroom cache in sync with the current state: we load it as soon as
+    /// multiroom is active (and not yet loaded), and empty it when it is switched off. Called on
+    /// every new state (HTTP fetch as well as WebSocket push).
     private func syncMultiroomState(for newState: MiloState) {
         if newState.multiroomEnabled {
             if multiroom.clients.isEmpty { loadMultiroomState() }
@@ -1284,10 +1284,10 @@ final class MiloStore {
         }
     }
 
-    /// Maintient `lastRadioStation` à jour tant que Radio est la source active. Un `stop` vide
-    /// les champs de station de `metadata` (voir `_handle_stop_playback` côté Milo) SANS changer
-    /// `active_source` — la garde ne se déclenche donc que sur un vrai changement de source, pas
-    /// sur un stop, ce qui est justement le but : survivre au stop pour le bouton « relancer ».
+    /// Keeps `lastRadioStation` up to date while Radio is the active source. A `stop` empties
+    /// the station fields of `metadata` (see `_handle_stop_playback` on the Milo side) WITHOUT changing
+    /// `active_source` — so the guard only fires on a real source change, not
+    /// on a stop, which is precisely the point: surviving the stop for the "restart" button.
     private func syncLastRadioStation(for newState: MiloState) {
         guard newState.activeSource == "radio" else {
             lastRadioStation = nil
@@ -1298,17 +1298,17 @@ final class MiloStore {
         lastRadioStation = (id: id, name: name, favicon: newState.metadata["favicon"] as? String)
     }
 
-    /// Maintient `displayedNowPlaying` à jour — SEULEMENT quand un morceau est détecté, jamais
-    /// remis à nil ici. Appelée après `syncLastRadioStation` (dont `radioNowPlaying` dépend pour
-    /// son repli après un stop) : il doit rester peuplé après que `nowPlaying` retombe à nil, le
-    /// temps que `MenuBarShell` anime `nowPlayingRevealFraction` jusqu'à 0.
+    /// Keeps `displayedNowPlaying` up to date — ONLY when a song is detected, never
+    /// reset to nil here. Called after `syncLastRadioStation` (on which `radioNowPlaying` depends for
+    /// its fallback after a stop): it has to stay populated after `nowPlaying` falls back to nil, long
+    /// enough for `MenuBarShell` to animate `nowPlayingRevealFraction` down to 0.
     private func syncDisplayedNowPlaying(for newState: MiloState) {
         if let info = nowPlayingInfo(for: newState) {
             displayedNowPlaying = info
         }
     }
 
-    // MARK: - Loading : fonctionnalités (multiroom, equalizer)
+    // MARK: - Loading: features (multiroom, equalizer)
 
     private func startFunctionalityLoading(for identifier: String, expectedState: Bool) {
         guard loadingStates[identifier] != true else { return }
@@ -1320,8 +1320,8 @@ final class MiloStore {
 
         let safetyTimeout = identifier == "multiroom" ? multiroomLoadingTimeout : functionalityLoadingTimeout
         loadingTimers[identifier]?.invalidate()
-        // Mode .common : le timeout de sécurité est la résolution de dernier recours
-        // du spinner — il doit tomber même pendant un tracking d'événements.
+        // .common mode: the safety timeout is the spinner's last-resort
+        // resolution — it has to fire even during event tracking.
         let timer = Timer(timeInterval: safetyTimeout, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.stopFunctionalityLoading(for: identifier) }
         }
@@ -1330,8 +1330,8 @@ final class MiloStore {
     }
 
     private func stopFunctionalityLoading(for identifier: String) {
-        // Durée minimale d'affichage : un toggle qui répond en 80 ms ne doit pas
-        // faire clignoter le spinner.
+        // Minimum display duration: a toggle that answers in 80 ms must not
+        // flash the spinner.
         if let startTime = loadingStartTimes[identifier] {
             let elapsed = Date().timeIntervalSince(startTime)
             if elapsed < minimumFunctionalityLoadingDuration {
@@ -1352,11 +1352,11 @@ final class MiloStore {
     }
 
     private func checkFunctionalityStateChange(_ newState: MiloState) {
-        // Le loading multiroom est résolu par didReceiveMultiroomTransitionComplete,
-        // pas en comparant l'état ici : le backend pré-positionne silencieusement
-        // multiroom_enabled AVANT le vrai travail de routage (démarrage snapserver,
-        // WebSocket prêt jusqu'à 15 s), donc les états intermédiaires portent déjà la
-        // nouvelle valeur et résoudraient le spinner trop tôt.
+        // The multiroom loading is resolved by didReceiveMultiroomTransitionComplete,
+        // not by comparing the state here: the backend silently pre-sets
+        // multiroom_enabled BEFORE the real routing work (snapserver startup,
+        // WebSocket ready up to 15 s), so the intermediate states already carry the
+        // new value and would resolve the spinner too early.
 
         if let expectedEqualizer = expectedFunctionalityStates["equalizer"],
            newState.equalizerEnabled == expectedEqualizer,
@@ -1365,7 +1365,7 @@ final class MiloStore {
         }
     }
 
-    // MARK: - Loading : sources audio
+    // MARK: - Loading: audio sources
 
     private func startLoading(for identifier: String, timeout: TimeInterval) {
         guard loadingStates[identifier] != true else { return }
@@ -1375,7 +1375,7 @@ final class MiloStore {
         setLoadingState(for: identifier, isLoading: true)
 
         loadingTimers[identifier]?.invalidate()
-        // Mode .common — voir startFunctionalityLoading.
+        // .common mode — see startFunctionalityLoading.
         let timer = Timer(timeInterval: timeout, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.stopLoading(for: identifier) }
         }
@@ -1396,14 +1396,14 @@ final class MiloStore {
         loadingStates[identifier] = isLoading
     }
 
-    /// Réconcilie les spinners de sources avec ce que dit le backend.
+    /// Reconciles the source spinners with what the backend says.
     ///
-    /// C'est le point délicat de cette classe. Un clic pose un spinner *avant* la
-    /// requête HTTP ; le backend peut mettre un instant à annoncer la transition
-    /// (`transition_start`). Pendant cette fenêtre de grâce, un état "non transitoire"
-    /// reçu est probablement l'**ancien** état (race clic↔transition_start) et ne doit
-    /// pas effacer le spinner. Une fois la transition confirmée, la grâce est levée et
-    /// le spinner s'efface dès la fin de transition — comme le frontend web.
+    /// This is the delicate point of this class. A click sets a spinner *before* the
+    /// HTTP request; the backend can take a moment to announce the transition
+    /// (`transition_start`). During this grace window, a "non-transitional" state
+    /// received is probably the **old** state (the click↔transition_start race) and must
+    /// not clear the spinner. Once the transition is confirmed, the grace is lifted and
+    /// the spinner clears as soon as the transition ends — like the web frontend.
     private func syncLoadingStatesWithBackend() {
         guard let state else { return }
 
@@ -1413,35 +1413,35 @@ final class MiloStore {
 
         for identifier in audioSources {
             if isSourceTransitioning && identifier == state.activeSource {
-                // Le backend a pris en charge la transition de cette source.
+                // The backend has taken charge of this source's transition.
                 if loadingStates[identifier] != true {
                     setLoadingState(for: identifier, isLoading: true)
                 }
-                // Transition confirmée : on lève la fenêtre de grâce anti-race pour
-                // pouvoir effacer le spinner DÈS la fin de transition, sans attendre
-                // un délai fixe.
+                // Transition confirmed: we lift the anti-race grace window so as to
+                // be able to clear the spinner AS SOON AS the transition ends, without waiting
+                // out a fixed delay.
                 manualLoadingProtection[identifier] = nil
             } else if loadingStates[identifier] == true {
                 if let graceStart = manualLoadingProtection[identifier] {
                     let elapsed = Date().timeIntervalSince(graceStart)
                     if elapsed < manualLoadingGraceDuration {
-                        // Re-vérifier à la fin de la fenêtre : sinon, si le backend
-                        // n'émet plus rien (source posée en WAITING), le spinner
-                        // resterait collé jusqu'au timeout de sécurité (15 s).
+                        // Re-check at the end of the window: otherwise, if the backend
+                        // emits nothing further (source settled in WAITING), the spinner
+                        // would stay stuck until the safety timeout (15 s).
                         scheduleGraceWindowSourceLoadingClear(identifier, after: manualLoadingGraceDuration - elapsed)
                         continue
                     }
                 }
-                // Transition confirmée puis terminée (grâce levée), ou fenêtre de
-                // grâce expirée sans confirmation : on efface.
+                // Transition confirmed then finished (grace lifted), or grace
+                // window expired without confirmation: we clear.
                 stopLoading(for: identifier)
             }
         }
     }
 
-    /// Réévalue le spinner d'une source à la fin de sa fenêtre de grâce quand le backend
-    /// n'a pas encore confirmé la transition, en re-vérifiant l'état courant (pour ne pas
-    /// effacer une transition finalement prise en charge).
+    /// Re-evaluates a source's spinner at the end of its grace window when the backend
+    /// has not confirmed the transition yet, by re-checking the current state (so as not to
+    /// clear a transition that was taken in charge after all).
     private func scheduleGraceWindowSourceLoadingClear(_ identifier: String, after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             MainActor.assumeIsolated {
@@ -1455,7 +1455,7 @@ final class MiloStore {
         }
     }
 
-    // MARK: - Poll de fond
+    // MARK: - Background poll
 
     private func startBackgroundRefresh() {
         backgroundRefreshTimer?.invalidate()
@@ -1470,28 +1470,28 @@ final class MiloStore {
     private func runBackgroundRefreshTick() {
         guard isConnected, !isPanelOpen else { return }
 
-        // Pause auto-récupérante : après trop d'échecs consécutifs on attend
-        // refreshPauseDuration puis on retente, au lieu de s'arrêter jusqu'à la
-        // prochaine reconnexion.
+        // A self-recovering pause: after too many consecutive failures we wait
+        // refreshPauseDuration and then retry, instead of stopping until the
+        // next reconnection.
         if let pausedUntil = refreshPausedUntil {
             guard Date() >= pausedUntil else { return }
             refreshPausedUntil = nil
             consecutiveRefreshFailures = 0
         }
 
-        // La propriété est possédée par le main thread et nillée à la déconnexion.
+        // The property is owned by the main thread and nilled on disconnect.
         guard let apiService = connectionManager.apiService else { return }
 
-        // `enabledApps` encore nil = l'amorçage /bulk a échoué à la connexion. Sans
-        // ce rattrapage il ne serait retenté qu'à la reconnexion suivante, et toute
-        // la session tournerait sans filtre de sources ni vraies limites de volume.
+        // `enabledApps` still nil = the /bulk bootstrap failed at connect. Without
+        // this recovery it would only be retried on the next reconnection, and the whole
+        // session would run with no source filter and no real volume limits.
         let needsBulkSettings = enabledApps == nil
 
         Task {
-            // Le volume est poussé par WebSocket en temps réel, pas besoin de le
-            // poll ici. Les réglages statiques (dock apps + limites) sont chargés
-            // une fois à la connexion puis poussés par WebSocket — on ne les
-            // retente donc que tant que cet amorçage n'a pas abouti.
+            // The volume is pushed by WebSocket in real time, no need to
+            // poll it here. The static settings (dock apps + limits) are loaded
+            // once at connect and then pushed by WebSocket — so we only
+            // retry them while that bootstrap has not succeeded.
             if needsBulkSettings {
                 await refreshBulkSettings(using: apiService)
             }
@@ -1515,9 +1515,9 @@ final class MiloStore {
         backgroundRefreshTimer = nil
     }
 
-    // MARK: - Rafraîchissement
+    // MARK: - Refresh
 
-    /// Rafraîchit état + volume. Appelé à l'ouverture du panneau et à la connexion.
+    /// Refreshes state + volume. Called when the panel opens and on connect.
     func refreshPanelData() {
         guard let apiService = connectionManager.apiService else { return }
 
@@ -1527,8 +1527,8 @@ final class MiloStore {
             consecutiveRefreshFailures = 0
         }
 
-        // Amorçage /bulk resté en échec : le rattraper AVANT le refresh volume, car
-        // getVolumeStatus() lit les limites dans le cache que ce fetch amorce.
+        // The /bulk bootstrap still in failure: recover it BEFORE the volume refresh, since
+        // getVolumeStatus() reads the limits from the cache this fetch bootstraps.
         let needsBulkSettings = enabledApps == nil
 
         Task {
@@ -1579,8 +1579,8 @@ final class MiloStore {
         }
     }
 
-    /// Réglages statiques (dock apps + limites volume) via /api/settings/bulk. Amorce
-    /// aussi, par effet de bord côté MiloAPIService, le cache de limites lu par
+    /// The static settings (dock apps + volume limits) through /api/settings/bulk. Also
+    /// bootstraps, as a side effect on the MiloAPIService side, the limits cache read by
     /// getVolumeStatus().
     @discardableResult
     private func refreshBulkSettings(using apiService: MiloAPIService) async -> Bool {
@@ -1588,10 +1588,10 @@ final class MiloStore {
             let settings = try await apiService.fetchBulkSettings()
             enabledApps = settings.enabledApps
 
-            // Amorçage tardif (rattrapage après un /bulk raté) : `volume` a pu être
-            // lu entre-temps avec les limites de repli. Les recaler, sinon le slider
-            // et le HUD resteraient mal bornés jusqu'au prochain volume_limits_changed.
-            // Au premier amorçage `volume` est nil : ce bloc ne fait rien.
+            // A late bootstrap (recovery after a failed /bulk): `volume` may have been
+            // read in the meantime with the fallback limits. Realign them, otherwise the slider
+            // and the HUD would stay badly bounded until the next volume_limits_changed.
+            // On the first bootstrap `volume` is nil: this block does nothing.
             if let existing = volume,
                existing.limitMinDb != settings.limitMinDb || existing.limitMaxDb != settings.limitMaxDb {
                 let updated = existing.withLimits(minDb: settings.limitMinDb, maxDb: settings.limitMaxDb)
@@ -1604,10 +1604,10 @@ final class MiloStore {
         }
     }
 
-    /// Amorce les réglages statiques avec quelques essais espacés, comme le fait
-    /// refreshPanelData pour l'état. Un unique /bulk raté à la connexion laisserait
-    /// `enabledApps` nil — les sources s'afficheraient sans filtre ni ordre backend —
-    /// et le volume borné aux valeurs de repli, jusqu'à la reconnexion suivante.
+    /// Bootstraps the static settings with a few spaced-out attempts, as
+    /// refreshPanelData does for the state. A single failed /bulk at connect would leave
+    /// `enabledApps` nil — the sources would show up with no backend filter or order —
+    /// and the volume bounded to the fallback values, until the next reconnection.
     private func bootstrapBulkSettings(using apiService: MiloAPIService) async {
         let maxAttempts = 3
 
@@ -1618,7 +1618,7 @@ final class MiloStore {
             }
         }
 
-        // Dernier filet : le poll de fond retentera tant que `enabledApps` est nil.
+        // The last net: the background poll will retry as long as `enabledApps` is nil.
         NSLog("⚠️ Bulk settings bootstrap failed after %d attempts — background refresh will retry", maxAttempts)
     }
 
@@ -1639,15 +1639,15 @@ final class MiloStore {
         enabledApps = nil
         volumeController.apiService = nil
 
-        // Le cache radio doit être re-fetché à la reconnexion (les favoris ont pu
-        // changer pendant la coupure), et un spinner de station en vol ne doit pas
-        // survivre à la déconnexion.
+        // The radio cache has to be re-fetched on reconnection (the favourites may have
+        // changed during the outage), and a station spinner in flight must not
+        // survive the disconnection.
         radioFavorites = nil
         endRadioStationLoading()
         lastRadioStation = nil
         displayedNowPlaying = nil
 
-        // La structure multiroom sera re-fetchée à la reconnexion si le multiroom est actif.
+        // The multiroom structure will be re-fetched on reconnection if multiroom is active.
         multiroom = .empty
         multiroomVolume = .empty
 
@@ -1673,10 +1673,10 @@ extension MiloStore: MiloConnectionManagerDelegate {
         hotkeyManager?.startMonitoring()
         startBackgroundRefresh()
 
-        // Amorcer le cache des réglages statiques (limites volume + dock apps) via
-        // /api/settings/bulk AVANT le premier refresh volume : getVolumeStatus() lit
-        // les limites en cache, donc ce fetch doit atterrir d'abord pour éviter une
-        // fenêtre où le HUD afficherait les limites par défaut (-80/-21).
+        // Bootstrap the static settings cache (volume limits + dock apps) through
+        // /api/settings/bulk BEFORE the first volume refresh: getVolumeStatus() reads
+        // the cached limits, so this fetch has to land first to avoid a
+        // window where the HUD would show the default limits (-80/-21).
         guard let apiService else { return }
         Task { [weak self] in
             guard let self else { return }
@@ -1699,21 +1699,21 @@ extension MiloStore: MiloConnectionManagerDelegate {
         let previousSource = state?.activeSource
         state = newState
 
-        // Charger les favoris si Radio est actif et que le cache est vide (que Radio
-        // ait été activé depuis Milo Mac ou depuis le backend).
+        // Load the favourites if Radio is active and the cache is empty (whether Radio
+        // was enabled from Milo Mac or from the backend).
         if newState.activeSource == "radio" && radioFavorites == nil {
             loadRadioFavoritesInBackground()
         }
 
-        // Effacer le cache si on quitte Radio.
+        // Clear the cache if we leave Radio.
         if newState.activeSource != "radio" && previousSource == "radio" {
             radioFavorites = nil
             NSLog("🗑️ Radio favorites cache cleared")
         }
 
-        // Effacer le spinner de station dès la fin du buffering — couvre à la fois le
-        // démarrage réussi et l'échec de chargement du flux, pour qu'il ne reste jamais
-        // collé. Idem si Radio cesse d'être la source active.
+        // Clear the station spinner as soon as buffering ends — covers both a
+        // successful start and a failure to load the stream, so it never stays
+        // stuck. Same if Radio stops being the active source.
         if radioStationLoadingId != nil {
             if newState.activeSource != "radio" {
                 endRadioStationLoading()
@@ -1730,8 +1730,8 @@ extension MiloStore: MiloConnectionManagerDelegate {
     }
 
     func didReceiveMultiroomStructureChanged() {
-        // Seulement quand le multiroom est actif : sinon la sous-section est masquée et un
-        // re-fetch ne servirait à rien.
+        // Only when multiroom is active: otherwise the sub-section is hidden and a
+        // re-fetch would serve no purpose.
         guard state?.multiroomEnabled == true else { return }
         loadMultiroomState()
     }
@@ -1743,18 +1743,18 @@ extension MiloStore: MiloConnectionManagerDelegate {
     func didReceiveMultiroomTransitionComplete(success: Bool) {
         guard loadingStates["multiroom"] == true else { return }
         if !success {
-            // Effacer l'état attendu en cas d'échec pour qu'aucun state_changed tardif
-            // ne le résolve accidentellement.
+            // Clear the expected state on failure so that no late state_changed
+            // resolves it by accident.
             expectedFunctionalityStates["multiroom"] = nil
         }
         stopFunctionalityLoading(for: "multiroom")
     }
 
     func didReceiveVolumeUpdate(_ newVolume: VolumeStatus) {
-        // Les événements volume du WebSocket ne portent PAS les limites (le service
-        // envoie 0/0). Toujours substituer les limites en cache — stocker 0/0
-        // briquerait le slider (intervalle vide), notamment dans la fenêtre entre la
-        // connexion et le premier fetch volume où `volume` est encore nil.
+        // The WebSocket's volume events do NOT carry the limits (the service
+        // sends 0/0). Always substitute the cached limits — storing 0/0
+        // would brick the slider (an empty range), notably in the window between the
+        // connection and the first volume fetch where `volume` is still nil.
         let fallback = (minDb: VolumeDefaults.limitMinDb, maxDb: VolumeDefaults.limitMaxDb)
         let cached = connectionManager.apiService?.cachedLimits ?? fallback
         let limits = volume.map { (minDb: $0.limitMinDb, maxDb: $0.limitMaxDb) } ?? cached
@@ -1763,9 +1763,9 @@ extension MiloStore: MiloConnectionManagerDelegate {
         volume = updated
         volumeController.setCurrentVolume(updated)
 
-        // Afficher le HUD sur tout changement de volume si le réglage est actif —
-        // sauf pendant l'usage du raccourci (il gère son propre HUD) et sauf quand le
-        // panneau est ouvert (l'utilisateur voit déjà le slider).
+        // Show the HUD on any volume change if the setting is on —
+        // except while the shortcut is in use (it manages its own HUD) and except when the
+        // panel is open (the user can already see the slider).
         if UserDefaults.standard.bool(forKey: DefaultsKey.showVolumeHUDOnAllChanges),
            hotkeyManager?.isActivelyAdjusting != true,
            !isPanelOpen {
@@ -1773,14 +1773,14 @@ extension MiloStore: MiloConnectionManagerDelegate {
             hotkeyManager?.volumeHUD?.show(volumeDb: updated.volumeDb)
         }
 
-        // `applyServerVolume` sait déjà se taire pendant le raccourci et pendant un glissement.
+        // `applyServerVolume` already knows to stay quiet during the shortcut and during a drag.
         applyServerVolume(updated.volumeDb)
     }
 
-    /// Limites poussées en direct par le backend (settings/volume_limits_changed) quand
-    /// elles changent côté device. On ré-amorce le cache de l'API (lu par
-    /// getVolumeStatus) ET la limite en mémoire pour que le slider du panneau et le HUD
-    /// du raccourci utilisent immédiatement les nouvelles bornes — sans re-fetch /bulk.
+    /// The limits pushed live by the backend (settings/volume_limits_changed) when
+    /// they change on the device side. We re-bootstrap the API's cache (read by
+    /// getVolumeStatus) AND the in-memory limit so that the panel's slider and the
+    /// shortcut's HUD immediately use the new bounds — with no /bulk re-fetch.
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double) {
         connectionManager.apiService?.updateCachedLimits(minDb: minDb, maxDb: maxDb)
 
@@ -1791,21 +1791,21 @@ extension MiloStore: MiloConnectionManagerDelegate {
         }
     }
 
-    /// Apps du dock poussées en direct (settings/dock_apps_changed) : filtre et ordre
-    /// des sources.
+    /// The dock apps pushed live (settings/dock_apps_changed): the sources' filter and
+    /// order.
     func didReceiveDockAppsUpdate(_ apps: [String]) {
         enabledApps = apps
     }
 }
 
-// MARK: - Élément d'affichage multiroom
+// MARK: - Multiroom display item
 
-/// Une entrée de la sous-section multiroom : soit une zone (avec la liste ordonnée de ses
-/// clients membres, affichés indentés dessous), soit un client standalone.
+/// One entry of the multiroom sub-section: either a zone (with the ordered list of its
+/// member clients, displayed indented below it), or a standalone client.
 ///
-/// Construit sur le main actor à partir du `MultiroomSnapshot` (voir
-/// `MiloStore.multiroomDisplayItems`) ; pas besoin qu'il soit `Sendable`, il ne franchit
-/// aucune frontière d'isolation.
+/// Built on the main actor from the `MultiroomSnapshot` (see
+/// `MiloStore.multiroomDisplayItems`); it does not need to be `Sendable`, it crosses
+/// no isolation boundary.
 enum MultiroomDisplayItem: Identifiable {
     case zone(MultiroomZone, clients: [MultiroomClient])
     case standalone(MultiroomClient)
@@ -1822,7 +1822,7 @@ enum MultiroomDisplayItem: Identifiable {
         return false
     }
 
-    /// En ligne si l'élément est joignable — pour une zone, dès qu'un de ses clients l'est.
+    /// Online if the item is reachable — for a zone, as soon as one of its clients is.
     var isOnline: Bool {
         switch self {
         case .zone(_, let clients): return clients.contains { $0.online }

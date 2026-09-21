@@ -20,11 +20,11 @@ final class SettingsViewModel {
 
     var rocVADInstalled: Bool
 
-    /// Dépliage de la section « Audio Mac ». État d'UI pur, volontairement **non
-    /// persisté** : la section est repliée à chaque ouverture des Réglages, ses options
-    /// étant des réglages d'expert qu'on ne veut pas imposer d'entrée. Ne surtout pas le
-    /// remettre dans RocVADSettings — son saveToUserDefaults() écraserait la valeur
-    /// courante par celle lue au lancement (le dépliage se perdait au clic sur Appliquer).
+    /// Expansion of the "Mac Audio" section. Pure UI state, deliberately **not
+    /// persisted**: the section is collapsed every time Settings opens, its options being
+    /// expert settings we do not want to impose up front. Do not move it back into
+    /// RocVADSettings — its saveToUserDefaults() would overwrite the current value with the
+    /// one read at launch (the expansion was lost when clicking Apply).
     var macAudioExpanded = false
 
     var pendingSettings: RocVADSettings
@@ -101,13 +101,13 @@ final class SettingsViewModel {
         self.volumeDelta = hotkeyManager?.volumeDeltaDb ?? 3
         self.showVolumeHUDOnAllChanges = UserDefaults.standard.bool(forKey: DefaultsKey.showVolumeHUDOnAllChanges)
 
-        // Test rapide (présence du binaire) pour ne pas bloquer l'ouverture de
-        // la fenêtre — `roc-vad info` passe par gRPC et peut prendre plusieurs
-        // secondes ; le vrai statut driver est rafraîchi en arrière-plan.
+        // A quick test (is the binary there) so the window's opening is not blocked —
+        // `roc-vad info` goes through gRPC and can take several seconds; the real driver
+        // status is refreshed in the background.
         self.rocVADInstalled = RocVADManager.isBinaryInstalled
         self.pendingSettings = rocVADManager?.settings ?? RocVADSettings()
 
-        // Le vrai statut du driver, en arrière-plan : `roc-vad info` passe par gRPC.
+        // The real driver status, in the background: `roc-vad info` goes through gRPC.
         if let rocVADManager {
             Task { [weak self] in
                 let isWorking = await rocVADManager.checkInstallation()
@@ -174,13 +174,12 @@ private struct PresetOption: Identifiable, Hashable {
 
 // MARK: - Slider Row
 
-/// Ligne « intitulé + curseur + valeur ».
+/// A "label + slider + value" row.
 ///
-/// Les largeurs sont fixes et partagées par toutes les lignes : `LabeledContent` donne à
-/// la partie droite la place que lui laisse l'intitulé, donc un curseur simplement
-/// `minWidth`é serait plus ou moins large selon la longueur du texte à sa gauche. Ici tous
-/// les curseurs font la même largeur et toutes les valeurs sont alignées à droite, quelle
-/// que soit la langue.
+/// The widths are fixed and shared by every row: `LabeledContent` gives the right-hand
+/// part whatever room the label leaves it, so a slider given a mere `minWidth` would be
+/// wider or narrower depending on the length of the text to its left. Here every slider is
+/// the same width and every value is right-aligned, whatever the language.
 private struct SliderRow: View {
     let title: String
     @Binding var value: Double
@@ -193,8 +192,8 @@ private struct SliderRow: View {
     var body: some View {
         LabeledContent(title) {
             HStack(spacing: 8) {
-                // Absorbe la place restante pour que le bloc reste collé à droite,
-                // aligné avec les autres contrôles du formulaire.
+                // Absorbs the remaining room so the block stays flush right,
+                // aligned with the form's other controls.
                 Spacer(minLength: 0)
 
                 Slider(value: $value, in: range, step: 1)
@@ -213,8 +212,8 @@ private struct SliderRow: View {
 struct SettingsView: View {
     @Bindable var vm: SettingsViewModel
 
-    /// roc-vad n'est plus un péage au lancement : son état vit ici, et la source « Mac »
-    /// du panneau reste désactivée tant que le driver n'est pas prêt.
+    /// roc-vad is no longer a toll at launch: its state lives here, and the panel's "Mac"
+    /// source stays disabled as long as the driver is not ready.
     @Bindable var store: MiloStore
 
     @State private var installFailed = false
@@ -348,16 +347,16 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 400)
-        // La fenêtre n'est plus dimensionnée par AppKit (voir SettingsWindowPresenter) : ces
-        // deux drapeaux échangent la section « Audio Mac », donc changent la hauteur.
+        // The window is no longer sized by AppKit (see SettingsWindowPresenter): these two
+        // flags swap the "Mac Audio" section, and therefore change the height.
         .onChange(of: vm.rocVADInstalled) { _, _ in vm.onNeedsResize?() }
         .onChange(of: store.rocVADNeedsRestart) { _, _ in vm.onNeedsResize?() }
     }
 
     // MARK: - roc-vad absent
 
-    /// Milō fonctionne sans roc-vad (toutes les sources sauf « Mac »). L'installation est
-    /// donc proposée ici, à la demande — jamais imposée au lancement.
+    /// Milō works without roc-vad (every source but "Mac"). Installation is therefore
+    /// offered here, on demand — never imposed at launch.
     private var macAudioSetupSection: some View {
         Section(L("settings.mac_audio")) {
             Text(L("settings.rocvad.description"))
@@ -377,7 +376,7 @@ struct SettingsView: View {
                     installFailed = false
                     store.installRocVAD { success in
                         installFailed = !success
-                        // Le binaire vient d'apparaître : rafraîchir l'état affiché.
+                        // The binary has just appeared: refresh the displayed state.
                         vm.rocVADInstalled = RocVADManager.isBinaryInstalled
                         vm.onNeedsResize?()
                     }
@@ -389,9 +388,9 @@ struct SettingsView: View {
         .onChange(of: installFailed) { _, _ in vm.onNeedsResize?() }
     }
 
-    /// Le driver n'est chargé qu'après redémarrage. On l'annonce — on ne redémarre pas le
-    /// Mac à la place de l'utilisateur : un redémarrage forcé ne laisse pas les autres
-    /// applications enregistrer leur travail.
+    /// The driver only loads after a restart. We announce it — we do not restart the Mac
+    /// on the user's behalf: a forced restart does not let other applications save their
+    /// work.
     private var restartRequiredSection: some View {
         Section(L("settings.mac_audio")) {
             Label(L("settings.rocvad.restart_required"), systemImage: "arrow.clockwise.circle")
