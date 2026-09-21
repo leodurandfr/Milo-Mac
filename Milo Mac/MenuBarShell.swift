@@ -589,8 +589,15 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     /// or never answers — nothing insists: the Settings window carries a standing notice
     /// with a button to the System Settings pane, which is the only route left once TCC has
     /// spent its one alert.
+    ///
+    /// Only while Milō is still the active application. A panel can be dismissed two ways,
+    /// and they are not equivalent: clicking the icon again or pressing Escape leaves us
+    /// active, whereas clicking into another app does not. Raising a permission dialog in
+    /// the second case would drop it on someone who has just moved on to something else —
+    /// the very interruption this trigger exists to avoid. The request stays pending and
+    /// gets its chance at the next dismissal.
     private func requestAccessibilityPermissionIfNeeded() {
-        guard isAccessibilityPromptPending else { return }
+        guard isAccessibilityPromptPending, NSApp.isActive else { return }
         isAccessibilityPromptPending = false
 
         store.hotkeyManager?.requestAccessibilityPermission()

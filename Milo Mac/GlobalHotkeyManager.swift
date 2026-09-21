@@ -57,6 +57,9 @@ final class GlobalHotkeyManager {
 
     // MARK: - Constants
     private let repeatInterval: TimeInterval = 0.03  // 30ms tick for smooth acceleration
+    /// How long the Accessibility permission is watched for after asking — long enough to
+    /// cross to System Settings, tick the box and come back.
+    private let permissionWatchDuration: TimeInterval = 300
     private let upArrowKeyCode: UInt16 = 126
     private let downArrowKeyCode: UInt16 = 125
     private let rightOptionMask: UInt = 0x40
@@ -157,8 +160,13 @@ final class GlobalHotkeyManager {
     /// forever — not what an app that is meant to be invisible in the menu bar should cost.
     /// Before the request, the panel re-checks on every opening, which covers the one case
     /// this leaves out: a permission granted by hand before Milō ever asked.
+    ///
+    /// Already armed is a no-op, and that guard is load-bearing now that the panel calls
+    /// this on every opening: `setupEventTap` destroys the tap before recreating it, so
+    /// re-running it on a working tap trades a live tap for a new one that may fail to be
+    /// created — leaving `isMonitoring` true, `eventTap` nil, and no retry.
     func startMonitoringIfPossible() {
-        guard isEnabled else { return }
+        guard !isMonitoring, isEnabled else { return }
 
         guard Self.isAccessibilityTrusted else {
             if UserDefaults.standard.bool(forKey: DefaultsKey.didRequestAccessibilityPermission) {
@@ -192,10 +200,11 @@ final class GlobalHotkeyManager {
         UserDefaults.standard.set(true, forKey: DefaultsKey.didRequestAccessibilityPermission)
 
         // No `setActivationPolicy(.regular)` here. The alert is posted by the system, not
-        // by us, so it surfaces on its own — and both callers have just activated the app
-        // anyway (the panel opening, or the Settings window). The previous code switched to
-        // `.regular` and never switched back, which left an `LSUIElement` app with a Dock
-        // icon for the rest of the session.
+        // by us, so it surfaces on its own, and both callers make sure Milō is frontmost
+        // first — the panel checks `NSApp.isActive` before asking, and the Settings switch
+        // is thrown in a key window. The previous code switched to `.regular` and never
+        // switched back, which left an `LSUIElement` app with a Dock icon for the rest of
+        // the session.
         let options: CFDictionary = [axTrustedCheckOptionPrompt: true] as CFDictionary
         let granted = AXIsProcessTrustedWithOptions(options)
 
@@ -559,21 +568,34 @@ final class GlobalHotkeyManager {
     ///
     /// This is what makes "grant it later" work without a second request: the user goes to
     /// System Settings, ticks Milō, and the shortcuts are live before they have come back.
+    ///
+    /// Bounded, because someone who never grants it would otherwise be billed a 1 Hz timer
+    /// for the life of the session — the same cost this class refuses to pay before the
+    /// request has been made. The window covers acting on the alert that has just been
+    /// posted; past that, the watch stops and every later entry point restarts a fresh one
+    /// (reconnection, panel opening, the Settings switch).
     private func startPermissionMonitoring() {
         // A single poll timer, stored and invalidated: the request can be made again from
         // Settings — without this, each attempt stacked up one more perpetual repeating
         // timer.
         permissionTimer?.invalidate()
+        let deadline = Date().addingTimeInterval(permissionWatchDuration)
         // The timer is invalidated outside `assumeIsolated` (Timer is not Sendable, and
         // that call only accepts returning Sendable values): only a Bool crosses it.
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             let done = MainActor.assumeIsolated { () -> Bool in
-                guard AXIsProcessTrusted() else { return false }
                 guard let self else { return true }
+
+                guard AXIsProcessTrusted() else {
+                    guard Date() >= deadline else { return false }
+                    self.permissionTimer = nil
+                    return true
+                }
+
                 self.permissionTimer = nil
-                // The waiting is over whatever happens next: `startMonitoringIfPossible` declines if
-                // the user has since switched the shortcuts off, or if Milō is not
-                // connected — in which case the connection path will arm them.
+                // The waiting is over whatever happens next: `startMonitoringIfPossible`
+                // declines if the user has since switched the shortcuts off, or if Milō is
+                // not connected — in which case the connection path will arm them.
                 self.startMonitoringIfPossible()
                 return true
             }
