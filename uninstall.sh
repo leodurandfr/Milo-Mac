@@ -1,9 +1,31 @@
 #!/bin/bash
 
 # Uninstall script for Milo Mac and roc-vad
-# Version 1.0
+# Version 1.1
 
 set -e  # Stop on error
+
+# Every bundle identifier the app has shipped under. "leodurand.Sonoak-Menu" predates the
+# rename to Milo; its leftovers are still on disk for anyone who ran that version, and the
+# old glob-based cleanup never matched them.
+BUNDLE_IDS=("leodurand.Milo-Mac" "leodurand.Sonoak-Menu")
+
+# Every process name the app has run under, most recent first.
+PROCESS_NAMES=("Milo" "Milo Mac" "Sonoak Menu")
+
+# Every bundle name the app has been installed under.
+APP_BUNDLES=(
+    "/Applications/Milō.app"
+    "/Applications/Milo Mac.app"
+    "/Applications/Milo.app"
+    "/Applications/Sonoak Menu.app"
+)
+
+# Every Application Support folder the app has written to.
+SUPPORT_FOLDERS=(
+    "$HOME/Library/Application Support/Milo Mac"
+    "$HOME/Library/Application Support/Sonoak Menu"
+)
 
 echo "=============================================="
 echo "Uninstalling Milo Mac and roc-vad"
@@ -19,10 +41,18 @@ fi
 
 # Stop Milo Mac if it is running
 echo "1. Stopping Milo Mac..."
-# "Milo" is the current process name; "Milo Mac" is the one used before 0.1.0
-if killall "Milo" 2>/dev/null || killall "Milo Mac" 2>/dev/null; then
-    echo "   Milo Mac stopped"
-else
+# Every name is tried, none of them short-circuits the rest: an upgrade can leave an old
+# build running beside the current one, and killing only the first would let the survivor
+# keep going while step 3 deletes the bundle out from under it.
+stopped_any=false
+for process in "${PROCESS_NAMES[@]}"; do
+    if killall "$process" 2>/dev/null; then
+        echo "   Stopped: $process"
+        stopped_any=true
+    fi
+done
+
+if [ "$stopped_any" = false ]; then
     echo "   Milo Mac was not running"
 fi
 
@@ -31,7 +61,7 @@ if command -v roc-vad &> /dev/null || [ -f "/usr/local/bin/roc-vad" ]; then
     echo ""
     echo "2. Uninstalling roc-vad..."
     echo "   (Administrator password required)"
-    
+
     if [ -f "/usr/local/bin/roc-vad" ]; then
         sudo /usr/local/bin/roc-vad uninstall
         echo "   roc-vad uninstalled"
@@ -48,8 +78,7 @@ echo ""
 echo "3. Removing the Milo Mac application..."
 
 removed_app=false
-# "Milō.app" is the current bundle name; the others were used before 0.1.0
-for app in "/Applications/Milō.app" "/Applications/Milo Mac.app" "/Applications/Milo.app"; do
+for app in "${APP_BUNDLES[@]}"; do
     if [ -d "$app" ]; then
         rm -rf "$app"
         echo "   Removed: $app"
@@ -65,30 +94,51 @@ fi
 echo ""
 echo "4. Cleaning up the configuration files..."
 
-# Find and remove the Milo Mac preferences
-find ~/Library/Preferences/ -name "*Milo*Mac*" -type f 2>/dev/null | while read file; do
-    rm -f "$file"
-    echo "   Removed: $(basename "$file")"
+# Exact paths, derived from the bundle identifiers — never a glob.
+#
+# The previous version ran `find ~/Library/Caches -name "*Milo*Mac*" -type d` and `rm -rf`
+# on every hit, with no depth limit. On a machine that holds a checkout of this project
+# that also matches caches keyed by the PROJECT PATH — "…-Users-you-Developer-Milo-Mac" —
+# which belong to other tools entirely. A pattern loose enough to find the app's own cache
+# is loose enough to delete someone else's.
+for id in "${BUNDLE_IDS[@]}"; do
+    # `defaults delete` before the `rm`: cfprefsd holds the domain in memory and can write
+    # the file back out after this script has finished, leaving an uninstall that only
+    # looks complete.
+    #
+    # The PATH form, not the bare domain name. When a container exists — the sandboxed
+    # builds left some behind — `defaults <domain>` resolves to the copy inside that
+    # container and never touches ~/Library/Preferences at all.
+    defaults delete "$HOME/Library/Preferences/$id" 2>/dev/null || true
+
+    for path in \
+        "$HOME/Library/Preferences/$id.plist" \
+        "$HOME/Library/Caches/$id" \
+        "$HOME/Library/HTTPStorages/$id" \
+        "$HOME/Library/Containers/$id" \
+        "$HOME/Library/Saved Application State/$id.savedState"
+    do
+        if [ -e "$path" ]; then
+            rm -rf "$path"
+            echo "   Removed: ${path#"$HOME/Library/"}"
+        fi
+    done
+
+    # Startup agents left behind by versions that predate SMAppService. Bounded to the top
+    # level and anchored on the bundle identifier, for the reason given above.
+    if [ -d "$HOME/Library/LaunchAgents" ]; then
+        find "$HOME/Library/LaunchAgents" -maxdepth 1 -type f -name "$id*" 2>/dev/null | while read -r file; do
+            rm -f "$file"
+            echo "   Startup agent removed: $(basename "$file")"
+        done
+    fi
 done
 
-# Find and remove the caches
-find ~/Library/Caches/ -name "*Milo*Mac*" -type d 2>/dev/null | while read dir; do
-    rm -rf "$dir"
-    echo "   Removed: $(basename "$dir")"
-done
-
-# Remove the Application Support folder
-if [ -d ~/Library/Application\ Support/Milo\ Mac/ ]; then
-    rm -rf ~/Library/Application\ Support/Milo\ Mac/
-    echo "   Support folder removed"
-fi
-
-# Clean up the LaunchAgents (automatic startup).
-# Launch at login now goes through SMAppService, which the removal of the bundle
-# takes care of; this only clears agents left behind by older versions.
-find ~/Library/LaunchAgents/ -name "*Milo*Mac*" -type f 2>/dev/null | while read file; do
-    rm -f "$file"
-    echo "   Startup agent removed: $(basename "$file")"
+for folder in "${SUPPORT_FOLDERS[@]}"; do
+    if [ -d "$folder" ]; then
+        rm -rf "$folder"
+        echo "   Removed: ${folder#"$HOME/Library/"}"
+    fi
 done
 
 echo ""
@@ -97,4 +147,13 @@ echo "Uninstallation completed successfully!"
 echo ""
 echo "IMPORTANT: restart your Mac to finalize"
 echo "the complete removal of the audio services."
+echo ""
+# Launch at login goes through SMAppService, whose registration lives in a system database
+# and not in a file this script could remove. Only the app itself can unregister it, by
+# calling SMAppService.mainApp.unregister() — which it can no longer do, having just been
+# deleted. macOS prunes the orphaned entry eventually; until then it is visible, so say so
+# rather than claim a cleanup that never happened.
+echo "If Milo still appears in System Settings >"
+echo "General > Login Items, remove it there: that"
+echo "entry is held by macOS, not by a file."
 echo "=============================================="
