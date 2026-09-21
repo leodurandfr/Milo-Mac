@@ -131,6 +131,20 @@ Always use `L("key")` (`LocalizationHelper.swift`) — never `NSLocalizedString`
 - **Formal register throughout**: vous / Sie / usted / Lei / você. No tutoiement, no `tú`, no `tu` in Italian.
 - **French says `pilote`, never `driver`** — for roc-vad and for anything else. `es`/`pt-PT` say *controlador*, `de` *Treiber*; `en` and `it` legitimately keep *driver*, which is the standard term in both.
 
+**Source and feature names must be byte-identical to the frontend's**, in all 8 languages — the same appliance, the same name in both UIs. The mapping, which is not one-to-one by key:
+
+| Milō Mac | frontend |
+|---|---|
+| `source.spotify` `.bluetooth` `.airplay` `.qobuz` `.tidal` | `audioSources.<same>` |
+| `source.mac` | `audioSources.macOS` — *macOS receiver*, **not** *macOS* |
+| `source.podcast` | `audioSources.podcasts` |
+| `source.radio` `.cd` `.dlna` | `audioSources.<same>` |
+| `source.music_library` | `audioSources.musicLibrary` — the short form (*Bibliothèque*, not *Bibliothèque musicale*) |
+| `feature.multiroom` | `audioSources.multiroom` |
+| `feature.equalizer` | `equalizer.title` |
+
+`settings.rocvad.description` quotes the Mac row's label, so it has to be re-quoted whenever `source.mac` changes.
+
 A few divergences from a literal translation are deliberate because the frontend chose them: `es` says *Multizona* for multiroom and *Desconectado* for offline, `pt-PT` says *Configurações* (not *Definições*), `fr`/`de`/`es`/`it`/`pt-PT` keep *Preset* untranslated, `zh-Hans` uses 音质 for audio quality. Don't "fix" these.
 
 **Plurals live in `Localizable.stringsdict`**, one per `.lproj`, not in the `.strings` file. Only `musicLibrary.search.albumsCount` needs one today. The `.strings` entry stays as the fallback, which is also what keeps the key-parity check meaningful. This works only because `L(_:_:)` formats with `Locale.current` — plain `String(format:)` copies `%#@albums@` through verbatim instead of expanding it.

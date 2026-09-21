@@ -11,7 +11,7 @@
 // MARK: - Audio Sources
 "source.spotify" = "Spotify";
 "source.bluetooth" = "Bluetooth";
-"source.mac" = "macOS";
+"source.mac" = "macOS receiver";
 "source.radio" = "Internet Radio";
 "source.podcast" = "Podcasts";
 "source.airplay" = "AirPlay";
@@ -109,7 +109,7 @@
 "progress.applying_settings" = "Applying audio settings…";
 
 // MARK: - Mac audio (roc-vad)
-"settings.rocvad.description" = "The “Mac” source sends your Mac's audio to Milō. It requires the roc-vad audio driver.";
+"settings.rocvad.description" = "The “macOS receiver” source sends your Mac's audio to Milō. It requires the roc-vad audio driver.";
 "settings.rocvad.install" = "Install driver";
 "settings.rocvad.installing" = "Installing…";
 "settings.rocvad.restart_required" = "Restart your Mac to enable the Milō audio output.";
