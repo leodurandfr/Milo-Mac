@@ -342,7 +342,7 @@ struct SettingsView: View {
             } else if store.rocVADNeedsRestart {
                 restartRequiredSection
             } else {
-                Section(L("settings.mac_audio"), isExpanded: $vm.macAudioExpanded) {
+                Section(isExpanded: $vm.macAudioExpanded) {
                     // Preset
                     Picker(L("settings.preset"), selection: $vm.selectedPresetIndex) {
                         ForEach(presetOptions) { option in
@@ -410,6 +410,21 @@ struct SettingsView: View {
                         .disabled(!vm.hasChanges || vm.isApplying)
                         .keyboardShortcut(.defaultAction)
                     }
+                } header: {
+                    // The whole header toggles the section, not just the disclosure
+                    // triangle.
+                    //
+                    // `Section(_:isExpanded:)` wires only the triangle — a ~12 pt target at
+                    // the far left of a 400 pt window, which reads as a section that does
+                    // not open. This is why the header is built by hand rather than passed
+                    // as a title: the hit area is the whole point, and there is no modifier
+                    // that widens the native one.
+                    Text(L("settings.mac_audio"))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            vm.macAudioExpanded.toggle()
+                        }
                 }
                 .onChange(of: vm.macAudioExpanded) { _, _ in
                     vm.onNeedsResize?()
