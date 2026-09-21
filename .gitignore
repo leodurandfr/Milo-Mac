@@ -14,6 +14,9 @@ DerivedData/
 # Archives
 *.xcarchive
 
+# Release packages, built outside the repo and attached to a GitHub release
+*.dmg
+
 # CocoaPods
 Pods/
 
