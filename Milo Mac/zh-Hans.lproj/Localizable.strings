@@ -54,11 +54,15 @@
 
 // General section
 "settings.general" = "通用";
-"settings.mac_audio" = "macOS 音频 (roc-vad)";
+"settings.mac_audio" = "音频发送器（macOS 至 Milō）";
 "settings.hotkeys" = "音量快捷键 (⌥↑/↓)";
 "settings.volume_increment" = "音量变化";
+"settings.accessibility.required" = "需要辅助功能权限";
+"settings.accessibility.explanation" = "macOS 必须允许 Milō 读取键盘，音量快捷键才能生效。";
+"settings.accessibility.open" = "打开系统设置";
 "settings.launch_at_login" = "Mac 启动时运行";
-"settings.volume_hud_all_changes" = "每次音量变化时显示通知，包括 Milō Mac 外部的变化";
+"settings.volume_hud_all_changes" = "显示音量通知";
+"settings.volume_hud_all_changes.description" = "每次音量变化时，包括 Milō Mac 外部的变化。";
 
 // Mac Audio section
 "settings.preset" = "预设";

@@ -54,11 +54,15 @@
 
 // General section
 "settings.general" = "Generale";
-"settings.mac_audio" = "Audio macOS (roc-vad)";
+"settings.mac_audio" = "Trasmettitore audio (da macOS a Milō)";
 "settings.hotkeys" = "Scorciatoie volume (⌥↑/↓)";
 "settings.volume_increment" = "Variazione del volume";
+"settings.accessibility.required" = "Autorizzazione di accessibilità richiesta";
+"settings.accessibility.explanation" = "macOS deve consentire a Milō di leggere la tastiera affinché le scorciatoie volume funzionino.";
+"settings.accessibility.open" = "Apri Impostazioni di Sistema";
 "settings.launch_at_login" = "Avvia all'avvio del Mac";
-"settings.volume_hud_all_changes" = "Mostra la notifica del volume a ogni modifica, anche esterna a Milō Mac";
+"settings.volume_hud_all_changes" = "Mostra la notifica del volume";
+"settings.volume_hud_all_changes.description" = "A ogni modifica, comprese quelle effettuate fuori da Milō Mac.";
 
 // Mac Audio section
 "settings.preset" = "Preset";

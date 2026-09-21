@@ -1670,7 +1670,13 @@ extension MiloStore: MiloConnectionManagerDelegate {
         consecutiveRefreshFailures = 0
         refreshPausedUntil = nil
 
-        hotkeyManager?.startMonitoring()
+        // Arms the shortcuts without ever prompting: this runs as soon as Milō answers on
+        // the LAN, which can be seconds after login. Asking for the Accessibility
+        // permission is the panel's job, on a real click (MenuBarShell).
+        //
+        // `isConnected` is set above, and it is a precondition of arming — see
+        // `GlobalHotkeyManager.startMonitoringIfPossible`.
+        hotkeyManager?.startMonitoringIfPossible()
         startBackgroundRefresh()
 
         // Bootstrap the static settings cache (volume limits + dock apps) through

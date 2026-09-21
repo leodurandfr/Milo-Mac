@@ -54,11 +54,15 @@
 
 // General section
 "settings.general" = "Allgemein";
-"settings.mac_audio" = "macOS-Audio (roc-vad)";
+"settings.mac_audio" = "Audio-Sender (macOS an Milō)";
 "settings.hotkeys" = "Lautstärke-Kurzbefehle (⌥↑/↓)";
 "settings.volume_increment" = "Lautstärkeänderung";
+"settings.accessibility.required" = "Bedienungshilfen-Berechtigung erforderlich";
+"settings.accessibility.explanation" = "macOS muss Milō das Lesen der Tastatur erlauben, damit die Lautstärke-Kurzbefehle funktionieren.";
+"settings.accessibility.open" = "Systemeinstellungen öffnen";
 "settings.launch_at_login" = "Beim Mac-Start öffnen";
-"settings.volume_hud_all_changes" = "Lautstärkebenachrichtigung bei jeder Änderung anzeigen, auch außerhalb von Milō Mac";
+"settings.volume_hud_all_changes" = "Lautstärkebenachrichtigung anzeigen";
+"settings.volume_hud_all_changes.description" = "Bei jeder Änderung, auch bei Änderungen außerhalb von Milō Mac.";
 
 // Mac Audio section
 "settings.preset" = "Preset";

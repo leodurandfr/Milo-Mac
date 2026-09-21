@@ -97,16 +97,117 @@ final class GlobalHotkeyManager {
         permissionTimer?.invalidate()
     }
 
+    // MARK: - Accessibility permission
+
+    /// Whether macOS currently lets us read the keyboard. Read live rather than cached:
+    /// the user can grant or revoke it at any moment, from System Settings, without the
+    /// app being told.
+    static var isAccessibilityTrusted: Bool { AXIsProcessTrusted() }
+
+    /// Whether the user wants the shortcuts at all — a persisted preference, on by
+    /// default (`DefaultsKey.hotkeysEnabled`). Orthogonal to the permission: one says what
+    /// is wanted, the other whether it can be delivered.
+    var isEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: DefaultsKey.hotkeysEnabled) }
+        set { UserDefaults.standard.set(newValue, forKey: DefaultsKey.hotkeysEnabled) }
+    }
+
     // MARK: - Public Interface
-    func startMonitoring() {
-        guard AXIsProcessTrusted() else {
-            requestAccessibilityPermissions()
+
+    /// Turns the shortcuts on or off from Settings, persisting the choice.
+    ///
+    /// Switching them on is a point of use, so it is one of the two places allowed to ask
+    /// for the permission (the other being the first opening of the panel).
+    func setEnabled(_ enabled: Bool) {
+        isEnabled = enabled
+
+        guard enabled else {
+            stopMonitoring()
             return
         }
+
+        if Self.isAccessibilityTrusted {
+            startMonitoringIfPossible()
+        } else {
+            requestAccessibilityPermission()
+        }
+    }
+
+    /// Arms the shortcuts if they are wanted, permitted and useful — **never prompting**.
+    ///
+    /// The single gate every arming path goes through, including the connection path
+    /// (`miloDidConnect`), which can fire seconds after login: posting a permission dialog
+    /// there would interrupt someone who has asked for nothing. Asking is a separate,
+    /// deliberate act — see `requestAccessibilityPermission`.
+    ///
+    /// Three conditions, and the third is the one that is easy to lose: **Milō has to be
+    /// connected**. An armed tap swallows ⌥↑/↓ system-wide (`handleCGEvent` returns the
+    /// interception flag), so arming while the Pi is unreachable would eat the user's
+    /// keystrokes to do nothing with them. The old code held this invariant by accident —
+    /// arming was only ever reached from `miloDidConnect` — and the permission can now be
+    /// granted from the panel, at a moment when nothing says we are connected.
+    ///
+    /// Wanted but not permitted is not a dead end: it resumes the watch instead. That
+    /// matters on every call, not just the first — `stopMonitoring` tears the watch down
+    /// on disconnect, so without restarting it here a single Wi-Fi blip would permanently
+    /// break "grant it later and it arms itself".
+    ///
+    /// Resumed only once we have actually asked, though. The watch is a 1 Hz timer that
+    /// runs until the permission arrives, which for someone who will never grant it means
+    /// forever — not what an app that is meant to be invisible in the menu bar should cost.
+    /// Before the request, the panel re-checks on every opening, which covers the one case
+    /// this leaves out: a permission granted by hand before Milō ever asked.
+    func startMonitoringIfPossible() {
+        guard isEnabled else { return }
+
+        guard Self.isAccessibilityTrusted else {
+            if UserDefaults.standard.bool(forKey: DefaultsKey.didRequestAccessibilityPermission) {
+                startPermissionMonitoring()
+            }
+            return
+        }
+
+        guard store?.isConnected == true else { return }
 
         isMonitoring = true
         setupEventMonitoring()
         setupEventTap()
+    }
+
+    /// Posts the system Accessibility alert, once in the life of the app.
+    ///
+    /// Returns `true` when the permission is already granted or was granted right away.
+    ///
+    /// The alert belongs to macOS — it is the native component, and there is no second
+    /// one: TCC shows it once per app and then answers `false` in silence forever. Hence
+    /// the `didRequestAccessibilityPermission` flag, and hence the Settings row that
+    /// afterwards points at System Settings instead of pretending to ask again.
+    @discardableResult
+    func requestAccessibilityPermission() -> Bool {
+        if Self.isAccessibilityTrusted {
+            startMonitoringIfPossible()
+            return true
+        }
+
+        UserDefaults.standard.set(true, forKey: DefaultsKey.didRequestAccessibilityPermission)
+
+        // No `setActivationPolicy(.regular)` here. The alert is posted by the system, not
+        // by us, so it surfaces on its own — and both callers have just activated the app
+        // anyway (the panel opening, or the Settings window). The previous code switched to
+        // `.regular` and never switched back, which left an `LSUIElement` app with a Dock
+        // icon for the rest of the session.
+        let options: CFDictionary = [axTrustedCheckOptionPrompt: true] as CFDictionary
+        let granted = AXIsProcessTrustedWithOptions(options)
+
+        if granted {
+            startMonitoringIfPossible()
+        } else {
+            // The user may say yes in System Settings a minute later, or a year later.
+            // Either way the shortcuts must start by themselves, with nothing more asked.
+            startPermissionMonitoring()
+        }
+
+        return granted
     }
 
     func stopMonitoring() {
@@ -454,26 +555,14 @@ final class GlobalHotkeyManager {
     }
 
     // MARK: - Permissions
-    private func requestAccessibilityPermissions() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-
-        let options: CFDictionary = [axTrustedCheckOptionPrompt: true] as CFDictionary
-        let result = AXIsProcessTrustedWithOptions(options)
-
-        if result {
-            isMonitoring = true
-            setupEventMonitoring()
-            setupEventTap()
-        } else {
-            startPermissionMonitoring()
-        }
-    }
-
+    /// Waits for the permission to be granted, then starts on its own.
+    ///
+    /// This is what makes "grant it later" work without a second request: the user goes to
+    /// System Settings, ticks Milō, and the shortcuts are live before they have come back.
     private func startPermissionMonitoring() {
-        // A single poll timer, stored and invalidated: startMonitoring() is called again
-        // on every reconnection — without this, each cycle stacked up one more perpetual
-        // repeating timer.
+        // A single poll timer, stored and invalidated: the request can be made again from
+        // Settings — without this, each attempt stacked up one more perpetual repeating
+        // timer.
         permissionTimer?.invalidate()
         // The timer is invalidated outside `assumeIsolated` (Timer is not Sendable, and
         // that call only accepts returning Sendable values): only a Bool crosses it.
@@ -482,9 +571,10 @@ final class GlobalHotkeyManager {
                 guard AXIsProcessTrusted() else { return false }
                 guard let self else { return true }
                 self.permissionTimer = nil
-                self.isMonitoring = true
-                self.setupEventMonitoring()
-                self.setupEventTap()
+                // The waiting is over whatever happens next: `startMonitoringIfPossible` declines if
+                // the user has since switched the shortcuts off, or if Milō is not
+                // connected — in which case the connection path will arm them.
+                self.startMonitoringIfPossible()
                 return true
             }
             if done { timer.invalidate() }

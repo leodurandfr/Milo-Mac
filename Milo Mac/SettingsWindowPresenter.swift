@@ -39,8 +39,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func showWindow() {
         if let window {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            bringToFront(window)
             return
         }
 
@@ -79,8 +78,27 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         self.hostingController = hosting
 
         window.center()
-        window.makeKeyAndOrderFront(nil)
+        bringToFront(window)
+    }
+
+    /// Puts the Settings window in front of every other application's windows.
+    ///
+    /// The switch to `.regular` is what does the work. `LSUIElement` apps are second-class
+    /// citizens for activation: `NSApp.activate` brings our windows forward *among our own*,
+    /// but macOS is free to leave another app's window on top — which is exactly what
+    /// happened, Settings opening behind whatever was already on screen.
+    ///
+    /// This is not the activation-policy bug that used to sit in `GlobalHotkeyManager`.
+    /// That one switched to `.regular` to show a dialog owned by the *system* and never
+    /// switched back, leaving a Dock icon for the rest of the session. Here the policy is
+    /// tied to the lifetime of a window that is genuinely ours, and `windowWillClose` puts
+    /// it back — a Dock icon while Settings is open is the ordinary macOS bargain for a
+    /// menu-bar app with a real window.
+    private func bringToFront(_ window: NSWindow) {
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     private func resizeWindowToFit() {
@@ -104,6 +122,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         window = nil
         hostingController = nil
+        // Back to a menu-bar-only app: the Dock icon borrowed by `bringToFront` goes away
+        // with the window that justified it.
+        NSApp.setActivationPolicy(.accessory)
         onClose?()
     }
 }

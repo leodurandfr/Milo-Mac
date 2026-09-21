@@ -79,6 +79,10 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
     /// True during the fade-out. The window is still "visible" at that point.
     private var isHiding = false
 
+    /// Set when the panel opens for the first time without the Accessibility permission,
+    /// and consumed once it has closed again — see `requestAccessibilityPermissionIfNeeded`.
+    private var isAccessibilityPromptPending = false
+
     /// SCREEN y-coordinate of the panel's TOP edge (`origin.y + height`), set by `positionPanel`.
     ///
     /// The panel is pinned under the menu bar and must only grow/shrink DOWNWARDS.
@@ -509,6 +513,8 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
 
         positionPanel()
 
+        armAccessibilityPromptIfNeeded()
+
         // The app is in .accessory policy: it is not active when clicking in the menu bar,
         // so the window would open **non-key** and its material would render in its
         // "inactive" state (visibly lighter). Activating BEFORE the show is not enough —
@@ -547,8 +553,47 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
                 guard let self, self.isHiding else { return }
                 self.panel.orderOut(nil)
                 self.isHiding = false
+                self.requestAccessibilityPermissionIfNeeded()
             }
         })
+    }
+
+    // MARK: - Accessibility permission
+
+    /// Notes that the permission should be asked for — but does not ask yet.
+    ///
+    /// The first click on the menu-bar icon is the first moment the user expresses any
+    /// interest in driving Milō's volume, which makes it the right time to ask about the
+    /// ⌥↑/↓ shortcuts. It is *not* the right time to post the alert: the panel closes as
+    /// soon as it loses key focus (`windowDidResignKey`), so a dialog raised here would
+    /// snatch the panel away mid-fade-in — the user would have clicked for a panel and got
+    /// a permission prompt instead. So the request waits for the panel to be dismissed.
+    private func armAccessibilityPromptIfNeeded() {
+        guard let hotkeyManager = store.hotkeyManager else { return }
+
+        // Opening the panel is also the app's regular chance to notice a permission that
+        // was granted by hand, outside any request of ours — the only moment where no
+        // permission watch is running (`startMonitoringIfPossible`).
+        hotkeyManager.startMonitoringIfPossible()
+
+        guard !isAccessibilityPromptPending,
+              !UserDefaults.standard.bool(forKey: DefaultsKey.didRequestAccessibilityPermission),
+              hotkeyManager.isEnabled,
+              !GlobalHotkeyManager.isAccessibilityTrusted
+        else { return }
+
+        isAccessibilityPromptPending = true
+    }
+
+    /// Posts the system alert, at most once in the life of the app. If the user declines —
+    /// or never answers — nothing insists: the Settings window carries a standing notice
+    /// with a button to the System Settings pane, which is the only route left once TCC has
+    /// spent its one alert.
+    private func requestAccessibilityPermissionIfNeeded() {
+        guard isAccessibilityPromptPending else { return }
+        isAccessibilityPromptPending = false
+
+        store.hotkeyManager?.requestAccessibilityPermission()
     }
 
     /// The transparent margin to the left of the ink, WITHIN the icon's image. Measured once

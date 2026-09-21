@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import ServiceManagement
 
@@ -16,6 +17,14 @@ final class SettingsViewModel {
     var volumeDelta: Double
     var showVolumeHUDOnAllChanges: Bool
 
+    /// Whether macOS currently lets the shortcuts read the keyboard.
+    ///
+    /// Mirrored here rather than read straight from the view: the permission is granted in
+    /// *another* app, and nothing tells us about it, so a view calling `AXIsProcessTrusted()`
+    /// inline would never be asked to re-render. It is refreshed whenever Milō comes back to
+    /// the front — which is exactly when someone returns from System Settings.
+    var isAccessibilityTrusted: Bool
+
     // ROC VAD
 
     var rocVADInstalled: Bool
@@ -33,6 +42,11 @@ final class SettingsViewModel {
     // Callback for window resize (not tracked by Observation)
     @ObservationIgnored
     var onNeedsResize: (() -> Void)?
+
+    /// Watches for the app coming back to the front, to re-read the Accessibility
+    /// permission. Not tracked by Observation — it is plumbing, not state.
+    @ObservationIgnored
+    private var activationObserver: (any NSObjectProtocol)?
 
     // MARK: - Computed Properties
 
@@ -97,8 +111,13 @@ final class SettingsViewModel {
 
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
 
-        self.hotkeysEnabled = hotkeyManager?.isMonitoring ?? false
+        // The persisted preference, not `isMonitoring`: the shortcuts are only armed while
+        // Milō is connected AND the permission is granted, so reading the running state
+        // would show this switch off for reasons that have nothing to do with the choice
+        // the user made.
+        self.hotkeysEnabled = hotkeyManager?.isEnabled ?? true
         self.volumeDelta = hotkeyManager?.volumeDeltaDb ?? 3
+        self.isAccessibilityTrusted = GlobalHotkeyManager.isAccessibilityTrusted
         self.showVolumeHUDOnAllChanges = UserDefaults.standard.bool(forKey: DefaultsKey.showVolumeHUDOnAllChanges)
 
         // A quick test (is the binary there) so the window's opening is not blocked —
@@ -113,6 +132,22 @@ final class SettingsViewModel {
                 let isWorking = await rocVADManager.checkInstallation()
                 self?.rocVADInstalled = isWorking
             }
+        }
+
+        // `queue: .main`: AppKit posts this on the main thread, which is what the
+        // `assumeIsolated` asserts. Only the refresh crosses it, and it returns nothing.
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshAccessibilityTrust() }
+        }
+    }
+
+    isolated deinit {
+        if let activationObserver {
+            NotificationCenter.default.removeObserver(activationObserver)
         }
     }
 
@@ -133,12 +168,10 @@ final class SettingsViewModel {
     }
 
     func toggleHotkeys() {
-        guard let hotkeyManager else { return }
-        if hotkeysEnabled {
-            hotkeyManager.startMonitoring()
-        } else {
-            hotkeyManager.stopMonitoring()
-        }
+        hotkeyManager?.setEnabled(hotkeysEnabled)
+        // Switching them on is one of the two moments allowed to post the system alert, so
+        // the permission may have been granted a fraction of a second ago.
+        refreshAccessibilityTrust()
     }
 
     func updateVolumeDelta() {
@@ -147,6 +180,35 @@ final class SettingsViewModel {
 
     func toggleShowVolumeHUD() {
         UserDefaults.standard.set(showVolumeHUDOnAllChanges, forKey: DefaultsKey.showVolumeHUDOnAllChanges)
+    }
+
+    /// Re-reads the permission, and acts on it.
+    ///
+    /// Acting matters as much as reading: coming back from System Settings with the box
+    /// newly ticked, there may be no permission watch running at all — the system alert is
+    /// only posted once per app, and the watch is started by that request. Hiding the
+    /// notice without arming would leave ⌥↑/↓ dead until the next relaunch.
+    func refreshAccessibilityTrust() {
+        let trusted = GlobalHotkeyManager.isAccessibilityTrusted
+        guard trusted != isAccessibilityTrusted else { return }
+        isAccessibilityTrusted = trusted
+
+        if trusted {
+            hotkeyManager?.startMonitoringIfPossible()
+        }
+
+        // The notice row appears or disappears: the window has to follow.
+        onNeedsResize?()
+    }
+
+    /// Opens the Accessibility pane of System Settings.
+    ///
+    /// This is the only route left once TCC has spent its single alert: from then on
+    /// `AXIsProcessTrustedWithOptions` answers `false` without showing anything, so a
+    /// button that pretended to ask again would do nothing at all.
+    func openAccessibilitySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func apply() {
@@ -172,38 +234,40 @@ private struct PresetOption: Identifiable, Hashable {
     let name: String
 }
 
-// MARK: - Slider Row
+// MARK: - Metric Slider
 
-/// A "label + slider + value" row.
+/// The four roc-vad sliders differ only by their label, binding, range and unit.
 ///
-/// The widths are fixed and shared by every row: `LabeledContent` gives the right-hand
-/// part whatever room the label leaves it, so a slider given a mere `minWidth` would be
-/// wider or narrower depending on the length of the text to its left. Here every slider is
-/// the same width and every value is right-aligned, whatever the language.
-private struct SliderRow: View {
+/// This forwards straight to the system slider and lays out nothing of its own: the label
+/// column, the value readout and the bounds are the form's and the slider's doing. It
+/// replaces a hand-rolled row that pinned the slider to 120 pt and the value to 50 pt,
+/// because `LabeledContent` gave the trailing part whatever room the label left it — so
+/// the sliders came out at different widths depending on the length of the text beside
+/// them, and on the language.
+///
+/// **Continuous, deliberately.** A `step:` makes macOS 26 draw a tick at every stop, and
+/// there is no modifier to turn that off — over 2…200 that is 199 dots, which reads as a
+/// dotted rule rather than a track. Integrality is not lost: every binding behind these
+/// rounds in its setter, and the buffer snaps to fives above 20.
+private struct MetricSlider: View {
     let title: String
     @Binding var value: Double
-    let range: ClosedRange<Double>
-    let valueText: String
-
-    private static let sliderWidth: CGFloat = 120
-    private static let valueWidth: CGFloat = 50
+    let range: ClosedRange<Int>
+    var unit: String = ""
 
     var body: some View {
-        LabeledContent(title) {
-            HStack(spacing: 8) {
-                // Absorbs the remaining room so the block stays flush right,
-                // aligned with the form's other controls.
-                Spacer(minLength: 0)
+        Slider(
+            value: $value,
+            in: Double(range.lowerBound)...Double(range.upperBound),
+            label: { Text(title) },
+            currentValueLabel: { Text(readout(Int(value))) },
+            minimumValueLabel: { Text(readout(range.lowerBound)) },
+            maximumValueLabel: { Text(readout(range.upperBound)) }
+        )
+    }
 
-                Slider(value: $value, in: range, step: 1)
-                    .frame(width: Self.sliderWidth)
-
-                Text(valueText)
-                    .monospacedDigit()
-                    .frame(width: Self.valueWidth, alignment: .trailing)
-            }
-        }
+    private func readout(_ amount: Int) -> String {
+        unit.isEmpty ? "\(amount)" : "\(amount) \(unit)"
     }
 }
 
@@ -233,10 +297,15 @@ struct SettingsView: View {
                         vm.toggleLaunchAtLogin()
                     }
 
-                Toggle(L("settings.volume_hud_all_changes"), isOn: $vm.showVolumeHUDOnAllChanges)
-                    .onChange(of: vm.showVolumeHUDOnAllChanges) { _, _ in
-                        vm.toggleShowVolumeHUD()
-                    }
+                // Two Texts in the label: the form renders the first as the row's title and
+                // the second as its secondary line. The whole sentence used to be the title.
+                Toggle(isOn: $vm.showVolumeHUDOnAllChanges) {
+                    Text(L("settings.volume_hud_all_changes"))
+                    Text(L("settings.volume_hud_all_changes.description"))
+                }
+                .onChange(of: vm.showVolumeHUDOnAllChanges) { _, _ in
+                    vm.toggleShowVolumeHUD()
+                }
 
                 Toggle(L("settings.hotkeys"), isOn: $vm.hotkeysEnabled)
                     .onChange(of: vm.hotkeysEnabled) { _, _ in
@@ -245,13 +314,25 @@ struct SettingsView: View {
                     }
 
                 if vm.hotkeysEnabled {
-                    SliderRow(title: L("settings.volume_increment"),
-                              value: $vm.volumeDelta,
-                              range: 1...6,
-                              valueText: "\(Int(vm.volumeDelta)) dB")
-                        .onChange(of: vm.volumeDelta) { _, _ in
-                            vm.updateVolumeDelta()
-                        }
+                    if !vm.isAccessibilityTrusted {
+                        accessibilityNoticeRow
+                    }
+
+                    // Six stops, so every one of them gets a tick: the step is a value the
+                    // user picks exactly, not a position they aim at.
+                    Slider(
+                        value: $vm.volumeDelta,
+                        in: 1...6,
+                        step: 1,
+                        label: { Text(L("settings.volume_increment")) },
+                        currentValueLabel: { Text("\(Int(vm.volumeDelta)) dB") },
+                        minimumValueLabel: { Text("1 dB") },
+                        maximumValueLabel: { Text("6 dB") },
+                        tick: { SliderTick($0) }
+                    )
+                    .onChange(of: vm.volumeDelta) { _, _ in
+                        vm.updateVolumeDelta()
+                    }
                 }
             }
 
@@ -261,7 +342,7 @@ struct SettingsView: View {
             } else if store.rocVADNeedsRestart {
                 restartRequiredSection
             } else {
-                Section(isExpanded: $vm.macAudioExpanded) {
+                Section(L("settings.mac_audio"), isExpanded: $vm.macAudioExpanded) {
                     // Preset
                     Picker(L("settings.preset"), selection: $vm.selectedPresetIndex) {
                         ForEach(presetOptions) { option in
@@ -270,10 +351,10 @@ struct SettingsView: View {
                     }
 
                     // Buffer
-                    SliderRow(title: L("settings.buffer"),
-                              value: $vm.deviceBuffer,
-                              range: Double(RocVADSettings.deviceBufferRange.lowerBound)...Double(RocVADSettings.deviceBufferRange.upperBound),
-                              valueText: "\(vm.pendingSettings.deviceBuffer) ms")
+                    MetricSlider(title: L("settings.buffer"),
+                                 value: $vm.deviceBuffer,
+                                 range: RocVADSettings.deviceBufferRange,
+                                 unit: "ms")
 
                     // Error Correction
                     Picker(L("settings.fec"), selection: $vm.pendingSettings.fecEncoding) {
@@ -290,29 +371,34 @@ struct SettingsView: View {
                     }
 
                     // Packet Length
-                    SliderRow(title: L("settings.packet_length"),
-                              value: $vm.packetLength,
-                              range: Double(RocVADSettings.packetLengthRange.lowerBound)...Double(RocVADSettings.packetLengthRange.upperBound),
-                              valueText: "\(vm.pendingSettings.packetLength) ms")
+                    MetricSlider(title: L("settings.packet_length"),
+                                 value: $vm.packetLength,
+                                 range: RocVADSettings.packetLengthRange,
+                                 unit: "ms")
 
                     // FEC Source Packets
-                    SliderRow(title: L("settings.fec_source"),
-                              value: $vm.fecBlockSource,
-                              range: Double(RocVADSettings.fecBlockSourceRange.lowerBound)...Double(RocVADSettings.fecBlockSourceRange.upperBound),
-                              valueText: "\(vm.pendingSettings.fecBlockSource)")
+                    MetricSlider(title: L("settings.fec_source"),
+                                 value: $vm.fecBlockSource,
+                                 range: RocVADSettings.fecBlockSourceRange)
 
                     // FEC Repair Packets
-                    SliderRow(title: L("settings.fec_repair"),
-                              value: $vm.fecBlockRepair,
-                              range: Double(RocVADSettings.fecBlockRepairRange.lowerBound)...Double(RocVADSettings.fecBlockRepairRange.upperBound),
-                              valueText: "\(vm.pendingSettings.fecBlockRepair)")
+                    MetricSlider(title: L("settings.fec_repair"),
+                                 value: $vm.fecBlockRepair,
+                                 range: RocVADSettings.fecBlockRepairRange)
 
                     // Interleaving
                     Toggle(L("settings.interleaving"), isOn: $vm.pendingSettings.packetInterleaving)
 
-                    // Buttons
+                    // Buttons. Applying recreates the "Milō" device, so it stays an explicit,
+                    // batched act rather than firing on every slider notch.
                     HStack {
                         Spacer()
+
+                        if vm.isApplying {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+
                         Button(L("settings.reset")) {
                             vm.reset()
                         }
@@ -323,21 +409,7 @@ struct SettingsView: View {
                         }
                         .disabled(!vm.hasChanges || vm.isApplying)
                         .keyboardShortcut(.defaultAction)
-                        .overlay {
-                            if vm.isApplying {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .offset(x: -40)
-                            }
-                        }
                     }
-                } header: {
-                    Text(L("settings.mac_audio"))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            vm.macAudioExpanded.toggle()
-                        }
                 }
                 .onChange(of: vm.macAudioExpanded) { _, _ in
                     vm.onNeedsResize?()
@@ -351,6 +423,25 @@ struct SettingsView: View {
         // flags swap the "Mac Audio" section, and therefore change the height.
         .onChange(of: vm.rocVADInstalled) { _, _ in vm.onNeedsResize?() }
         .onChange(of: store.rocVADNeedsRestart) { _, _ in vm.onNeedsResize?() }
+    }
+
+    // MARK: - Accessibility permission
+
+    /// The app's entire insistence about the Accessibility permission.
+    ///
+    /// The system alert is posted once, when the panel is first opened (`MenuBarShell`),
+    /// and TCC never shows it again — so this standing, non-modal row is what remains: it
+    /// says why the shortcuts are silent, and points at the one place that can fix it.
+    /// Deliberately not a window at every launch: Milō works without the shortcuts.
+    private var accessibilityNoticeRow: some View {
+        LabeledContent {
+            Button(L("settings.accessibility.open")) {
+                vm.openAccessibilitySettings()
+            }
+        } label: {
+            Text(L("settings.accessibility.required"))
+            Text(L("settings.accessibility.explanation"))
+        }
     }
 
     // MARK: - roc-vad absent

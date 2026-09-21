@@ -54,11 +54,15 @@
 
 // General section
 "settings.general" = "General";
-"settings.mac_audio" = "macOS Audio (roc-vad)";
+"settings.mac_audio" = "Audio sender (macOS to Milō)";
 "settings.hotkeys" = "Volume Shortcuts (⌥↑/↓)";
 "settings.volume_increment" = "Volume step";
+"settings.accessibility.required" = "Accessibility permission required";
+"settings.accessibility.explanation" = "macOS must allow Milō to read the keyboard for the volume shortcuts to work.";
+"settings.accessibility.open" = "Open System Settings";
 "settings.launch_at_login" = "Launch at Mac Startup";
-"settings.volume_hud_all_changes" = "Show volume notification on every change, even external to Milō Mac";
+"settings.volume_hud_all_changes" = "Show volume notification";
+"settings.volume_hud_all_changes.description" = "On every change, including those made outside Milō Mac.";
 
 // Mac Audio section
 "settings.preset" = "Preset";

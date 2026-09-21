@@ -54,11 +54,15 @@
 
 // General section
 "settings.general" = "General";
-"settings.mac_audio" = "Audio macOS (roc-vad)";
+"settings.mac_audio" = "Emisor de audio (macOS a Milō)";
 "settings.hotkeys" = "Atajos de volumen (⌥↑/↓)";
 "settings.volume_increment" = "Variación de volumen";
+"settings.accessibility.required" = "Se requiere permiso de accesibilidad";
+"settings.accessibility.explanation" = "macOS debe permitir que Milō lea el teclado para que los atajos de volumen funcionen.";
+"settings.accessibility.open" = "Abrir Ajustes del Sistema";
 "settings.launch_at_login" = "Iniciar al arrancar el Mac";
-"settings.volume_hud_all_changes" = "Mostrar la notificación de volumen en cada cambio, incluso externo a Milō Mac";
+"settings.volume_hud_all_changes" = "Mostrar la notificación de volumen";
+"settings.volume_hud_all_changes.description" = "En cada cambio, incluidos los realizados fuera de Milō Mac.";
 
 // Mac Audio section
 "settings.preset" = "Preset";

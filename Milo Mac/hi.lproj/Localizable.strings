@@ -54,11 +54,15 @@
 
 // General section
 "settings.general" = "सामान्य";
-"settings.mac_audio" = "macOS ऑडियो (roc-vad)";
+"settings.mac_audio" = "ऑडियो प्रेषक (macOS से Milō तक)";
 "settings.hotkeys" = "वॉल्यूम शॉर्टकट (⌥↑/↓)";
 "settings.volume_increment" = "वॉल्यूम परिवर्तन";
+"settings.accessibility.required" = "एक्सेसिबिलिटी अनुमति आवश्यक";
+"settings.accessibility.explanation" = "वॉल्यूम शॉर्टकट काम करने के लिए macOS को Milō को कीबोर्ड पढ़ने की अनुमति देनी होगी।";
+"settings.accessibility.open" = "सिस्टम सेटिंग्स खोलें";
 "settings.launch_at_login" = "Mac स्टार्टअप पर लॉन्च करें";
-"settings.volume_hud_all_changes" = "हर बदलाव पर वॉल्यूम सूचना दिखाएँ, Milō Mac के बाहरी बदलाव सहित";
+"settings.volume_hud_all_changes" = "वॉल्यूम सूचना दिखाएँ";
+"settings.volume_hud_all_changes.description" = "हर बदलाव पर, Milō Mac के बाहर किए गए बदलावों सहित।";
 
 // Mac Audio section
 "settings.preset" = "प्रीसेट";
