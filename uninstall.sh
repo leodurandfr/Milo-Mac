@@ -27,6 +27,32 @@ SUPPORT_FOLDERS=(
     "$HOME/Library/Application Support/Sonoak Menu"
 )
 
+# Paths macOS refused to let us delete, reported at the end.
+FAILED_PATHS=()
+
+# Removes one path, best effort. Returns 0 only if something was actually deleted.
+#
+# Best effort is not laziness: ~/Library/Containers is guarded by containermanagerd, and
+# `rm -rf` on it returns "Operation not permitted" unless the calling program holds Full
+# Disk Access — which a script run from Terminal does not. Under `set -e` that single
+# refusal aborted the whole uninstall: everything after it was skipped, including the
+# closing advice, and the user was left with a half-cleaned system and a stack trace.
+remove_path() {
+    local path="$1"
+    local label="${path#"$HOME/Library/"}"
+
+    [ -e "$path" ] || return 1
+
+    if rm -rf "$path" 2>/dev/null; then
+        echo "   Removed: $label"
+        return 0
+    fi
+
+    FAILED_PATHS+=("$path")
+    echo "   Could not remove: $label"
+    return 1
+}
+
 echo "=============================================="
 echo "Uninstalling Milo Mac and roc-vad"
 echo "=============================================="
@@ -79,9 +105,7 @@ echo "3. Removing the Milo Mac application..."
 
 removed_app=false
 for app in "${APP_BUNDLES[@]}"; do
-    if [ -d "$app" ]; then
-        rm -rf "$app"
-        echo "   Removed: $app"
+    if remove_path "$app"; then
         removed_app=true
     fi
 done
@@ -118,32 +142,29 @@ for id in "${BUNDLE_IDS[@]}"; do
         "$HOME/Library/Containers/$id" \
         "$HOME/Library/Saved Application State/$id.savedState"
     do
-        if [ -e "$path" ]; then
-            rm -rf "$path"
-            echo "   Removed: ${path#"$HOME/Library/"}"
-        fi
+        remove_path "$path" || true
     done
 
-    # Startup agents left behind by versions that predate SMAppService. Bounded to the top
-    # level and anchored on the bundle identifier, for the reason given above.
-    if [ -d "$HOME/Library/LaunchAgents" ]; then
-        find "$HOME/Library/LaunchAgents" -maxdepth 1 -type f -name "$id*" 2>/dev/null | while read -r file; do
-            rm -f "$file"
-            echo "   Startup agent removed: $(basename "$file")"
-        done
-    fi
+    # Startup agents left behind by versions that predate SMAppService. Anchored on the
+    # bundle identifier and not recursive, for the reason given above. A glob rather than
+    # `find | while read`, because that pipeline runs in a subshell and any path it failed
+    # to delete would never reach FAILED_PATHS.
+    for file in "$HOME/Library/LaunchAgents/$id"*; do
+        remove_path "$file" || true
+    done
 done
 
 for folder in "${SUPPORT_FOLDERS[@]}"; do
-    if [ -d "$folder" ]; then
-        rm -rf "$folder"
-        echo "   Removed: ${folder#"$HOME/Library/"}"
-    fi
+    remove_path "$folder" || true
 done
 
 echo ""
 echo "=============================================="
-echo "Uninstallation completed successfully!"
+if [ ${#FAILED_PATHS[@]} -gt 0 ]; then
+    echo "Uninstallation finished, with leftovers."
+else
+    echo "Uninstallation completed successfully!"
+fi
 echo ""
 echo "IMPORTANT: restart your Mac to finalize"
 echo "the complete removal of the audio services."
@@ -156,4 +177,17 @@ echo ""
 echo "If Milo still appears in System Settings >"
 echo "General > Login Items, remove it there: that"
 echo "entry is held by macOS, not by a file."
+
+if [ ${#FAILED_PATHS[@]} -gt 0 ]; then
+    echo ""
+    echo "macOS would not let this script delete:"
+    for path in "${FAILED_PATHS[@]}"; do
+        echo "  $path"
+    done
+    echo ""
+    echo "Remove them in the Finder (Go > Go to Folder),"
+    echo "which is allowed to, or grant your terminal"
+    echo "Full Disk Access and run this script again."
+fi
+
 echo "=============================================="
