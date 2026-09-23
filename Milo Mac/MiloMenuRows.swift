@@ -709,7 +709,8 @@ struct FeatureRow: View {
 
     /// Multiroom carries, like the Radio row, TWO commands: the body toggles the
     /// feature, the chevron on the right expands the sub-section (zones/clients). The chevron
-    /// only appears when there is something to expand (`store.canShowMultiroom`).
+    /// appears as soon as multiroom is shown as active (`store.canShowMultiroom`), even before
+    /// the zones/clients have loaded.
     var showsChevron: Bool = false
     var isExpanded: Bool = false
     var onChevron: (() -> Void)? = nil
@@ -820,6 +821,13 @@ struct MultiroomSection: View {
 
     var body: some View {
         VStack(spacing: MultiroomMetrics.cardSpacing) {
+            // Multiroom is on but the registry has not arrived yet (or briefly emptied on a
+            // reconnection): the sub-section stays reachable, and says it is waiting.
+            if store.multiroomDisplayItems.isEmpty {
+                MultiroomCard {
+                    MultiroomLoadingRow()
+                }
+            }
             ForEach(store.multiroomDisplayItems) { item in
                 switch item {
                 case .zone(let zone, let clients):
@@ -867,6 +875,30 @@ private struct MultiroomRowSeparator: View {
     var body: some View {
         Divider()
             .padding(.horizontal, MultiroomMetrics.rowHInset)
+    }
+}
+
+/// The placeholder row while the zones/clients load: a spinner in the icon slot, the text in the
+/// name's column — the same geometry as `MultiroomRow`.
+private struct MultiroomLoadingRow: View {
+    var body: some View {
+        HStack(spacing: MultiroomMetrics.gap) {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.8)
+                .frame(width: MultiroomMetrics.iconSize, height: MultiroomMetrics.iconSize)
+
+            Text(L("multiroom.loading_systems"))
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+        }
+        .padding(.leading, MultiroomMetrics.rowLeadingInset)
+        .padding(.trailing, MultiroomMetrics.rowHInset)
+        .padding(.vertical, MultiroomMetrics.rowVInset)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

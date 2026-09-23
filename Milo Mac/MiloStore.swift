@@ -375,8 +375,14 @@ final class MiloStore {
     @ObservationIgnored private var loadingTimers: [String: Timer] = [:]
     @ObservationIgnored private var loadingStartTimes: [String: Date] = [:]
     @ObservationIgnored private var manualLoadingProtection: [String: Date] = [:]
-    @ObservationIgnored private var expectedFunctionalityStates: [String: Bool] = [:]
     @ObservationIgnored private var radioStationLoadingTimer: Timer?
+
+    /// The toggle state a feature is heading to while its spinner runs — see
+    /// `displayedToggleState`. OBSERVED, unlike the plumbing above: it is display state.
+    /// `canShowMultiroom` derives from it, and the view that reads that (the panel, which
+    /// passes the Multiroom row its chevron) reads nothing else that changes on the click —
+    /// ignored, the chevron would only appear once the spinner ended.
+    private var expectedFunctionalityStates: [String: Bool] = [:]
 
     /// The last known radio station (id, name, logo) — see `radioNowPlaying`. Not
     /// observed: it never changes without `state` changing in the same call
@@ -1178,11 +1184,19 @@ final class MiloStore {
 
     // MARK: - Multiroom
 
-    /// True when the multiroom sub-section can be displayed: multiroom is active AND the
-    /// registry has at least one item to show. The Multiroom row's chevron only appears
-    /// then (like the Radio chevron, guarded by `canShowRadioStations`).
+    /// True when the multiroom sub-section can be displayed: as soon as multiroom is SHOWN as
+    /// active (the expected state during a toggle, the backend's otherwise). The Multiroom row's
+    /// chevron and accordion follow this.
+    ///
+    /// Deliberately NOT gated on the registry being non-empty. The cache is emptied when
+    /// multiroom goes off and only re-fetched once the backend reports it on again
+    /// (`syncMultiroomState`) — so after a switch-on the list lands one round trip AFTER the
+    /// spinner ends. Gated on the list, the chevron was missing in that window, and the space to
+    /// the right of the label then belonged to the row's own button: a click aimed at the chevron
+    /// switched multiroom back off. An empty list shows a loading row instead (see
+    /// `MultiroomSection`).
     var canShowMultiroom: Bool {
-        state?.multiroomEnabled == true && !multiroomDisplayItems.isEmpty
+        displayedToggleState("multiroom")
     }
 
     /// The list ordered for display: the zones (each with its member clients),

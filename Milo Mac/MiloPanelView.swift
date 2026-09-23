@@ -94,8 +94,8 @@ struct MiloPanelView: View {
         .onChange(of: store.canShowMusicLibrarySearch) { _, canShow in
             if !canShow, store.panelRoute.isMusicLibrary { exitToRoot() }
         }
-        // Multiroom was switched off (or the list emptied) while the sub-section
-        // was open: we close it, otherwise it would stay expanded over nothing.
+        // Multiroom was switched off while the sub-section was open: we close it, otherwise it
+        // would stay expanded over nothing.
         .onChange(of: store.canShowMultiroom) { _, canShow in
             if !canShow { store.multiroomExpanded = false }
         }

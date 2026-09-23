@@ -121,6 +121,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         observePanelNavigation()
         observeStateForRepositioning()
         observeMusicLibrarySearchForRepositioning()
+        observeMultiroomForRepositioning()
         updateIcon()
     }
 
@@ -226,6 +227,24 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
                     self.positionPanel()
                 }
                 self.observeMusicLibrarySearchForRepositioning()
+            }
+        }
+    }
+
+    /// Resets the panel when the multiroom registry changes shape while the accordion is open:
+    /// a client appears or disappears, or the list gives way to its loading row (a
+    /// reconnection) and back. Same reason as above — the window never shrinks by itself.
+    /// While the reveal timer runs, it repositions on every step anyway.
+    private func observeMultiroomForRepositioning() {
+        withObservationTracking {
+            _ = store.multiroom
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                if self.panel.isVisible, self.store.multiroomExpanded, !self.store.isRouteMorphing {
+                    self.positionPanel()
+                }
+                self.observeMultiroomForRepositioning()
             }
         }
     }

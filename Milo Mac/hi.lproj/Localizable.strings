@@ -44,6 +44,7 @@
 
 // MARK: - Multiroom
 "multiroom.offline" = "ऑफ़लाइन";
+"multiroom.loading_systems" = "सिस्टम लोड हो रहे हैं…";
 
 // MARK: - Configuration Menu
 "config.settings" = "सेटिंग्स…";

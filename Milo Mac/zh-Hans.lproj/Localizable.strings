@@ -44,6 +44,7 @@
 
 // MARK: - Multiroom
 "multiroom.offline" = "离线";
+"multiroom.loading_systems" = "正在加载系统…";
 
 // MARK: - Configuration Menu
 "config.settings" = "设置…";

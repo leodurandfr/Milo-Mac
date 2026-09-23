@@ -44,6 +44,7 @@
 
 // MARK: - Multiroom
 "multiroom.offline" = "Hors ligne";
+"multiroom.loading_systems" = "Chargement des systèmes…";
 
 // MARK: - Configuration Menu
 "config.settings" = "Paramètres…";
