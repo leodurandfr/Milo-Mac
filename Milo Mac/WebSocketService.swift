@@ -12,7 +12,7 @@ protocol WebSocketServiceDelegate: AnyObject {
     /// connection manager can restart discovery from the .connecting phase
     /// instead of staying stuck there.
     func webSocketDidFailToConnect()
-    func didReceiveStateUpdate(_ state: MiloState)
+    func didReceiveStateUpdate(_ state: MiloAudioState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
     /// The multiroom *structure* has changed (a client connected/disconnected, a zone was
@@ -193,10 +193,10 @@ final class WebSocketService: NSObject {
     /// across would mean lying to the compiler; so we carry the typed result across, which
     /// also moves all the parsing off the main thread.
     private enum DecodedEvent: Sendable {
-        /// Any state update carrying full_state (the "source" and "system" categories,
-        /// _FULL_STATE_CATEGORIES on the backend side). The EQ state arrives via the
-        /// companion system/state_changed, not via equalizer/enabled_changed.
-        case state(MiloState, multiroomChanged: Bool)
+        /// `source/state`: the complete audio state, published on every change of any of its
+        /// fields and only then. It carries the EQ and multiroom flags too, so neither
+        /// equalizer/enabled_changed nor a multiroom discriminator is needed.
+        case state(MiloAudioState)
         case volume(VolumeStatus, multiroom: MultiroomVolume?)
         case multiroomFailed
         case multiroomStructureChanged
@@ -221,10 +221,7 @@ final class WebSocketService: NSObject {
         // useful events — the rest is ignored silently, with no main-thread hop.
         let decoded: DecodedEvent?
         switch (category, eventType) {
-        case ("system", "state_changed"),
-             ("system", "transition_complete"),
-             ("system", "transition_start"),
-             ("source", "state_changed"):
+        case ("source", "state"):
             decoded = Self.decodeState(eventData)
         case ("volume", "volume_changed"):
             decoded = Self.decodeVolume(eventData)
@@ -254,18 +251,10 @@ final class WebSocketService: NSObject {
 
     private func deliver(_ event: DecodedEvent) {
         switch event {
-        case .state(let state, let multiroomChanged):
+        case .state(let state):
+            // The end of a multiroom switch is not an event of its own any more: it is the
+            // first state where `switching` is false again, which the store resolves.
             delegate?.didReceiveStateUpdate(state)
-
-            // The backend silently pre-sets multiroom_enabled at the start of a
-            // routing transition, then broadcasts many intermediate source state
-            // changes that all carry the new multiroom_enabled in full_state.
-            // Only the final update_multiroom_state broadcast carries the
-            // multiroom_changed discriminator — treat it as the authoritative
-            // completion signal for the multiroom loading spinner.
-            if multiroomChanged {
-                delegate?.didReceiveMultiroomTransitionComplete(success: true)
-            }
 
         case .volume(let volume, let multiroom):
             delegate?.didReceiveVolumeUpdate(volume)
@@ -292,10 +281,18 @@ final class WebSocketService: NSObject {
 
     // MARK: - Decoding (off the main thread)
 
+    /// The event's `data` IS the state. Re-serialized so it goes through the one shared
+    /// decoder, exactly like the HTTP fetch — the two transports cannot diverge. A state this
+    /// build cannot read (an unknown `service` or `phase`) is dropped and logged: it is a
+    /// contract mismatch with the backend, not something to guess around.
     private nonisolated static func decodeState(_ data: [String: Any]) -> DecodedEvent? {
-        guard let fullState = data["full_state"] as? [String: Any] else { return nil }
-        return .state(MiloState(json: fullState),
-                      multiroomChanged: data["multiroom_changed"] as? Bool == true)
+        do {
+            let raw = try JSONSerialization.data(withJSONObject: data)
+            return .state(try MiloAudioState.decode(raw))
+        } catch {
+            NSLog("❌ source/state not decodable: %@", String(describing: error))
+            return nil
+        }
     }
 
     private nonisolated static func decodeVolume(_ data: [String: Any]) -> DecodedEvent? {

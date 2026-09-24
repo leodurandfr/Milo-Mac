@@ -42,7 +42,7 @@ enum ConnectionPhase: Equatable, CustomStringConvertible {
 protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func miloDidConnect()
     func miloDidDisconnect()
-    func didReceiveStateUpdate(_ state: MiloState)
+    func didReceiveStateUpdate(_ state: MiloAudioState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
     func didReceiveMultiroomTransitionComplete(success: Bool)
     func didReceiveMultiroomStructureChanged()
@@ -336,7 +336,7 @@ final class MiloConnectionManager: NSObject {
             guard let probe = self.probeAPIService else { return }
 
             do {
-                _ = try await probe.fetchState()
+                try await probe.probeState()
 
                 guard case .testingAPI = self.phase else { return }
                 NSLog("✅ API ready after %d attempts!", self.retryCount)
@@ -465,7 +465,7 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
         startDiscovery()
     }
 
-    func didReceiveStateUpdate(_ state: MiloState) {
+    func didReceiveStateUpdate(_ state: MiloAudioState) {
         delegate?.didReceiveStateUpdate(state)
     }
 

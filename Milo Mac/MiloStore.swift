@@ -23,7 +23,7 @@ enum PanelRoute: Hashable, Sendable {
 
 /// A song displayed by `NowPlayingRow`, whatever the source — see `MiloStore.nowPlaying`.
 struct NowPlayingInfo: Equatable {
-    /// The song's Subsonic identifier (`track_id`), for now only for the
+    /// The song's Subsonic identifier (`details.track_id`), for now only for the
     /// music library (`nil` everywhere else, radio included) — used to tell whether ONE
     /// specific search-result/album row is the current one (see
     /// `MiloStore.isCurrentMusicLibrarySong`).
@@ -33,30 +33,10 @@ struct NowPlayingInfo: Equatable {
     let artworkURL: URL?
     /// A badge displayed in a corner of the cover art — for now, only the STATION's logo
     /// when Radio is playing a recognized song with its own cover art (see
-    /// `MiloStore.radioNowPlaying`). `nil` everywhere else.
+    /// `MiloStore.nowPlayingInfo`). `nil` everywhere else.
     let badgeArtworkURL: URL?
+    /// `session.phase == playing` — loading, paused, connected and a mere resume point are not.
     let isPlaying: Bool
-}
-
-/// The sources that expose a genuine remote control on the backend side (a non-empty `COMMANDS`
-/// in Milo), and therefore the only ones for which `NowPlayingRow` can display a generic
-/// play/pause button and a next button. Radio is not among them: it has no real pause and no next
-/// song, it has its own dedicated stop/restart button (`MiloStore.toggleRadioNowPlaying`).
-///
-/// AirPlay, DLNA and Qobuz are PASSIVE receivers: AirPlay 2 does not support remote
-/// control, DLNA and Qobuz are driven by the sender or by the third-party app — their
-/// `COMMANDS` is empty on the backend side, and sending them pause/next would fail with a 400:
-/// they appear in neither list. Podcast has no notion of a next episode
-/// (no `next` command in its table), hence its absence from `nextSources`.
-///
-/// TIDAL, on the other hand, is an ACTIVE player like Spotify despite its status as a
-/// Connect receiver: the tisoc daemon exposes pause/resume/next/prev (the `COMMANDS` of
-/// `backend/sources/tidal/source.py`), so the source appears in both lists. Only `seek`
-/// is missing — the controller protocol does not expose it — which changes nothing here: the
-/// panel offers no scrubbable progress bar.
-private enum NowPlayingControls {
-    static let pauseResumeSources: Set<String> = ["spotify", "music_library", "cd", "podcast", "tidal"]
-    static let nextSources: Set<String> = ["spotify", "music_library", "cd", "tidal"]
 }
 
 /// The UI's source of truth: the SwiftUI views observe these properties and re-render
@@ -77,7 +57,7 @@ final class MiloStore {
     // MARK: - State observed by the views
 
     private(set) var isConnected = false
-    private(set) var state: MiloState?
+    private(set) var state: MiloAudioState?
     private(set) var volume: VolumeStatus?
     private(set) var enabledApps: [String]?
     private(set) var radioFavorites: [RadioStation]?
@@ -384,10 +364,6 @@ final class MiloStore {
     /// ignored, the chevron would only appear once the spinner ended.
     private var expectedFunctionalityStates: [String: Bool] = [:]
 
-    /// The last known radio station (id, name, logo) — see `radioNowPlaying`. Not
-    /// observed: it never changes without `state` changing in the same call
-    /// (`syncLastRadioStation`), and it is `state` that triggers the re-render.
-    @ObservationIgnored private var lastRadioStation: (id: String, name: String, favicon: String?)?
 
     // MARK: - Background poll (not observed)
 
@@ -404,9 +380,9 @@ final class MiloStore {
     private let multiroomLoadingTimeout: TimeInterval = 35.0
     private let minimumFunctionalityLoadingDuration: TimeInterval = 1.2
     // The grace window after a source click: the time it takes the backend to take
-    // charge of the transition (transition_start). While it runs and the backend
+    // charge of the transition (`switching` goes true). While it runs and the backend
     // has not confirmed yet, a "non-transitional" state is interpreted as
-    // the old state (the click↔transition_start race) and the spinner is kept. Once
+    // the old state (the click↔switching race) and the spinner is kept. Once
     // the transition is taken in charge, we no longer wait out this delay: the spinner clears
     // as soon as the transition ends (like the web frontend).
     private let manualLoadingGraceDuration: TimeInterval = 2.0
@@ -440,7 +416,7 @@ final class MiloStore {
     func selectSource(_ sourceId: String) {
         guard let apiService = connectionManager.apiService, isConnected else { return }
 
-        let activeSource = state?.activeSource ?? "none"
+        let activeSource = state?.source ?? "none"
         guard activeSource != sourceId else { return }
 
         // Avoid concurrent actions while a request is in flight.
@@ -462,7 +438,7 @@ final class MiloStore {
         }
     }
 
-    /// Closes the active source — the backend goes back to `active_source = none`.
+    /// Closes the active source — the backend goes back to `source = "none"`.
     /// Triggered by a press-and-hold on the row, like the hold on the web
     /// frontend's dock.
     func closeSource(_ sourceId: String) {
@@ -470,12 +446,12 @@ final class MiloStore {
 
         // The state may have changed during the press: only close if the target source
         // is still the active one, and no request is in flight.
-        guard state?.activeSource == sourceId, loadingStates[sourceId] != true else { return }
+        guard state?.source == sourceId, loadingStates[sourceId] != true else { return }
 
         // No startLoading here, unlike selectSource: closing has no
         // startup phase on the backend side (just plugin.stop()), and above all
         // syncLoadingStatesWithBackend would not know how to resolve that spinner — its
-        // "transition confirmed" branch tests `identifier == activeSource`, and activeSource
+        // "transition confirmed" branch tests `identifier == source`, and source
         // becomes "none". The spinner would therefore hold for the whole grace window (2 s) on a row
         // already switched off. The state broadcast is enough. Same choice as the web frontend (onCloseActive).
         Task {
@@ -508,8 +484,9 @@ final class MiloStore {
             } catch {
                 // Multiroom: the PUT can fail even with the extended timeout while
                 // the backend finishes the transition. We keep the spinner — it will be
-                // resolved by multiroom_changed / multiroom_error over WebSocket, or by
-                // the safety timeout. For the other toggles, we stop right away.
+                // resolved by the first state where `switching` is false again (see
+                // checkFunctionalityStateChange), by multiroom_error over WebSocket, or
+                // by the safety timeout. For the other toggles, we stop right away.
                 if toggleId != "multiroom" {
                     stopFunctionalityLoading(for: toggleId)
                 } else {
@@ -522,7 +499,7 @@ final class MiloStore {
     func currentToggleState(_ toggleId: String) -> Bool {
         switch toggleId {
         case "multiroom": return state?.multiroomEnabled ?? false
-        case "equalizer": return state?.equalizerEnabled ?? true
+        case "equalizer": return state?.equalizerEffectsEnabled ?? true
         default: return false
         }
     }
@@ -621,7 +598,7 @@ final class MiloStore {
         beginRadioStationLoading(stationId: stationId)
         // Read the state on the main thread (where it is owned) rather than in the
         // Task: the relevant value is the one the user saw at click time.
-        let needsSourceSwitch = state?.activeSource != "radio"
+        let needsSourceSwitch = state?.source != "radio"
 
         Task {
             do {
@@ -660,134 +637,140 @@ final class MiloStore {
 
     /// The identifier of the station currently playing, or nil.
     var playingRadioStationId: String? {
-        let metadataIsPlaying = state?.metadata["is_playing"] as? Int == 1
-        guard state?.activeSource == "radio", metadataIsPlaying else { return nil }
-        return state?.metadata["station_id"] as? String
+        guard let state, state.source == "radio", state.session?.phase == .playing,
+              case .radio(let station, _) = state.details else { return nil }
+        return station.id
     }
 
-    /// The song currently playing, whatever the source, or nil if nothing is detected.
+    /// The song currently playing, whatever the source, or nil if there is nothing to show.
     ///
-    /// The backend exposes a canonical projection (`title`/`artist`/`album_art_url`, see
-    /// `PlaybackMetadata` on the Milo side) common to Spotify, AirPlay, DLNA, CD, Qobuz and the
-    /// music library. Radio is the exception, delegated to `radioNowPlaying`. The sources
-    /// with no notion of playback (Bluetooth, Mac) emit none of these keys: `title` stays
-    /// empty and the row is not displayed.
-    ///
-    /// Guarded on the presence of a TITLE, not on `is_playing`: a paused source
-    /// (Spotify, music library, CD, Podcast) keeps its title/artist in the metadata
-    /// with `is_playing` false — hiding the row at that point would make the pause button
-    /// disappear right after it was pressed. The backend empties `metadata` (hence `title`) when the
-    /// source really stops or changes (see the `_metadata = {}` of the sources concerned).
+    /// Built on `MiloAudioState.shown`, the display rule shared with Milo-iOS's lock-screen
+    /// card: the session when it has a title, otherwise the resume point when it has one. So a
+    /// paused source keeps its row (hiding it would make the pause button disappear right after
+    /// it was pressed), and so does a stopped one that "play" would restart — a radio station
+    /// after a stop, a library queue within its 600 s. A session with no title (AirPlay
+    /// realtime, Bluetooth without a player, the Mac source) shows no row.
     var nowPlaying: NowPlayingInfo? {
         guard let state, isConnected else { return nil }
         return nowPlayingInfo(for: state)
     }
 
     /// The pure computation behind `nowPlaying`, factored out so it can be replayed on an explicit
-    /// `MiloState` — which is what `syncDisplayedNowPlaying` uses from `refreshState`/
+    /// `MiloAudioState` — which is what `syncDisplayedNowPlaying` uses from `refreshState`/
     /// `didReceiveStateUpdate`, before `state` itself is necessarily up to date.
-    private func nowPlayingInfo(for state: MiloState) -> NowPlayingInfo? {
-        if state.activeSource == "radio" { return radioNowPlaying(state) }
+    ///
+    /// Radio's only particularity is the badge: when the stream's song was recognized with its
+    /// own cover art, the STATION's logo slips in over a corner of it. With no artwork of its
+    /// own, the displayed cover art already IS the station's logo — doubling it up in a badge
+    /// would be redundant.
+    private func nowPlayingInfo(for state: MiloAudioState) -> NowPlayingInfo? {
+        guard let shown = state.shown else { return nil }
 
-        let title = state.metadata["title"] as? String
-        let artist = state.metadata["artist"] as? String
-        let artworkPath = state.metadata["album_art_url"] as? String
-
-        guard let title, !title.isEmpty else { return nil }
-        return NowPlayingInfo(
-            id: state.metadata["track_id"] as? String,
-            title: title,
-            artist: (artist?.isEmpty == false) ? artist : nil,
-            artworkURL: connectionManager.apiService?.nowPlayingArtworkURL(for: artworkPath),
-            badgeArtworkURL: nil,
-            isPlaying: state.metadata["is_playing"] as? Int == 1
-        )
-    }
-
-    /// Radio's projection of `nowPlaying`: the recognized song (Shazam/in-band) if there is one,
-    /// otherwise the name + the logo of the STATION itself — so as to always show something
-    /// while listening to the radio, even without recognition. `lastRadioStation` covers the case of
-    /// a stop, where the backend empties precisely those fields of `metadata` (see
-    /// `_handle_stop_playback` on the Milo side): without it, the row would disappear with the station and
-    /// the "restart" button would have nothing left to restart.
-    private func radioNowPlaying(_ state: MiloState) -> NowPlayingInfo? {
-        let isRecognizedTrack = (state.metadata["track_title"] as? String)?.isEmpty == false
-        let stationName = (state.metadata["station_name"] as? String) ?? lastRadioStation?.name
-        let stationFavicon = (state.metadata["favicon"] as? String) ?? lastRadioStation?.favicon
-
-        let title = isRecognizedTrack ? (state.metadata["track_title"] as? String) : stationName
-        guard let title, !title.isEmpty else { return nil }
-
-        let artist = isRecognizedTrack ? (state.metadata["track_artist"] as? String) : nil
-        let trackArtworkPath = state.metadata["track_artwork"] as? String
-        let trackArtworkURL = connectionManager.apiService?.nowPlayingArtworkURL(for: trackArtworkPath)
-        let stationArtworkURL = radioFaviconURL(for: stationFavicon)
-
-        // The station's logo slips in as a badge over the cover art ONLY when the latter
-        // is the recognized song's OWN cover art (Shazam): with no artwork of its own, the displayed
-        // cover art already IS the station's logo (the fallback just below) — doubling it up in a
-        // badge would be redundant.
-        let badgeArtworkURL = trackArtworkURL != nil ? stationArtworkURL : nil
+        var trackId: String?
+        var badgeArtworkURL: URL?
+        switch state.details {
+        case .musicLibrary(let id):
+            trackId = id
+        case .radio(let station, let track) where track?.artwork?.isEmpty == false:
+            badgeArtworkURL = radioFaviconURL(for: station.favicon)
+        default:
+            break
+        }
 
         return NowPlayingInfo(
-            id: nil,
-            title: title,
-            artist: (artist?.isEmpty == false) ? artist : nil,
-            artworkURL: trackArtworkURL ?? stationArtworkURL,
+            id: trackId,
+            title: shown.title,
+            artist: shown.artist,
+            artworkURL: connectionManager.apiService?.nowPlayingArtworkURL(for: shown.artwork),
             badgeArtworkURL: badgeArtworkURL,
-            isPlaying: state.metadata["is_playing"] as? Int == 1
+            isPlaying: shown.isSession && state.session?.phase == .playing
         )
     }
 
-    /// True if the active source accepts pause/resume — see `NowPlayingControls`.
+    /// True if the row should offer play/pause: the state lists `pause` or `resume`.
     var nowPlayingSupportsPauseResume: Bool {
-        state.map { NowPlayingControls.pauseResumeSources.contains($0.activeSource) } ?? false
+        nowPlayingCanPause || state?.allows("resume") == true
     }
 
-    /// True if the active source accepts skipping to the next song.
+    /// True when the play/pause button pauses (the state lists `pause`), false when it resumes.
+    /// Read from `controls` rather than from the phase, so the icon always names the command
+    /// the button will actually send — `pause` is listed while loading, too.
+    var nowPlayingCanPause: Bool {
+        state?.allows("pause") == true
+    }
+
+    /// True if the state lists `next`.
     var nowPlayingSupportsNext: Bool {
-        state.map { NowPlayingControls.nextSources.contains($0.activeSource) } ?? false
+        state?.allows("next") == true
     }
 
-    /// Toggles play/pause on the active source. Fire-and-forget, like the multiroom actions:
-    /// the next `state_changed` (WebSocket or background poll) rebroadcasts `is_playing` and updates
-    /// the row on its own — no spinner and no optimistic state to manage here.
+    /// True when Radio offers its stop/restart button: `stop` while loading or playing,
+    /// `resume_playback` after a stop.
+    var radioSupportsToggle: Bool {
+        radioCanStop || state?.allows("resume_playback") == true
+    }
+
+    /// True when the Radio button stops (`stop` is listed), false when it restarts.
+    var radioCanStop: Bool {
+        state?.allows("stop") == true
+    }
+
+    /// Pauses or resumes the active source, whichever `controls` lists. Fire-and-forget, like
+    /// the multiroom actions: the next `source/state` (WebSocket or background poll) carries the
+    /// new phase and updates the row on its own — no spinner and no optimistic state here.
     func toggleNowPlayingPause() {
-        guard let apiService = connectionManager.apiService,
-              let source = state?.activeSource,
-              let isPlaying = nowPlaying?.isPlaying else { return }
-        let command = isPlaying ? "pause" : "resume"
+        guard let apiService = connectionManager.apiService, let state else { return }
+        let source = state.source
+        let command: String
+        if state.allows("pause") {
+            command = "pause"
+        } else if state.allows("resume") {
+            command = "resume"
+        } else {
+            return
+        }
         Task {
             do { try await apiService.sendPlaybackCommand(command, to: source) }
             catch { NSLog("❌ Now-playing %@ (%@) failed: %@", command, source, error.localizedDescription) }
         }
     }
 
-    /// Skips to the active source's next song.
+    /// Skips to the active source's next song, if the state lists `next`.
     func advanceToNextTrack() {
-        guard let apiService = connectionManager.apiService, let source = state?.activeSource else { return }
+        guard let apiService = connectionManager.apiService, let state, state.allows("next") else { return }
+        let source = state.source
         Task {
             do { try await apiService.sendPlaybackCommand("next", to: source) }
             catch { NSLog("❌ Now-playing next (%@) failed: %@", source, error.localizedDescription) }
         }
     }
 
-    /// Toggles stop/restart for Radio: unlike `toggleNowPlayingPause`, this is NOT
-    /// a real pause (Radio has none) — either we stop the current stream, or we restart the
-    /// LAST known station (`lastRadioStation`, which survives a stop on the client side even though
-    /// the backend has already emptied its `metadata` fields).
+    /// Toggles stop/restart for Radio: unlike `toggleNowPlayingPause`, this is NOT a real
+    /// pause (Radio has none) — either we stop the current stream, or we restart the station
+    /// the backend kept as its resume point (`resume_playback`).
     func toggleRadioNowPlaying() {
-        guard state?.activeSource == "radio" else { return }
-        if nowPlaying?.isPlaying == true {
+        guard let apiService = connectionManager.apiService, let state, state.source == "radio" else { return }
+        if state.allows("stop") {
             stopRadioPlayback()
-        } else if let stationId = lastRadioStation?.id {
-            playRadioStation(stationId)
+        } else if state.allows("resume_playback") {
+            // Same spinner as a tap on the station in the list: the restart is that station.
+            if case .radio(let station, _) = state.details {
+                beginRadioStationLoading(stationId: station.id)
+            }
+            Task {
+                do {
+                    try await apiService.sendPlaybackCommand("resume_playback", to: "radio")
+                } catch {
+                    NSLog("❌ Radio resume_playback failed: %@", error.localizedDescription)
+                    endRadioStationLoading()
+                }
+            }
         }
     }
 
     /// True when the Radio source is settled and its favourites can be displayed.
     var canShowRadioStations: Bool {
-        state?.activeSource == "radio"
+        state?.source == "radio"
             && state?.isSourceSettled == true
             && radioFavorites != nil
     }
@@ -833,7 +816,7 @@ final class MiloStore {
     /// True when the Music Library source is settled: the search is done on demand,
     /// so there is nothing equivalent to `radioFavorites != nil` to wait for here.
     var canShowMusicLibrarySearch: Bool {
-        state?.activeSource == "music_library"
+        state?.source == "music_library"
             && state?.isSourceSettled == true
     }
 
@@ -1025,7 +1008,7 @@ final class MiloStore {
     /// OR paused) — tells the "current" row from the others in a results/album
     /// list, so as to show it play/pause rather than the generic hover.
     func isCurrentMusicLibrarySong(_ song: MusicLibrarySong) -> Bool {
-        state?.activeSource == "music_library" && nowPlaying?.id == song.id
+        state?.source == "music_library" && nowPlaying?.id == song.id
     }
 
     /// Starts playback of a song: the queue sent to the backend is the COMPLETE list of
@@ -1058,7 +1041,7 @@ final class MiloStore {
     /// synthetic id (`mdisc:…`) that its songs do not — an id comparison
     /// would fail precisely on the albums the backend has glued back together.
     var isCurrentMusicLibraryAlbum: Bool {
-        guard state?.activeSource == "music_library", let currentId = nowPlaying?.id else { return false }
+        guard state?.source == "music_library", let currentId = nowPlaying?.id else { return false }
         return musicLibraryAlbumSongs.contains { $0.id == currentId }
     }
 
@@ -1071,7 +1054,7 @@ final class MiloStore {
     /// True when the current queue is the one the open artist page started — hence when
     /// its button should toggle play/pause instead of rebuilding the queue from the start.
     var isMusicLibraryArtistQueued: Bool {
-        guard state?.activeSource == "music_library", let artist = musicLibraryViewedArtist else { return false }
+        guard state?.source == "music_library", let artist = musicLibraryViewedArtist else { return false }
         return musicLibraryPlayingArtistId == artist.id
     }
 
@@ -1289,7 +1272,7 @@ final class MiloStore {
     /// Keeps the multiroom cache in sync with the current state: we load it as soon as
     /// multiroom is active (and not yet loaded), and empty it when it is switched off. Called on
     /// every new state (HTTP fetch as well as WebSocket push).
-    private func syncMultiroomState(for newState: MiloState) {
+    private func syncMultiroomState(for newState: MiloAudioState) {
         if newState.multiroomEnabled {
             if multiroom.clients.isEmpty { loadMultiroomState() }
         } else if !multiroom.clients.isEmpty || !multiroom.zones.isEmpty {
@@ -1298,25 +1281,10 @@ final class MiloStore {
         }
     }
 
-    /// Keeps `lastRadioStation` up to date while Radio is the active source. A `stop` empties
-    /// the station fields of `metadata` (see `_handle_stop_playback` on the Milo side) WITHOUT changing
-    /// `active_source` — so the guard only fires on a real source change, not
-    /// on a stop, which is precisely the point: surviving the stop for the "restart" button.
-    private func syncLastRadioStation(for newState: MiloState) {
-        guard newState.activeSource == "radio" else {
-            lastRadioStation = nil
-            return
-        }
-        guard let id = newState.metadata["station_id"] as? String,
-              let name = newState.metadata["station_name"] as? String else { return }
-        lastRadioStation = (id: id, name: name, favicon: newState.metadata["favicon"] as? String)
-    }
-
     /// Keeps `displayedNowPlaying` up to date — ONLY when a song is detected, never
-    /// reset to nil here. Called after `syncLastRadioStation` (on which `radioNowPlaying` depends for
-    /// its fallback after a stop): it has to stay populated after `nowPlaying` falls back to nil, long
+    /// reset to nil here: it has to stay populated after `nowPlaying` falls back to nil, long
     /// enough for `MenuBarShell` to animate `nowPlayingRevealFraction` down to 0.
-    private func syncDisplayedNowPlaying(for newState: MiloState) {
+    private func syncDisplayedNowPlaying(for newState: MiloAudioState) {
         if let info = nowPlayingInfo(for: newState) {
             displayedNowPlaying = info
         }
@@ -1365,15 +1333,22 @@ final class MiloStore {
         expectedFunctionalityStates[identifier] = nil
     }
 
-    private func checkFunctionalityStateChange(_ newState: MiloState) {
-        // The multiroom loading is resolved by didReceiveMultiroomTransitionComplete,
-        // not by comparing the state here: the backend silently pre-sets
-        // multiroom_enabled BEFORE the real routing work (snapserver startup,
-        // WebSocket ready up to 15 s), so the intermediate states already carry the
-        // new value and would resolve the spinner too early.
+    private func checkFunctionalityStateChange(_ newState: MiloAudioState) {
+        // Multiroom: the backend pre-sets multiroom_enabled BEFORE the real routing work
+        // (snapserver startup, WebSocket ready up to 15 s), so the new value alone would
+        // resolve the spinner too early. But `switching` stays true for the whole switch,
+        // volume sync included: the end of a multiroom switch is the first state where it is
+        // false again. A stale state from before the click still carries the OLD value, so it
+        // cannot match. (A refusal still arrives as multiroom_error.)
+        if let expectedMultiroom = expectedFunctionalityStates["multiroom"],
+           newState.multiroomEnabled == expectedMultiroom,
+           !newState.switching,
+           loadingStates["multiroom"] == true {
+            stopFunctionalityLoading(for: "multiroom")
+        }
 
         if let expectedEqualizer = expectedFunctionalityStates["equalizer"],
-           newState.equalizerEnabled == expectedEqualizer,
+           newState.equalizerEffectsEnabled == expectedEqualizer,
            loadingStates["equalizer"] == true {
             stopFunctionalityLoading(for: "equalizer")
         }
@@ -1414,8 +1389,8 @@ final class MiloStore {
     ///
     /// This is the delicate point of this class. A click sets a spinner *before* the
     /// HTTP request; the backend can take a moment to announce the transition
-    /// (`transition_start`). During this grace window, a "non-transitional" state
-    /// received is probably the **old** state (the click↔transition_start race) and must
+    /// (`switching`). During this grace window, a "non-transitional" state
+    /// received is probably the **old** state (the click↔switching race) and must
     /// not clear the spinner. Once the transition is confirmed, the grace is lifted and
     /// the spinner clears as soon as the transition ends — like the web frontend.
     private func syncLoadingStatesWithBackend() {
@@ -1423,10 +1398,8 @@ final class MiloStore {
 
         let audioSources = enabledApps?.filter { AudioSourceCatalog.allIds.contains($0) }
             ?? AudioSourceCatalog.allIds
-        let isSourceTransitioning = state.sourceState.lowercased() == "starting" || state.transitioning
-
         for identifier in audioSources {
-            if isSourceTransitioning && identifier == state.activeSource {
+            if state.isSourceStarting && identifier == state.source {
                 // The backend has taken charge of this source's transition.
                 if loadingStates[identifier] != true {
                     setLoadingState(for: identifier, isLoading: true)
@@ -1440,7 +1413,7 @@ final class MiloStore {
                     let elapsed = Date().timeIntervalSince(graceStart)
                     if elapsed < manualLoadingGraceDuration {
                         // Re-check at the end of the window: otherwise, if the backend
-                        // emits nothing further (source settled in WAITING), the spinner
+                        // emits nothing further (source already settled), the spinner
                         // would stay stuck until the safety timeout (15 s).
                         scheduleGraceWindowSourceLoadingClear(identifier, after: manualLoadingGraceDuration - elapsed)
                         continue
@@ -1460,8 +1433,7 @@ final class MiloStore {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.loadingStates[identifier] == true, let state = self.state else { return }
-                let stillTransitioning = (state.sourceState.lowercased() == "starting" || state.transitioning)
-                    && identifier == state.activeSource
+                let stillTransitioning = state.isSourceStarting && identifier == state.source
                 if !stillTransitioning {
                     self.stopLoading(for: identifier)
                 }
@@ -1581,11 +1553,10 @@ final class MiloStore {
         do {
             let newState = try await apiService.fetchState()
             state = newState
-            if newState.activeSource == "radio" && radioFavorites == nil {
+            if newState.source == "radio" && radioFavorites == nil {
                 loadRadioFavoritesInBackground()
             }
             syncMultiroomState(for: newState)
-            syncLastRadioStation(for: newState)
             syncDisplayedNowPlaying(for: newState)
             return true
         } catch {
@@ -1658,7 +1629,6 @@ final class MiloStore {
         // survive the disconnection.
         radioFavorites = nil
         endRadioStationLoading()
-        lastRadioStation = nil
         displayedNowPlaying = nil
 
         // The multiroom structure will be re-fetched on reconnection if multiroom is active.
@@ -1715,29 +1685,27 @@ extension MiloStore: MiloConnectionManagerDelegate {
         volumeController.cleanup()
     }
 
-    func didReceiveStateUpdate(_ newState: MiloState) {
-        let previousSource = state?.activeSource
+    func didReceiveStateUpdate(_ newState: MiloAudioState) {
+        let previousSource = state?.source
         state = newState
 
         // Load the favourites if Radio is active and the cache is empty (whether Radio
         // was enabled from Milo Mac or from the backend).
-        if newState.activeSource == "radio" && radioFavorites == nil {
+        if newState.source == "radio" && radioFavorites == nil {
             loadRadioFavoritesInBackground()
         }
 
         // Clear the cache if we leave Radio.
-        if newState.activeSource != "radio" && previousSource == "radio" {
+        if newState.source != "radio" && previousSource == "radio" {
             radioFavorites = nil
             NSLog("🗑️ Radio favorites cache cleared")
         }
 
-        // Clear the station spinner as soon as buffering ends — covers both a
-        // successful start and a failure to load the stream, so it never stays
-        // stuck. Same if Radio stops being the active source.
+        // Clear the station spinner as soon as the session stops loading — covers both a
+        // successful start and a failure to load the stream (the session ends), so it never
+        // stays stuck. Same if Radio stops being the active source.
         if radioStationLoadingId != nil {
-            if newState.activeSource != "radio" {
-                endRadioStationLoading()
-            } else if newState.metadata["is_buffering"] as? Int != 1 {
+            if newState.source != "radio" || newState.session?.phase != .loading {
                 endRadioStationLoading()
             }
         }
@@ -1745,7 +1713,6 @@ extension MiloStore: MiloConnectionManagerDelegate {
         checkFunctionalityStateChange(newState)
         syncLoadingStatesWithBackend()
         syncMultiroomState(for: newState)
-        syncLastRadioStation(for: newState)
         syncDisplayedNowPlaying(for: newState)
     }
 
@@ -1763,7 +1730,7 @@ extension MiloStore: MiloConnectionManagerDelegate {
     func didReceiveMultiroomTransitionComplete(success: Bool) {
         guard loadingStates["multiroom"] == true else { return }
         if !success {
-            // Clear the expected state on failure so that no late state_changed
+            // Clear the expected state on failure so that no late source/state
             // resolves it by accident.
             expectedFunctionalityStates["multiroom"] = nil
         }

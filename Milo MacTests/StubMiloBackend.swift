@@ -158,8 +158,9 @@ final class StubMiloBackend: Sendable {
         case "/api/audio/state":
             let multiroom = state.withLock { $0.multiroomEnabled }
             return Self.http(json: """
-                {"active_source":"spotify","source_state":"active","transitioning":false,\
-                "multiroom_enabled":\(multiroom),"equalizer_effects_enabled":true,"metadata":{}}
+                {"source":"spotify","switching":false,"service":"running","service_error":null,\
+                "availability":{},"session":null,"controls":[],"resume":null,"details":null,\
+                "multiroom_enabled":\(multiroom),"equalizer_effects_enabled":true}
                 """)
 
         case "/api/volume/state":

@@ -363,7 +363,7 @@ private enum NowPlayingMetrics {
 }
 
 /// The "now playing" banner: 48×48 cover art on the left, title then artist in the middle, playback
-/// controls on the right when the active source offers any. Displayed between the panel's title and
+/// controls on the right when the state's `controls` list offers any. Displayed between the panel's title and
 /// the volume slider as soon as a song (or, for Radio, a station) is loaded — see
 /// `MiloStore.nowPlaying` for the field mapping.
 struct NowPlayingRow: View {
@@ -388,7 +388,7 @@ struct NowPlayingRow: View {
     }
 
     private var controls: Controls {
-        if store.state?.activeSource == "radio" { return .radioToggle }
+        if store.state?.source == "radio" { return store.radioSupportsToggle ? .radioToggle : .none }
         guard store.nowPlayingSupportsPauseResume else { return .none }
         return .pauseResume(hasNext: store.nowPlayingSupportsNext)
     }
@@ -422,7 +422,7 @@ struct NowPlayingRow: View {
 
                 case .radioToggle:
                     NowPlayingControlButton(
-                        systemName: info.isPlaying ? "stop.fill" : "play.fill",
+                        systemName: store.radioCanStop ? "stop.fill" : "play.fill",
                         iconSize: NowPlayingMetrics.playPauseIconSize,
                         size: NowPlayingMetrics.controlSize,
                         action: store.toggleRadioNowPlaying
@@ -430,7 +430,7 @@ struct NowPlayingRow: View {
 
                 case .pauseResume(let hasNext):
                     NowPlayingControlButton(
-                        systemName: info.isPlaying ? "pause.fill" : "play.fill",
+                        systemName: store.nowPlayingCanPause ? "pause.fill" : "play.fill",
                         iconSize: NowPlayingMetrics.playPauseIconSize,
                         size: NowPlayingMetrics.controlSize,
                         action: store.toggleNowPlayingPause
@@ -603,15 +603,14 @@ struct SourceRow: View {
     }
 
     private var isActive: Bool {
-        store.state?.activeSource == source.id
+        store.state?.source == source.id
     }
 
     /// A spinner if the backend reports a transition towards this source, OR if a local click
     /// has just gone out (loadingStates, set before the HTTP request).
     private var isLoading: Bool {
-        let transitioning = (store.state?.sourceState.lowercased() == "starting")
-            || (store.state?.transitioning ?? false)
-        return (transitioning && isActive) || store.loadingStates[source.id] == true
+        let starting = store.state?.isSourceStarting ?? false
+        return (starting && isActive) || store.loadingStates[source.id] == true
     }
 
     var body: some View {

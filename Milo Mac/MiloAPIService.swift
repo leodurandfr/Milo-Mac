@@ -4,10 +4,9 @@ import Synchronization
 /// Converts `JSONSerialization`'s `[String: Any]` into a genuinely **Sendable**
 /// dictionary.
 ///
-/// `MiloState` crosses an isolation boundary — it is decoded off the main actor
-/// (URLSession's delegate queue for the WebSocket, the Swift-concurrency pool for HTTP)
-/// and then handed to the main actor, which owns it. Its `metadata` therefore has to be
-/// Sendable for real.
+/// A music-library song's `raw` dict crosses an isolation boundary — it is decoded off the
+/// main actor (on the Swift-concurrency pool) and then handed to the main actor, which owns
+/// it. It therefore has to be Sendable for real.
 ///
 /// And not through an `as? [String: any Sendable]`: `Sendable` is a *marker* protocol,
 /// with no runtime representation — that cast "always succeeds" without checking anything.
@@ -33,36 +32,24 @@ enum JSONSendable {
     }
 }
 
-struct MiloState: Sendable {
-    let activeSource: String
-    let sourceState: String       // "starting", "ready", "active", "error"
-    let transitioning: Bool       // true during a source change
-    let multiroomEnabled: Bool
-    let equalizerEnabled: Bool
-    let metadata: [String: any Sendable]
-
+/// The Mac's reading of the shared wire state (`MiloAudioState.swift`, twinned with Milo-iOS).
+/// Only derived predicates live here: the decoding itself must stay identical in both apps.
+extension MiloAudioState {
     /// True when the source is SETTLED: its engine is running and nothing is in flight any
     /// more — the prerequisite for displaying any sub-level (radio stations, library search).
-    ///
-    /// `ready` is this state's current name on the backend side (`SourceState.READY`).
-    /// `waiting` is the one it carried before the rename: we still accept it because a Milō
-    /// that has not been updated still returns it, and both denote the same state (engine up,
-    /// empty session). Do not narrow this to `ready` while the deployed backend may be old:
-    /// that very mismatch is what made both chevrons disappear.
     var isSourceSettled: Bool {
-        ["ready", "waiting", "active"].contains(sourceState.lowercased())
+        service == .running && !switching
     }
 
-    /// A single decoding of the backend payload — shared between the HTTP fetch
-    /// (/api/audio/state) and the WebSocket events' `full_state`,
-    /// so the two transports cannot diverge.
-    init(json: [String: Any]) {
-        activeSource = json["active_source"] as? String ?? "none"
-        sourceState = json["source_state"] as? String ?? "active"
-        transitioning = json["transitioning"] as? Bool ?? false
-        multiroomEnabled = json["multiroom_enabled"] as? Bool ?? false
-        equalizerEnabled = json["equalizer_effects_enabled"] as? Bool ?? true
-        metadata = JSONSendable.dictionary(json["metadata"] as? [String: Any] ?? [:])
+    /// True while the backend is bringing the chosen source up: a source change in flight
+    /// (`switching`) or a service still starting. What the source row's spinner follows.
+    var isSourceStarting: Bool {
+        service == .starting || switching
+    }
+
+    /// Whether `controls` lists this command right now.
+    func allows(_ command: String) -> Bool {
+        controls.contains(command)
     }
 }
 
@@ -577,8 +564,18 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Audio API
 
-    func fetchState() async throws -> MiloState {
-        MiloState(json: try await fetchJSON("/api/audio/state"))
+    /// The audio state, decoded through the shared wire decoder. Throws on a payload that
+    /// breaks the contract (an unknown `service` or `phase`, a missing field) — see
+    /// `MiloAudioState`.
+    func fetchState() async throws -> MiloAudioState {
+        try MiloAudioState.decode(try await send("/api/audio/state"))
+    }
+
+    /// Readiness probe for the connection phase machine: Milō answers `/api/audio/state` with
+    /// JSON. Deliberately NOT a decode — a state this build cannot read is a contract mismatch
+    /// to log, not an unreachable Milō, and must not send the machine back to discovery.
+    func probeState() async throws {
+        _ = try await fetchJSON("/api/audio/state")
     }
 
     func changeSource(_ source: String) async throws {
@@ -860,13 +857,14 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Now playing
 
-    /// Resolves `album_art_url` (or Radio's Shazam artwork) to an absolute, displayable URL.
+    /// Resolves a session's or resume point's `artwork` (or Radio's recognized-track artwork)
+    /// to an absolute, displayable URL.
     ///
-    /// Two shapes come out of the backend (see `PlaybackMetadata`, on the Milo side): a LOCAL
-    /// path the Pi serves itself (AirPlay, DLNA, CD, music library — e.g.
-    /// `/api/dlna/artwork?v=…`), to be prefixed with host:port like the rest of the API; or an
-    /// already absolute URL to an external CDN (Spotify, Qobuz, the Shazam artwork Radio
-    /// recognized), to be used as is. `nil` if the metadata has no artwork.
+    /// Two shapes come out of the backend: a LOCAL path the Pi serves itself (AirPlay, CD,
+    /// music library, a proxied station logo — e.g. `/api/airplay/artwork?v=…`), to be
+    /// prefixed with host:port like the rest of the API; or an already absolute URL to an
+    /// external CDN (Spotify, Qobuz, the Shazam artwork Radio recognized), to be used as is.
+    /// `nil` if there is no artwork.
     func nowPlayingArtworkURL(for path: String?) -> URL? {
         guard let path, !path.isEmpty else { return nil }
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
