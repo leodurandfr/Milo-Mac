@@ -66,16 +66,12 @@
 "settings.volume_hud_all_changes.description" = "हर बदलाव पर, Milō Mac के बाहर किए गए बदलावों सहित।";
 
 // Mac Audio section
-"settings.preset" = "प्रीसेट";
-"settings.buffer" = "बफर";
-"settings.fec" = "त्रुटि सुधार";
-"settings.quality" = "गुणवत्ता";
 "settings.packet_length" = "पैकेट लंबाई";
 "settings.fec_source" = "FEC स्रोत पैकेट";
 "settings.fec_repair" = "FEC मरम्मत पैकेट";
 "settings.interleaving" = "पैकेट इंटरलीविंग";
-"settings.reset" = "रीसेट करें";
-"settings.apply" = "लागू करें";
+"settings.rocvad.set_from_milo" = "Milō पर, \"macOS रिसीवर\" सेटिंग्स में सेट किया जाता है।";
+"settings.rocvad.waiting_for_milo" = "Milō से जुड़ने पर उसके द्वारा भेजा जाता है।";
 
 // MARK: - Connection Status
 "status.disconnected" = "Milō चालू नहीं है";
@@ -88,8 +84,6 @@
 "progress.downloading" = "डिपेंडेंसी डाउनलोड और इंस्टॉल हो रही हैं (roc-vad)…";
 "progress.verifying" = "इंस्टॉलेशन सत्यापित हो रहा है…";
 "progress.installation_complete" = "इंस्टॉलेशन सफलतापूर्वक पूर्ण";
-"progress.reconfiguring_device" = "Milō ऑडियो डिवाइस पुनः कॉन्फ़िगर हो रहा है…";
-"progress.creating_device" = "Milō ऑडियो डिवाइस बन रहा है…";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "वॉल्यूम स्लाइडर";
@@ -98,20 +92,6 @@
 "accessibility.play" = "चलाएँ";
 "accessibility.pause" = "रोकें";
 "accessibility.milo_icon" = "Milō";
-
-// MARK: - ROC VAD Settings (enum localization)
-"config.rocvad.fec.rs8m" = "मानक (RS8M)";
-"config.rocvad.fec.ldpc" = "उच्च (LDPC)";
-"config.rocvad.fec.disable" = "अक्षम";
-"config.rocvad.resampler.low" = "कम";
-"config.rocvad.resampler.medium" = "मध्यम";
-"config.rocvad.resampler.high" = "उच्च";
-"config.rocvad.preset.ultra_low" = "अत्यंत कम विलंबता";
-"config.rocvad.preset.low" = "कम विलंबता";
-"config.rocvad.preset.balanced" = "संतुलित";
-"config.rocvad.preset.high_quality" = "उच्च गुणवत्ता";
-"config.rocvad.preset.custom" = "कस्टम";
-"progress.applying_settings" = "ऑडियो सेटिंग्स लागू हो रही हैं…";
 
 // MARK: - Mac audio (roc-vad)
 "settings.rocvad.description" = "\"macOS रिसीवर\" स्रोत आपके Mac का ऑडियो Milō पर भेजता है। इसके लिए roc-vad ऑडियो ड्राइवर आवश्यक है।";

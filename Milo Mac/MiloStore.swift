@@ -301,8 +301,9 @@ final class MiloStore {
         connectionManager.rocVADManager = manager
     }
 
-    /// Checks the driver and configures the device, in the background. Shows no alert
-    /// and blocks nothing: if roc-vad is missing, we merely reflect that in the UI.
+    /// Checks the driver in the background; the device itself follows Milō once connected
+    /// (its host and the sender half of its link). Shows no alert and blocks nothing: if
+    /// roc-vad is missing, we merely reflect that in the UI.
     func prepareRocVADIfInstalled() {
         guard let rocVADManager, RocVADManager.isBinaryInstalled else {
             isRocVADReady = false
@@ -321,8 +322,7 @@ final class MiloStore {
                 return
             }
 
-            let success = await rocVADManager.configureDeviceOnly()
-            NSLog(success ? "✅ roc-vad device configured" : "⚠️ roc-vad device configuration failed")
+            await rocVADManager.driverIsReady()
         }
     }
 
@@ -1564,7 +1564,7 @@ final class MiloStore {
         }
     }
 
-    /// The static settings (dock apps + volume limits) through /api/settings/bulk. Also
+    /// The static settings (dock apps, volume limits, the Mac link) through /api/settings/bulk. Also
     /// bootstraps, as a side effect on the MiloAPIService side, the limits cache read by
     /// getVolumeStatus().
     @discardableResult
@@ -1572,6 +1572,9 @@ final class MiloStore {
         do {
             let settings = try await apiService.fetchBulkSettings()
             enabledApps = settings.enabledApps
+            if let macSender = settings.macSender {
+                rocVADManager?.applyFromMilo(macSender)
+            }
 
             // A late bootstrap (recovery after a failed /bulk): `volume` may have been
             // read in the meantime with the fallback limits. Realign them, otherwise the slider
@@ -1782,6 +1785,12 @@ extension MiloStore: MiloConnectionManagerDelegate {
     /// order.
     func didReceiveDockAppsUpdate(_ apps: [String]) {
         enabledApps = apps
+    }
+
+    /// The sender half of Milō's link, changed from Milō's "macOS receiver" settings: the
+    /// roc-vad device is rebuilt only if it does not already run it.
+    func didReceiveMacSenderUpdate(_ settings: RocVADSettings) {
+        rocVADManager?.applyFromMilo(settings)
     }
 }
 

@@ -83,6 +83,8 @@ struct BulkSettings {
     let limitMinDb: Double
     let limitMaxDb: Double
     let enabledApps: [String]
+    /// The sender half of Milō's ROC link (`mac_roc`), applied to the roc-vad device.
+    let macSender: RocVADSettings?
 }
 
 /// A radio station as served by /api/radio/stations.
@@ -660,7 +662,7 @@ final class MiloAPIService: Sendable {
 
     // MARK: - Settings API
 
-    /// Fetches the device's static settings (volume limits + dock apps) in a
+    /// Fetches the device's static settings (volume limits, dock apps, the Mac link) in a
     /// single call. Replaces the old per-category routes /api/settings/volume-limits
     /// and /api/settings/dock-apps — same sub-keys, different envelope:
     ///   volume-limits {"limits": {...}} → bulk {"volume_limits": {...}}
@@ -680,9 +682,14 @@ final class MiloAPIService: Sendable {
         let dockApps = json["dock_apps"] as? [String: Any]
         let enabledApps = dockApps?["enabled_apps"] as? [String] ?? []
 
+        // mac_roc.{packet_length_ms,fec_block_source,fec_block_repair,packet_interleaving}:
+        // the sender half of the link Milō sets for every Mac.
+        let macSender = (json["mac_roc"] as? [String: Any]).flatMap(RocVADSettings.init(miloLink:))
+
         updateCachedLimits(minDb: limitMin, maxDb: limitMax)
 
-        return BulkSettings(limitMinDb: limitMin, limitMaxDb: limitMax, enabledApps: enabledApps)
+        return BulkSettings(limitMinDb: limitMin, limitMaxDb: limitMax, enabledApps: enabledApps,
+                            macSender: macSender)
     }
 
     /// Updates the limits cache following the WS event `settings/volume_limits_changed`

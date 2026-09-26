@@ -1,264 +1,91 @@
 import Foundation
 
-// MARK: - Preset Enum
-
-/// Predefined audio streaming presets for common use cases
-enum RocVADPreset: String, CaseIterable {
-    case ultraLowLatency = "ultra_low"
-    case lowLatency = "low"
-    case balanced = "balanced"
-    case highQuality = "high_quality"
-
-    var displayName: String {
-        switch self {
-        case .ultraLowLatency: return L("config.rocvad.preset.ultra_low")
-        case .lowLatency: return L("config.rocvad.preset.low")
-        case .balanced: return L("config.rocvad.preset.balanced")
-        case .highQuality: return L("config.rocvad.preset.high_quality")
-        }
-    }
-
-    func toSettings() -> RocVADSettings {
-        switch self {
-        case .ultraLowLatency:
-            return RocVADSettings(
-                deviceBuffer: 5,
-                fecEncoding: .disable,
-                resamplerProfile: .low,
-                packetLength: 2,
-                fecBlockSource: RocVADSettings.defaultFECBlockSource,
-                fecBlockRepair: RocVADSettings.defaultFECBlockRepair,
-                packetInterleaving: false
-            )
-        case .lowLatency:
-            return RocVADSettings(
-                deviceBuffer: 20,
-                fecEncoding: .rs8m,
-                resamplerProfile: .medium,
-                packetLength: 3,
-                fecBlockSource: 10,
-                fecBlockRepair: 5,
-                packetInterleaving: false
-            )
-        case .balanced:
-            return RocVADSettings(
-                deviceBuffer: 60,
-                fecEncoding: .rs8m,
-                resamplerProfile: .medium,
-                packetLength: 5,
-                fecBlockSource: 18,
-                fecBlockRepair: 10,
-                packetInterleaving: false
-            )
-        case .highQuality:
-            return RocVADSettings(
-                deviceBuffer: 120,
-                fecEncoding: .rs8m,
-                resamplerProfile: .high,
-                packetLength: 7,
-                fecBlockSource: 25,
-                fecBlockRepair: 15,
-                packetInterleaving: true
-            )
-        }
-    }
-
-    /// Find which preset matches the given settings, or nil if custom
-    static func matchingPreset(for settings: RocVADSettings) -> RocVADPreset? {
-        return allCases.first { $0.toSettings() == settings }
-    }
-}
-
-// MARK: - Enums
-
-/// FEC (Forward Error Correction) encoding types
-enum FECEncoding: String, CaseIterable {
-    case rs8m = "rs8m"      // Reed-Solomon 8M (standard)
-    case ldpc = "ldpc"      // LDPC (high redundancy)
-    case disable = "disable" // No FEC
-
-    var displayName: String {
-        switch self {
-        case .rs8m: return L("config.rocvad.fec.rs8m")
-        case .ldpc: return L("config.rocvad.fec.ldpc")
-        case .disable: return L("config.rocvad.fec.disable")
-        }
-    }
-}
-
-/// Resampler quality profiles
-enum ResamplerProfile: String, CaseIterable {
-    case low = "low"
-    case medium = "medium"
-    case high = "high"
-
-    var displayName: String {
-        switch self {
-        case .low: return L("config.rocvad.resampler.low")
-        case .medium: return L("config.rocvad.resampler.medium")
-        case .high: return L("config.rocvad.resampler.high")
-        }
-    }
-}
-
-// MARK: - Settings Struct
-
-/// Configuration settings for ROC VAD sender.
+/// The sender half of the Mac → Milō ROC link, as Milō sets it.
 ///
-/// Equatable is synthesized: every field is driver configuration, so all of them count
-/// (`matchingPreset(for:)` depends on it). Only add things here that drive roc-vad —
-/// UI state goes into DefaultsKey.
-struct RocVADSettings: Equatable {
-
-    // MARK: - Main Options
-
-    /// Device buffer in milliseconds (default: 60ms, range: 2-200ms)
-    /// Higher values = more stability, lower values = less latency
-    var deviceBuffer: Int
-
-    /// FEC encoding type (default: rs8m)
-    var fecEncoding: FECEncoding
-
-    /// Resampler quality profile (default: medium)
-    var resamplerProfile: ResamplerProfile
-
-    // MARK: - Advanced Options
-
-    /// Packet length in milliseconds (default: 5ms, range: 2-20ms)
+/// Milō owns the whole link: its receiver (roc-recv) and this sender are configured together
+/// from Milō's "macOS receiver" settings, where an analysis measures the link and proposes
+/// both halves. This app only applies what arrives — from `/api/settings/bulk` (`mac_roc`)
+/// at connect and from `settings/mac_roc_changed` afterwards — to its roc-vad device.
+///
+/// Two roc-vad options are deliberately not here:
+/// - **the FEC scheme**: Milō's receiver listens on `rtp+rs8m`, and roc refuses a sender on
+///   any other scheme when the device connects;
+/// - **the device buffer**: roc-vad drains it on every CoreAudio I/O cycle, so it adds no
+///   latency, and one smaller than CoreAudio's I/O buffer overruns roc-vad's ring. roc-vad's
+///   own default is left in place.
+struct RocVADSettings: Equatable, Sendable {
     var packetLength: Int
-
-    /// FEC block source packets (default: 18, range: 10-50)
     var fecBlockSource: Int
-
-    /// FEC block repair packets (default: 10, range: 5-30)
     var fecBlockRepair: Int
-
-    /// Enable packet interleaving for burst loss protection (default: false)
     var packetInterleaving: Bool
 
-    // MARK: - Default Values
+    /// Reads the sender half of Milō's `mac_roc` object — the same keys in `/bulk` and in
+    /// the `config` of `settings/mac_roc_changed`. Nil when any of them is missing: a link
+    /// half-described is not one to rebuild the device for.
+    init?(miloLink: [String: Any]) {
+        guard let packetLength = miloLink["packet_length_ms"] as? Int,
+              let fecBlockSource = miloLink["fec_block_source"] as? Int,
+              let fecBlockRepair = miloLink["fec_block_repair"] as? Int,
+              let packetInterleaving = miloLink["packet_interleaving"] as? Bool else { return nil }
+        self.init(packetLength: packetLength, fecBlockSource: fecBlockSource,
+                  fecBlockRepair: fecBlockRepair, packetInterleaving: packetInterleaving)
+    }
 
-    static let defaultDeviceBuffer = 60
-    static let defaultFECEncoding = FECEncoding.rs8m
-    static let defaultResamplerProfile = ResamplerProfile.medium
-    static let defaultPacketLength = 5
-    static let defaultFECBlockSource = 18
-    static let defaultFECBlockRepair = 10
-    static let defaultPacketInterleaving = false
-
-    // MARK: - Ranges
-
-    static let deviceBufferRange = 2...200
-    static let packetLengthRange = 2...20
-    static let fecBlockSourceRange = 10...50
-    static let fecBlockRepairRange = 5...30
-
-    // MARK: - Initialization
-
-    init(
-        deviceBuffer: Int = defaultDeviceBuffer,
-        fecEncoding: FECEncoding = defaultFECEncoding,
-        resamplerProfile: ResamplerProfile = defaultResamplerProfile,
-        packetLength: Int = defaultPacketLength,
-        fecBlockSource: Int = defaultFECBlockSource,
-        fecBlockRepair: Int = defaultFECBlockRepair,
-        packetInterleaving: Bool = defaultPacketInterleaving
-    ) {
-        self.deviceBuffer = deviceBuffer
-        self.fecEncoding = fecEncoding
-        self.resamplerProfile = resamplerProfile
+    init(packetLength: Int, fecBlockSource: Int, fecBlockRepair: Int, packetInterleaving: Bool) {
         self.packetLength = packetLength
         self.fecBlockSource = fecBlockSource
         self.fecBlockRepair = fecBlockRepair
         self.packetInterleaving = packetInterleaving
     }
 
-    // MARK: - UserDefaults Keys
-
-    // This struct carries ONLY driver configuration. The expanded state of the
-    // "Mac Audio" section is UI: it lives in DefaultsKey.macAudioExpanded, otherwise a
-    // saveToUserDefaults() would write the value read at launch over the current one.
-    private enum Keys {
-        static let deviceBuffer = "RocVAD.DeviceBuffer"
-        static let fecEncoding = "RocVAD.FECEncoding"
-        static let resamplerProfile = "RocVAD.ResamplerProfile"
-        static let packetLength = "RocVAD.PacketLength"
-        static let fecBlockSource = "RocVAD.FECBlockSource"
-        static let fecBlockRepair = "RocVAD.FECBlockRepair"
-        static let packetInterleaving = "RocVAD.PacketInterleaving"
-    }
-
-    // MARK: - Persistence
-
-    /// Load settings from UserDefaults
-    static func loadFromUserDefaults() -> RocVADSettings {
-        let defaults = UserDefaults.standard
-
-        return RocVADSettings(
-            deviceBuffer: defaults.object(forKey: Keys.deviceBuffer) as? Int ?? defaultDeviceBuffer,
-            fecEncoding: FECEncoding(rawValue: defaults.string(forKey: Keys.fecEncoding) ?? "") ?? defaultFECEncoding,
-            resamplerProfile: ResamplerProfile(rawValue: defaults.string(forKey: Keys.resamplerProfile) ?? "") ?? defaultResamplerProfile,
-            packetLength: defaults.object(forKey: Keys.packetLength) as? Int ?? defaultPacketLength,
-            fecBlockSource: defaults.object(forKey: Keys.fecBlockSource) as? Int ?? defaultFECBlockSource,
-            fecBlockRepair: defaults.object(forKey: Keys.fecBlockRepair) as? Int ?? defaultFECBlockRepair,
-            packetInterleaving: defaults.object(forKey: Keys.packetInterleaving) as? Bool ?? defaultPacketInterleaving
-        )
-    }
-
-    /// Save settings to UserDefaults
-    func saveToUserDefaults() {
-        let defaults = UserDefaults.standard
-
-        defaults.set(deviceBuffer, forKey: Keys.deviceBuffer)
-        defaults.set(fecEncoding.rawValue, forKey: Keys.fecEncoding)
-        defaults.set(resamplerProfile.rawValue, forKey: Keys.resamplerProfile)
-        defaults.set(packetLength, forKey: Keys.packetLength)
-        defaults.set(fecBlockSource, forKey: Keys.fecBlockSource)
-        defaults.set(fecBlockRepair, forKey: Keys.fecBlockRepair)
-        defaults.set(packetInterleaving, forKey: Keys.packetInterleaving)
-    }
-
-    // MARK: - Command Line Arguments
-
-    /// Generate roc-vad command line arguments for device creation
+    /// roc-vad arguments for `device add sender`.
     func toDeviceArguments() -> [String] {
-        var args: [String] = []
-
-        // Device buffer
-        args.append(contentsOf: ["--device-buffer", "\(deviceBuffer)ms"])
-
-        // Resampler profile
-        args.append(contentsOf: ["--resampler-profile", resamplerProfile.rawValue])
-
-        // Packet length
-        args.append(contentsOf: ["--packet-length", "\(packetLength)ms"])
-
-        // FEC encoding (only if not disabled)
-        if fecEncoding != .disable {
-            args.append(contentsOf: ["--fec-encoding", fecEncoding.rawValue])
-            args.append(contentsOf: ["--fec-block-nbsrc", "\(fecBlockSource)"])
-            args.append(contentsOf: ["--fec-block-nbrpr", "\(fecBlockRepair)"])
-        }
-
-        // Packet interleaving
+        var args = [
+            "--packet-length", "\(packetLength)ms",
+            "--fec-encoding", "rs8m",
+            "--fec-block-nbsrc", "\(fecBlockSource)",
+            "--fec-block-nbrpr", "\(fecBlockRepair)",
+        ]
         if packetInterleaving {
             args.append("--packet-interleaving")
         }
-
         return args
     }
+}
 
-    // MARK: - Comparison
+/// What `roc-vad device show` says a device runs — enough to tell whether it already is the
+/// device Milō asks for, which spares a rebuild (and the output switch it causes).
+struct RocVADDeviceDescription: Equatable, Sendable {
+    var uid: String?
+    var packetLength: Int?
+    var packetInterleaving: Bool?
+    var fecBlockSource: Int?
+    var fecBlockRepair: Int?
+    var sourceEndpoint: String?
 
-    /// Check if settings differ from defaults
-    var hasNonDefaultValues: Bool {
-        return deviceBuffer != Self.defaultDeviceBuffer ||
-               fecEncoding != Self.defaultFECEncoding ||
-               resamplerProfile != Self.defaultResamplerProfile ||
-               packetLength != Self.defaultPacketLength ||
-               fecBlockSource != Self.defaultFECBlockSource ||
-               fecBlockRepair != Self.defaultFECBlockRepair ||
-               packetInterleaving != Self.defaultPacketInterleaving
+    init(showOutput output: String) {
+        for line in output.components(separatedBy: .newlines) {
+            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2 else { continue }
+            let (key, value) = (parts[0], parts[1])
+            switch key {
+            case "uid": uid = value
+            case "packet_length": packetLength = Int(value.replacingOccurrences(of: "ms", with: ""))
+            case "packet_interleaving": packetInterleaving = value == "true"
+            case "fec_block_nbsrc": fecBlockSource = Int(value)
+            case "fec_block_nbrpr": fecBlockRepair = Int(value)
+            case "audiosrc": sourceEndpoint = value
+            default: continue
+            }
+        }
     }
 
+    /// The device sends to `host` with exactly these settings.
+    func matches(host: String, sourcePort: Int, settings: RocVADSettings) -> Bool {
+        sourceEndpoint == "rtp+rs8m://\(host):\(sourcePort)"
+            && packetLength == settings.packetLength
+            && packetInterleaving == settings.packetInterleaving
+            && fecBlockSource == settings.fecBlockSource
+            && fecBlockRepair == settings.fecBlockRepair
+    }
 }

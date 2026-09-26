@@ -49,6 +49,7 @@ protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
+    func didReceiveMacSenderUpdate(_ settings: RocVADSettings)
 }
 
 /// Discovery of and connection to Milō: mDNS → API readiness checks → WebSocket.
@@ -382,10 +383,10 @@ final class MiloConnectionManager: NSObject {
         if let best {
             resolvedIPv4 = best
             NSLog("✅ Resolved %@ to IPv4: %@", host, best)
-            rocVADManager?.updateMiloHost(best)
         }
 
         let hostToUse = resolvedIPv4 ?? host
+        rocVADManager?.updateMiloHost(hostToUse)
         let urlString = "ws://\(hostToUse):\(wsPort)/ws"
 
         webSocketService.resetSession()
@@ -491,6 +492,10 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
 
     func didReceiveDockAppsUpdate(_ enabledApps: [String]) {
         delegate?.didReceiveDockAppsUpdate(enabledApps)
+    }
+
+    func didReceiveMacSenderUpdate(_ settings: RocVADSettings) {
+        delegate?.didReceiveMacSenderUpdate(settings)
     }
 }
 

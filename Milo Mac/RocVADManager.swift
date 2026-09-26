@@ -1,15 +1,6 @@
 import Foundation
 import AppKit
-
-// MARK: - Progress
-
-/// What the driver layer asks to display during an operation. The panel itself is drawn
-/// by `RocVADManager`, on the main thread.
-enum RocVADProgress: Sendable {
-    case show(String)
-    case update(String)
-    case hide
-}
+import Observation
 
 // MARK: - Driver
 
@@ -27,8 +18,7 @@ enum RocVADProgress: Sendable {
 /// is bounded by the core count. Here they block a queue thread — exactly as before.
 ///
 /// ⚠️ No method on this actor may contain an `await`: a suspension point would reopen
-/// reentrancy, hence the interleaving the serial queue forbade. That is why progress is
-/// **posted without being awaited** — just as the original `DispatchQueue.main.async` did.
+/// reentrancy, hence the interleaving the serial queue forbade.
 actor RocVADDevice {
     private let queue = DispatchSerialQueue(label: "com.milo.rocvad.device")
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
@@ -38,18 +28,21 @@ actor RocVADDevice {
     private let repairPort = 10002
     private let controlPort = 10003
 
-    private var miloHost = "milo.local"
-    private var settings: RocVADSettings
+    /// Past this a roc-vad call is killed and counted as failed. A healthy driver answers in
+    /// well under a second and a slow one was measured at 7.7 s; one that does not answer at
+    /// all (it hung inside coreaudiod on 2026-09-26) must not hold this queue — and every
+    /// later call behind it — forever.
+    private static let callTimeout: TimeInterval = 15
 
-    init(settings: RocVADSettings) {
-        self.settings = settings
-    }
+    /// The newest `ensure` handled. One queued behind it describes a link that no longer
+    /// stands, and would rebuild the device a second time for nothing.
+    private var handledGeneration = 0
 
     // MARK: - roc-vad subprocess
 
-    /// Runs roc-vad and waits for it to finish. Synchronous and blocking — hence the
-    /// executor above. Returns nil if the binary could not be launched (uninstalled
-    /// mid-session, for instance) — unlike launch(), run() is recoverable.
+    /// Runs roc-vad and waits for it to finish, at most `callTimeout`. Synchronous and
+    /// blocking — hence the executor above. Nil when the binary could not be launched
+    /// (uninstalled mid-session) or did not answer in time.
     private nonisolated static func runRocVAD(_ arguments: [String]) -> (status: Int32, output: String)? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: RocVADManager.binaryPath)
@@ -59,6 +52,9 @@ actor RocVADDevice {
         task.standardOutput = outputPipe
         task.standardError = Pipe()
 
+        let finished = DispatchSemaphore(value: 0)
+        task.terminationHandler = { _ in finished.signal() }
+
         do {
             try task.run()
         } catch {
@@ -66,10 +62,16 @@ actor RocVADDevice {
             return nil
         }
 
-        // Read before waitUntilExit so we do not block if the output fills the pipe.
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
+        if finished.wait(timeout: .now() + callTimeout) == .timedOut {
+            task.terminate()
+            finished.wait()
+            NSLog("❌ roc-vad %@ did not answer within %.0f s — killed", arguments.first ?? "", callTimeout)
+            return nil
+        }
 
+        // roc-vad writes a few lines at most, well within a pipe's buffer, so reading after
+        // the exit cannot have blocked it.
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         return (task.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
@@ -111,92 +113,54 @@ actor RocVADDevice {
         return true
     }
 
-    /// Checks the device and only (re)creates it when needed — the common case (device
-    /// already fine) shows no panel at all.
-    func configureIfNeeded(progress: @Sendable (RocVADProgress) -> Void) -> Bool {
-        NSLog("🔧 Checking Milō audio device configuration...")
+    /// At launch, before Milō is known: duplicates left by an earlier run go, a single
+    /// device is kept as it is. `ensure` builds or corrects it once Milō has said where it
+    /// is and how the link is set.
+    func removeDuplicates() {
+        let existing = deviceInfo().filter { $0.name == deviceName }
+        guard existing.count > 1 else { return }
+        NSLog("⚠️ Found %d Milō devices - removing them", existing.count)
+        deleteAllMiloDevices()
+    }
+
+    /// Makes the Milō device send to `host` with `settings`, rebuilding it only when it does
+    /// not already: a rebuild takes the output away from whoever is listening.
+    ///
+    /// roc-vad cannot change a device in place, so a rebuild is delete + create + connect,
+    /// under a fresh UID. When Milō was the default output, it is made the default again.
+    func ensure(host: String, settings: RocVADSettings, generation: Int) -> Bool {
+        guard generation > handledGeneration else { return true }
+        handledGeneration = generation
 
         let existing = deviceInfo().filter { $0.name == deviceName }
-
-        // Duplicates: delete everything and start over cleanly.
-        if existing.count > 1 {
-            NSLog("⚠️ Found %d Milō devices - cleaning up duplicates", existing.count)
-            deleteAllMiloDevices()
-        } else if let device = existing.first {
-            NSLog("✅ Found existing Milō device (index: %d)", device.index)
-
-            if isDeviceConfigured(deviceIndex: device.index) {
-                NSLog("✅ Device already properly configured - no UI needed")
-                return true
-            }
-
-            NSLog("🔧 Device needs reconfiguration - showing progress")
-            progress(.show(L("progress.reconfiguring_device")))
-            defer { progress(.hide) }
-            return configureDevice(deviceIndex: device.index)
+        if existing.count == 1,
+           let shown = Self.runRocVAD(["device", "show", "\(existing[0].index)"]), shown.status == 0,
+           RocVADDeviceDescription(showOutput: shown.output)
+               .matches(host: host, sourcePort: sourcePort, settings: settings) {
+            NSLog("✅ roc-vad: the Milō device already sends to %@ as Milō set it", host)
+            return true
         }
 
-        NSLog("❌ No Milō device found - showing progress and creating new one")
-        progress(.show(L("progress.creating_device")))
-        defer { progress(.hide) }
-
-        let index = createMiloDevice()
-        guard index > 0 else {
-            NSLog("❌ Failed to create Milō device")
-            return false
-        }
-
-        NSLog("✅ Created new Milō device with index: %d", index)
-        return configureDevice(deviceIndex: index)
-    }
-
-    /// Repoints the device at the resolved IP. roc-vad does not allow an existing device's
-    /// endpoints to be modified: it has to be deleted and recreated.
-    func updateHost(_ newHost: String) {
-        guard newHost != miloHost else {
-            NSLog("🔄 roc-vad: Host unchanged (%@)", newHost)
-            return
-        }
-
-        NSLog("🔄 Updating roc-vad endpoint from %@ to %@", miloHost, newHost)
-        miloHost = newHost
-
-        deleteAllMiloDevices()
-
-        let index = createMiloDevice()
-        guard index > 0 else {
-            NSLog("❌ Failed to create new Milō device")
-            return
-        }
-
-        NSLog("🔧 Configuring new device #%d with IP: %@", index, newHost)
-        let success = configureDevice(deviceIndex: index)
-        NSLog(success ? "✅ Device reconfigured with IP: %@" : "❌ Failed to configure device with IP: %@", newHost)
-    }
-
-    /// Applies new settings: the device is recreated with the new arguments.
-    func apply(_ newSettings: RocVADSettings, progress: @Sendable (RocVADProgress) -> Void) -> Bool {
-        settings = newSettings
+        let currentOutput = SystemAudioOutput.defaultOutputUID()
+        let miloWasTheOutput = existing.contains { $0.uid == currentOutput }
 
         if deleteAllMiloDevices() > 0 {
             // A short delay to make sure the devices really are deleted.
             Thread.sleep(forTimeInterval: 0.5)
         }
 
-        progress(.update(L("progress.creating_device")))
-
-        let index = createMiloDevice()
+        let index = createMiloDevice(settings)
         guard index > 0 else {
-            NSLog("❌ Failed to create new device with updated settings")
+            NSLog("❌ Failed to create the Milō device")
             return false
         }
-        NSLog("✅ Created new device #%d with updated settings", index)
+        guard connect(deviceIndex: index, host: host) else { return false }
+        NSLog("✅ Milō device #%d sends to %@ (%@)", index, host, settings.toDeviceArguments().joined(separator: " "))
 
-        progress(.update(L("progress.reconfiguring_device")))
-
-        let success = configureDevice(deviceIndex: index)
-        NSLog(success ? "✅ Device reconfigured with new settings" : "❌ Failed to configure device endpoints")
-        return success
+        if miloWasTheOutput, let uid = deviceInfo().first(where: { $0.index == index })?.uid {
+            restoreOutput(uid: uid)
+        }
+        return true
     }
 
     // MARK: - roc-vad primitives
@@ -213,7 +177,7 @@ actor RocVADDevice {
         return existing.count
     }
 
-    private func createMiloDevice() -> Int {
+    private func createMiloDevice(_ settings: RocVADSettings) -> Int {
         var arguments = ["device", "add", "sender", "--name", deviceName]
         arguments.append(contentsOf: settings.toDeviceArguments())
 
@@ -223,12 +187,12 @@ actor RocVADDevice {
         return parseDeviceIndex(from: result.output)
     }
 
-    private func configureDevice(deviceIndex: Int) -> Bool {
+    private func connect(deviceIndex: Int, host: String) -> Bool {
         let result = Self.runRocVAD([
             "device", "connect", "\(deviceIndex)",
-            "--source", "rtp+rs8m://\(miloHost):\(sourcePort)",
-            "--repair", "rs8m://\(miloHost):\(repairPort)",
-            "--control", "rtcp://\(miloHost):\(controlPort)"
+            "--source", "rtp+rs8m://\(host):\(sourcePort)",
+            "--repair", "rs8m://\(host):\(repairPort)",
+            "--control", "rtcp://\(host):\(controlPort)"
         ])
 
         let success = result?.status == 0
@@ -236,15 +200,16 @@ actor RocVADDevice {
         return success
     }
 
-    /// Does the device already have its endpoints? We look for the characteristic ROC
-    /// ports, without assuming the host (the resolved IP may differ from `miloHost`).
-    private func isDeviceConfigured(deviceIndex: Int) -> Bool {
-        guard let result = Self.runRocVAD(["device", "show", "\(deviceIndex)"]) else { return false }
-
-        let output = result.output
-        return output.contains(":\(sourcePort)")
-            && output.contains(":\(repairPort)")
-            && output.contains(":\(controlPort)")
+    /// CoreAudio publishes a new device a moment after roc-vad creates it, hence the retries.
+    private func restoreOutput(uid: String) {
+        for _ in 0..<15 {
+            if SystemAudioOutput.setDefaultOutput(uid: uid) {
+                NSLog("🔊 Milō is the sound output again")
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        NSLog("⚠️ Could not make the new Milō device the sound output")
     }
 
     private func deviceInfo() -> [RocVADDeviceInfo] {
@@ -255,12 +220,17 @@ actor RocVADDevice {
 
 // MARK: - Manager
 
-/// The roc-vad driver's façade: the UI-side state (settings, progress panel) and the
-/// entry point to the driver layer.
+/// The roc-vad driver's façade on the main actor: what Milō asked for, and the progress panel
+/// of the one operation that shows one, the installation.
 ///
 /// roc-vad is a **state**, never a toll at startup: the app runs perfectly well without it
 /// — only the "Mac" source depends on it, and it simply shows up as disabled.
+///
+/// The device follows Milō: its host from the connection, its sender settings from Milō's
+/// `mac_roc`. Neither is edited here, and nothing is persisted — the device itself holds the
+/// last configuration, and Milō sends the current one on every connection.
 @MainActor
+@Observable
 final class RocVADManager {
 
     /// `nonisolated`: a plain constant, read from the driver layer (off the main actor) as
@@ -273,24 +243,18 @@ final class RocVADManager {
         FileManager.default.fileExists(atPath: binaryPath)
     }
 
-    /// A main-isolated copy of the settings, read by SettingsViewModel. The driver layer
-    /// keeps its own (it needs it to build the arguments, on its own queue).
-    private(set) var settings: RocVADSettings
+    /// The sender half Milō last sent, shown read-only in Settings. Nil until Milō answered.
+    private(set) var settings: RocVADSettings?
 
-    private let device: RocVADDevice
+    @ObservationIgnored private var host: String?
+    @ObservationIgnored private var driverReady = false
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private let device = RocVADDevice()
 
     // Progress panel (native NSAlert styling)
-    private var progressPanel: NSWindow?
-    private var progressLabel: NSTextField?
-    private var progressIndicator: NSProgressIndicator?
-
-    init() {
-        let settings = RocVADSettings.loadFromUserDefaults()
-        self.settings = settings
-        self.device = RocVADDevice(settings: settings)
-        NSLog("📦 RocVADManager initialized with settings: buffer=%dms, fec=%@, resampler=%@",
-              settings.deviceBuffer, settings.fecEncoding.rawValue, settings.resamplerProfile.rawValue)
-    }
+    @ObservationIgnored private var progressPanel: NSWindow?
+    @ObservationIgnored private var progressLabel: NSTextField?
+    @ObservationIgnored private var progressIndicator: NSProgressIndicator?
 
     // MARK: - Interface
 
@@ -298,17 +262,39 @@ final class RocVADManager {
         await device.isFunctional()
     }
 
-    /// Checks the device and only (re)creates it when needed. The progress panel only
-    /// appears if there is work to do.
-    @discardableResult
-    func configureDeviceOnly() async -> Bool {
-        await device.configureIfNeeded(progress: progressSink())
+    /// The driver answers: duplicates from an earlier run go, and the device is brought in
+    /// line with Milō as soon as both its host and its link are known.
+    func driverIsReady() async {
+        driverReady = true
+        await device.removeDuplicates()
+        reconcile()
     }
 
-    /// Repoints roc-vad at the resolved IP. Without waiting: the caller (the connection
-    /// manager) has nothing to do with the result.
-    nonisolated func updateMiloHost(_ newHost: String) {
-        Task { await device.updateHost(newHost) }
+    /// Where Milō answers, from the connection manager.
+    func updateMiloHost(_ newHost: String) {
+        host = newHost
+        reconcile()
+    }
+
+    /// The sender half of Milō's link, from `/bulk` at connect or `settings/mac_roc_changed`.
+    func applyFromMilo(_ newSettings: RocVADSettings) {
+        settings = newSettings
+        reconcile()
+    }
+
+    /// Hands the driver layer the link as it now stands. Not awaited: the host and the link
+    /// arrive separately, and the generation lets the actor drop a request overtaken by a
+    /// newer one rather than rebuild the device twice.
+    private func reconcile() {
+        guard driverReady, let host, let settings else { return }
+        generation += 1
+        let generation = generation
+        Task { [device] in
+            let applied = await device.ensure(host: host, settings: settings, generation: generation)
+            if !applied {
+                NSLog("⚠️ roc-vad: the Milō device could not be set as Milō asks")
+            }
+        }
     }
 
     func performInstallation() async -> Bool {
@@ -338,47 +324,11 @@ final class RocVADManager {
         return true
     }
 
-    /// Applies new settings and recreates the device.
-    func updateSettings(_ newSettings: RocVADSettings) async -> Bool {
-        NSLog("🔧 Updating ROC VAD settings...")
-
-        // Set the main-isolated copy BEFORE the work: that is what SettingsViewModel reads
-        // (`hasChanges`), and it has to reflect what is being applied from the moment Apply
-        // is clicked.
-        settings = newSettings
-        newSettings.saveToUserDefaults()
-        NSLog("💾 Settings saved: buffer=%dms, fec=%@, resampler=%@",
-              newSettings.deviceBuffer, newSettings.fecEncoding.rawValue, newSettings.resamplerProfile.rawValue)
-
-        showProgressPanel(message: L("progress.applying_settings"))
-        defer { hideProgressPanel() }
-
-        return await device.apply(newSettings, progress: progressSink())
-    }
-
     // MARK: - Progress panel
-
-    /// The driver layer posts its steps **without awaiting them**: an `await` towards the
-    /// main actor from the actor would suspend it, and reopen the interleaving its serial
-    /// queue forbids. That is exactly what the original `DispatchQueue.main.async` did.
-    private nonisolated func progressSink() -> @Sendable (RocVADProgress) -> Void {
-        { [weak self] step in
-            Task { @MainActor in self?.applyProgress(step) }
-        }
-    }
-
-    private func applyProgress(_ step: RocVADProgress) {
-        switch step {
-        case .show(let message):   showProgressPanel(message: message)
-        case .update(let message): updateProgressMessage(message)
-        case .hide:                hideProgressPanel()
-        }
-    }
 
     // A title-bar-less window, in the NSAlert material.
     private func showProgressPanel(message: String) {
-        // One operation can chain into another (updateSettings opens the panel, then the
-        // driver layer asks for .show): do not stack two windows.
+        // Never two windows for one installation.
         guard progressPanel == nil else {
             updateProgressMessage(message)
             return
@@ -475,6 +425,7 @@ final class RocVADManager {
 
 struct RocVADDeviceInfo: Sendable {
     let index: Int
+    let uid: String
     let name: String
 }
 
@@ -502,7 +453,7 @@ private func parseDeviceList(from output: String) -> [RocVADDeviceInfo] {
         if components.count >= 5,
            let index = Int(components[0]) {
             let name = components[4...].joined(separator: " ")
-            devices.append(RocVADDeviceInfo(index: index, name: name))
+            devices.append(RocVADDeviceInfo(index: index, uid: components[3], name: name))
         }
     }
 

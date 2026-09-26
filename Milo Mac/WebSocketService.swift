@@ -25,6 +25,8 @@ protocol WebSocketServiceDelegate: AnyObject {
     func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
     func didReceiveDockAppsUpdate(_ enabledApps: [String])
+    /// The sender half of Milō's ROC link changed (`settings/mac_roc_changed`).
+    func didReceiveMacSenderUpdate(_ settings: RocVADSettings)
 }
 
 /// WebSocket transport: the updates pushed by the backend.
@@ -202,6 +204,7 @@ final class WebSocketService: NSObject {
         case multiroomStructureChanged
         case volumeLimits(minDb: Double, maxDb: Double)
         case dockApps([String])
+        case macSender(RocVADSettings)
     }
 
     private nonisolated func parseMessage(_ text: String) {
@@ -216,8 +219,8 @@ final class WebSocketService: NSObject {
         // The backend broadcasts to ALL clients: milo-mac therefore also receives
         // plenty of events meant for the web frontend
         // (settings/fan_status_changed, settings/bt_remote_status_changed,
-        // settings/mac_roc_changed, routing/multiroom_ready, equalizer/levels,
-        // system/ping…) that it does not consume. We log and handle ONLY the
+        // routing/multiroom_ready, equalizer/levels, system/ping…) that it does not
+        // consume. We log and handle ONLY the
         // useful events — the rest is ignored silently, with no main-thread hop.
         let decoded: DecodedEvent?
         switch (category, eventType) {
@@ -236,6 +239,8 @@ final class WebSocketService: NSObject {
             decoded = Self.decodeVolumeLimits(eventData)
         case ("settings", "dock_apps_changed"):
             decoded = Self.decodeDockApps(eventData)
+        case ("settings", "mac_roc_changed"):
+            decoded = Self.decodeMacSender(eventData)
         default:
             return
         }
@@ -276,6 +281,9 @@ final class WebSocketService: NSObject {
 
         case .dockApps(let apps):
             delegate?.didReceiveDockAppsUpdate(apps)
+
+        case .macSender(let settings):
+            delegate?.didReceiveMacSenderUpdate(settings)
         }
     }
 
@@ -353,6 +361,15 @@ final class WebSocketService: NSObject {
               let enabledApps = config["enabled_apps"] as? [String] else { return nil }
 
         return .dockApps(enabledApps)
+    }
+
+    // settings/mac_roc_changed → data.config.{packet_length_ms,fec_block_source,
+    // fec_block_repair,packet_interleaving} (the same keys as /bulk's mac_roc)
+    private nonisolated static func decodeMacSender(_ data: [String: Any]) -> DecodedEvent? {
+        guard let config = data["config"] as? [String: Any],
+              let settings = RocVADSettings(miloLink: config) else { return nil }
+
+        return .macSender(settings)
     }
 
     // MARK: - Ping

@@ -152,7 +152,9 @@ final class StubMiloBackend: Sendable {
             let apps = Self.enabledApps.map { "\"\($0)\"" }.joined(separator: ",")
             return Self.http(json: """
                 {"volume_limits":{"min_db":\(Self.limitMinDb),"max_db":\(Self.limitMaxDb)},\
-                "dock_apps":{"enabled_apps":[\(apps)]}}
+                "dock_apps":{"enabled_apps":[\(apps)]},\
+                "mac_roc":{"target_latency_ms":30,"latency_profile":"gradual","frame_length_ms":4,\
+                "packet_length_ms":3,"fec_block_source":10,"fec_block_repair":5,"packet_interleaving":false}}
                 """)
 
         case "/api/audio/state":

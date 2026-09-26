@@ -66,16 +66,12 @@
 "settings.volume_hud_all_changes.description" = "每次音量变化时，包括 Milō Mac 外部的变化。";
 
 // Mac Audio section
-"settings.preset" = "预设";
-"settings.buffer" = "缓冲区";
-"settings.fec" = "纠错";
-"settings.quality" = "音质";
 "settings.packet_length" = "数据包长度";
 "settings.fec_source" = "FEC 源数据包";
 "settings.fec_repair" = "FEC 修复数据包";
 "settings.interleaving" = "数据包交织";
-"settings.reset" = "重置";
-"settings.apply" = "应用";
+"settings.rocvad.set_from_milo" = "在 Milō 的「macOS 接收器」设置中设定。";
+"settings.rocvad.waiting_for_milo" = "连接后由 Milō 发送。";
 
 // MARK: - Connection Status
 "status.disconnected" = "Milō 未开机";
@@ -88,8 +84,6 @@
 "progress.downloading" = "正在下载并安装依赖项 (roc-vad)…";
 "progress.verifying" = "正在验证安装…";
 "progress.installation_complete" = "安装成功完成";
-"progress.reconfiguring_device" = "正在重新配置 Milō 音频设备…";
-"progress.creating_device" = "正在创建 Milō 音频设备…";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "音量滑块";
@@ -98,20 +92,6 @@
 "accessibility.play" = "播放";
 "accessibility.pause" = "暂停";
 "accessibility.milo_icon" = "Milō";
-
-// MARK: - ROC VAD Settings (enum localization)
-"config.rocvad.fec.rs8m" = "标准 (RS8M)";
-"config.rocvad.fec.ldpc" = "高 (LDPC)";
-"config.rocvad.fec.disable" = "禁用";
-"config.rocvad.resampler.low" = "低";
-"config.rocvad.resampler.medium" = "中";
-"config.rocvad.resampler.high" = "高";
-"config.rocvad.preset.ultra_low" = "超低延迟";
-"config.rocvad.preset.low" = "低延迟";
-"config.rocvad.preset.balanced" = "均衡";
-"config.rocvad.preset.high_quality" = "高音质";
-"config.rocvad.preset.custom" = "自定义";
-"progress.applying_settings" = "正在应用音频设置…";
 
 // MARK: - Mac audio (roc-vad)
 "settings.rocvad.description" = "「macOS 接收器」音源将 Mac 的音频发送到 Milō，需要 roc-vad 音频驱动程序。";

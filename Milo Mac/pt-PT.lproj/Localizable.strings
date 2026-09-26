@@ -66,16 +66,12 @@
 "settings.volume_hud_all_changes.description" = "Em cada alteração, incluindo as efetuadas fora do Milō Mac.";
 
 // Mac Audio section
-"settings.preset" = "Preset";
-"settings.buffer" = "Buffer";
-"settings.fec" = "Correção de erros";
-"settings.quality" = "Qualidade";
 "settings.packet_length" = "Tamanho do pacote";
 "settings.fec_source" = "Pacotes fonte FEC";
 "settings.fec_repair" = "Pacotes reparação FEC";
 "settings.interleaving" = "Intercalação de pacotes";
-"settings.reset" = "Repor";
-"settings.apply" = "Aplicar";
+"settings.rocvad.set_from_milo" = "Definido no Milō, nas configurações «Receptor macOS».";
+"settings.rocvad.waiting_for_milo" = "Enviado pelo Milō assim que estiver ligado.";
 
 // MARK: - Connection Status
 "status.disconnected" = "O Milō não está ligado";
@@ -88,8 +84,6 @@
 "progress.downloading" = "A transferir e instalar as dependências (roc-vad)…";
 "progress.verifying" = "A verificar a instalação…";
 "progress.installation_complete" = "Instalação concluída com sucesso";
-"progress.reconfiguring_device" = "A reconfigurar o dispositivo de áudio Milō…";
-"progress.creating_device" = "A criar o dispositivo de áudio Milō…";
 
 // MARK: - Accessibility
 "accessibility.volume_slider" = "Controlo de volume";
@@ -98,20 +92,6 @@
 "accessibility.play" = "Reproduzir";
 "accessibility.pause" = "Pausa";
 "accessibility.milo_icon" = "Milō";
-
-// MARK: - ROC VAD Settings (enum localization)
-"config.rocvad.fec.rs8m" = "Padrão (RS8M)";
-"config.rocvad.fec.ldpc" = "Alta (LDPC)";
-"config.rocvad.fec.disable" = "Desativada";
-"config.rocvad.resampler.low" = "Baixa";
-"config.rocvad.resampler.medium" = "Média";
-"config.rocvad.resampler.high" = "Alta";
-"config.rocvad.preset.ultra_low" = "Latência ultrabaixa";
-"config.rocvad.preset.low" = "Latência baixa";
-"config.rocvad.preset.balanced" = "Equilibrado";
-"config.rocvad.preset.high_quality" = "Alta qualidade";
-"config.rocvad.preset.custom" = "Personalizado";
-"progress.applying_settings" = "A aplicar as definições de áudio…";
 
 // MARK: - Mac audio (roc-vad)
 "settings.rocvad.description" = "A fonte «Receptor macOS» envia o áudio do seu Mac para o Milō. Requer o controlador de áudio roc-vad.";
