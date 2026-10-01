@@ -521,6 +521,7 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
         store.hotkeyManager?.volumeHUD?.hide()
 
         store.isPanelOpen = true
+        store.isPanelOnScreen = true
         store.refreshPanelData()
 
         // The "now playing" row starts from the REAL state, with no animation: we have just
@@ -572,6 +573,8 @@ final class MenuBarShell: NSObject, NSWindowDelegate {
                 guard let self, self.isHiding else { return }
                 self.panel.orderOut(nil)
                 self.isHiding = false
+                // Only now, with the window gone: the content faded out as it was.
+                self.store.isPanelOnScreen = false
                 self.requestAccessibilityPermissionIfNeeded()
             }
         })

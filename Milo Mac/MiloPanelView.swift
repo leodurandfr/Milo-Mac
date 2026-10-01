@@ -75,9 +75,11 @@ struct MiloPanelView: View {
         // cuts the corners. Adding one here would double it up and hide the glass.
         // The window is merely hidden (orderOut), not destroyed: `onDisappear` does not fire.
         // We reset the view to its root by observing the close, otherwise the panel would
-        // reopen on the station list.
-        .onChange(of: store.isPanelOpen) { _, isOpen in
-            if !isOpen {
+        // reopen on the station list. On `isPanelOnScreen`, not `isPanelOpen`: the latter drops
+        // at the START of the fade-out, and resetting then showed the root fading out instead
+        // of the sub-level being closed.
+        .onChange(of: store.isPanelOnScreen) { _, isOnScreen in
+            if !isOnScreen {
                 // Back to the root WITHOUT a transition: the panel is no longer visible, and we
                 // do not want to reopen on a half-played animation. Same reason for the accordion.
                 store.resetPanelRoute()

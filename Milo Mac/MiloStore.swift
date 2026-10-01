@@ -151,6 +151,12 @@ final class MiloStore {
     /// volume HUD over the panel, and to pause the background poll.
     var isPanelOpen = false
 
+    /// True while the panel is on screen — unlike `isPanelOpen`, it stays true for the whole
+    /// fade-out and only drops once the window is ordered out. The view resets its navigation
+    /// on that edge: doing it on `isPanelOpen` swapped the sub-level being closed for the
+    /// root mid-fade, so the panel visibly went back to N-0 on its way out.
+    var isPanelOnScreen = false
+
     /// True when the panel was opened with the Option key held: the footer
     /// (Settings, Quit) only appears then. Set by MenuBarShell on opening.
     var showsPreferences = false
