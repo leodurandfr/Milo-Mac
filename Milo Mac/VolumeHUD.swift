@@ -28,10 +28,17 @@ private class ThinTextField: NSTextField {
 final class VolumeHUD {
     private var window: NSWindow?
     private var containerView: NSView?
+    private var trackView: NSView?
     private var fillView: NSView?
     private var volumeLabel: NSTextField?
+    /// The same text, over the volume label, in the fill's contrasting color — and masked to
+    /// the fill's shape by `fillLabelMask`, so it only shows where the fill is.
+    private var fillLabel: NSTextField?
+    private let fillLabelMask = CALayer()
+    private let labelX: CGFloat = 14
     private var hideTimer: Timer?
     private var clickMonitor: Any?
+    private var appearanceObservation: NSKeyValueObservation?
 
     private let windowWidth: CGFloat = 472
     private let windowHeight: CGFloat = 64
@@ -58,6 +65,11 @@ final class VolumeHUD {
         .foregroundColor: NSColor.secondaryLabelColor,
         .kern: -0.32
     ]
+    private lazy var fillLabelAttributes: [NSAttributedString.Key: Any] = {
+        var attributes = labelAttributes
+        attributes[.foregroundColor] = Self.fillLabelColor
+        return attributes
+    }()
     private var lastRenderedText = ""
 
     init() {
@@ -81,15 +93,11 @@ final class VolumeHUD {
 
         window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) + 1)
         window.backgroundColor = NSColor.clear
-        // The HUD's background (.hudWindow material + dark overlay) stays visually
-        // dark whatever the system mode. Without forcing the appearance, dynamic
-        // colors such as secondaryLabelColor resolve for a light background in light
-        // mode and render the "-XX dB" text nearly black on that dark background.
-        window.appearance = NSAppearance(named: .darkAqua)
         window.isOpaque = false
         window.hasShadow = false
         window.ignoresMouseEvents = false
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
+        Self.forceActiveAppearance(of: window)
 
         if let screen = NSScreen.main {
             let screenRect = screen.visibleFrame
@@ -148,31 +156,36 @@ final class VolumeHUD {
         containerView.layer?.shadowOpacity = 0.04
         containerView.layer?.shadowOffset = CGSize(width: 0, height: -4)
         containerView.layer?.shadowRadius = 32
+        // An explicit path, so Core Animation does not render the whole subtree (glass
+        // included) offscreen to derive the shadow from its alpha, frame after frame of the slide.
+        containerView.layer?.shadowPath = CGPath(
+            roundedRect: containerView.bounds,
+            cornerWidth: cornerRadius,
+            cornerHeight: cornerRadius,
+            transform: nil
+        )
 
         wrapperView.addSubview(containerView)
 
-        // Backdrop blur layer (fills container, clipped to rounded rect)
-        let blurView = NSVisualEffectView(frame: containerView.bounds)
-        blurView.autoresizingMask = [.width, .height]
-        blurView.material = .hudWindow
-        blurView.blendingMode = .behindWindow
-        blurView.state = .active
-        blurView.wantsLayer = true
-        blurView.layer?.cornerRadius = cornerRadius
-        blurView.layer?.masksToBounds = true
-        containerView.addSubview(blurView)
+        // The pill's background: macOS 26's glass, as for the panel (see `MenuBarShell.glassView`).
+        // It draws its own rim, so there is no hand-made border on top of it.
+        //
+        // ⚠️ Through CONSTRAINTS, and not by setting `glassView.frame`: NSGlassEffectView
+        // manages its own layout and overwrites the frame it is given.
+        let glassView = NSGlassEffectView()
+        glassView.cornerRadius = cornerRadius
+        containerView.addSubview(glassView)
+        glassView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            glassView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            glassView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            glassView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            glassView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+        ])
 
-        // Semi-transparent background overlay
-        let bgOverlay = NSView(frame: containerView.bounds)
-        bgOverlay.autoresizingMask = [.width, .height]
-        bgOverlay.wantsLayer = true
-        // #767676 at 0.24 opacity
-        bgOverlay.layer?.backgroundColor = NSColor(red: 0x76/255.0, green: 0x76/255.0, blue: 0x76/255.0, alpha: 0.24).cgColor
-        bgOverlay.layer?.cornerRadius = cornerRadius
-        containerView.addSubview(bgOverlay)
-
-        // Gradient border (top-to-bottom white fade)
-        setupGradientBorder(in: containerView)
+        // The glass hosts the slider in its contentView, which it sizes to its own bounds.
+        let glassContent = NSView(frame: containerView.bounds)
+        glassView.contentView = glassContent
 
         // Slider background
         let sliderContainer = NSView(frame: NSRect(
@@ -180,87 +193,145 @@ final class VolumeHUD {
             width: windowWidth - 32,
             height: sliderHeight
         ))
+        trackView = sliderContainer
         sliderContainer.wantsLayer = true
-        // #FFFFFF at 0.12 opacity
-        sliderContainer.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.12).cgColor
         sliderContainer.layer?.cornerRadius = sliderHeight / 2
+        // Clips the fill at low volume, when it is a circle sliding out to the left: it leaves
+        // through the track's rounded end instead of spilling over the glass.
+        sliderContainer.layer?.masksToBounds = true
 
-        containerView.addSubview(sliderContainer)
+        // A heavier blur under the track than the glass gives on its own. `.menu` adapts to
+        // light and dark, like the rest of the HUD; `.active` because the window is never key,
+        // and the default state would render it inactive (unblurred, flat).
+        let trackBlurView = NSVisualEffectView(frame: sliderContainer.frame)
+        trackBlurView.material = .menu
+        trackBlurView.blendingMode = .behindWindow
+        trackBlurView.state = .active
+        trackBlurView.wantsLayer = true
+        trackBlurView.layer?.cornerRadius = sliderHeight / 2
+        trackBlurView.layer?.masksToBounds = true
+        glassContent.addSubview(trackBlurView)
+
+        glassContent.addSubview(sliderContainer)
+
+        // Volume label, in Space Mono. BELOW the fill: the opaque fill hides it, and a copy in
+        // the contrasting color sits above the fill, so the text switches color exactly at the
+        // fill's edge.
+        let thinLabel = ThinTextField(labelWithString: "-60 dB")
+        volumeLabel = thinLabel
+        guard let volumeLabel = volumeLabel else { return }
+        configureLabel(volumeLabel, attributes: labelAttributes)
+        sliderContainer.addSubview(volumeLabel)
 
         // Simple fill view
         fillView = NSView(frame: NSRect(x: 0, y: 0, width: 0, height: sliderHeight))
         guard let fillView = fillView else { return }
 
         fillView.wantsLayer = true
-        fillView.layer?.backgroundColor = NSColor(red: 0.09, green: 0.098, blue: 0.09, alpha: 1.0).cgColor
         fillView.layer?.cornerRadius = sliderHeight / 2
 
         sliderContainer.addSubview(fillView)
 
-        // Volume label, in Space Mono
-        let thinLabel = ThinTextField(labelWithString: "-60 dB")
-        volumeLabel = thinLabel
-        guard let volumeLabel = volumeLabel else { return }
+        // ⚠️ A MASK, not a clipping parent. Nested inside the fill (masksToBounds), the copy was
+        // only drawn for the part of it the fill showed at the time: as the fill grew, the rest
+        // never got drawn ("-71" with no " dB"). A mask leaves AppKit drawing the whole label.
+        let thinFillLabel = ThinTextField(labelWithString: "-60 dB")
+        fillLabel = thinFillLabel
+        configureLabel(thinFillLabel, attributes: fillLabelAttributes)
+        // Decorative: VoiceOver reads the volume once, from the volume label.
+        thinFillLabel.setAccessibilityElement(false)
+        sliderContainer.addSubview(thinFillLabel)
+        thinFillLabel.wantsLayer = true
+        fillLabelMask.backgroundColor = NSColor.black.cgColor
+        fillLabelMask.cornerRadius = sliderHeight / 2
+        fillLabelMask.frame = fillMaskFrame(for: fillView.frame, in: thinFillLabel)
+        thinFillLabel.layer?.mask = fillLabelMask
 
-        volumeLabel.font = labelFont
-        volumeLabel.attributedStringValue = NSAttributedString(string: "-60 dB", attributes: labelAttributes)
-
-        volumeLabel.textColor = NSColor.secondaryLabelColor
-        volumeLabel.frame = NSRect(x: 14, y: (sliderHeight - 16) / 2, width: 80, height: 20.5)
-        volumeLabel.alignment = .left
-        volumeLabel.backgroundColor = NSColor.clear
-        volumeLabel.isBordered = false
-
-        sliderContainer.addSubview(volumeLabel)
-
+        applyColors()
+        // Appearance changes arrive on the main thread; the handler is typed @Sendable.
+        appearanceObservation = window.observe(\.effectiveAppearance) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.applyColors() }
+        }
         window.alphaValue = 0
     }
 
-    private func setupGradientBorder(in container: NSView) {
-        let borderWidth: CGFloat = 1.0
-        let bounds = container.bounds
+    /// The fill's frame (track coordinates) expressed in the fill label's own coordinates —
+    /// where its mask has to sit.
+    private func fillMaskFrame(for fillFrame: NSRect, in label: NSView) -> CGRect {
+        fillFrame.offsetBy(dx: -label.frame.minX, dy: -label.frame.minY)
+    }
 
-        // Dedicated overlay view so the border renders ABOVE blur + background
-        let borderView = NSView(frame: bounds)
-        borderView.autoresizingMask = [.width, .height]
-        borderView.wantsLayer = true
-        borderView.layer?.masksToBounds = false
-        container.addSubview(borderView)
+    /// The two volume labels share everything but their color, and sit at the same place.
+    private func configureLabel(_ label: NSTextField, attributes: [NSAttributedString.Key: Any]) {
+        label.font = labelFont
+        label.attributedStringValue = NSAttributedString(string: "-60 dB", attributes: attributes)
+        label.frame = NSRect(x: labelX, y: (sliderHeight - 16) / 2, width: 80, height: 20.5)
+        label.alignment = .left
+        label.backgroundColor = NSColor.clear
+        label.isBordered = false
+    }
 
-        let gradientLayer = CAGradientLayer()
-        gradientLayer.frame = bounds
-        // Conic (angular) gradient for glass effect that shines on the rounded sides
-        // Starts at 12 o'clock (top), goes clockwise:
-        // 0.0=top, 0.25=right curve, 0.5=bottom, 0.75=left curve, 1.0=top
-        gradientLayer.type = .conic
-        gradientLayer.colors = [
-            NSColor(white: 1.0, alpha: 0.12).cgColor,  // top — medium
-            NSColor(white: 1.0, alpha: 0.18).cgColor,  // top-right transition
-            NSColor(white: 1.0, alpha: 0.28).cgColor,  // right curve — bright shine
-            NSColor(white: 1.0, alpha: 0.12).cgColor,  // bottom-right transition
-            NSColor(white: 1.0, alpha: 0.05).cgColor,  // bottom — dim
-            NSColor(white: 1.0, alpha: 0.12).cgColor,  // bottom-left transition
-            NSColor(white: 1.0, alpha: 0.28).cgColor,  // left curve — bright shine
-            NSColor(white: 1.0, alpha: 0.18).cgColor,  // top-left transition
-            NSColor(white: 1.0, alpha: 0.12).cgColor,  // top — close loop
-        ]
-        gradientLayer.locations = [0.0, 0.12, 0.25, 0.38, 0.5, 0.62, 0.75, 0.88, 1.0]
-        gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5) // center of the pill
+    // MARK: - Colors
 
-        // Mask to ring shape (rounded rect border only)
-        let maskLayer = CAShapeLayer()
-        let outerPath = CGPath(roundedRect: bounds, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-        let innerRect = bounds.insetBy(dx: borderWidth, dy: borderWidth)
-        let innerPath = CGPath(roundedRect: innerRect, cornerWidth: cornerRadius - borderWidth, cornerHeight: cornerRadius - borderWidth, transform: nil)
+    // The HUD follows the system appearance, like the panel. The fill contrasts with the glass —
+    // white in dark mode, black in light mode — and the track is a veil of that same polarity.
+    // The label over the track is secondaryLabelColor; its copy inside the fill takes the
+    // opposite appearance's secondaryLabelColor (black at 50% / white at 55%).
+    private static let trackColor = NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return dark ? NSColor(white: 1, alpha: 0.18) : NSColor(white: 0, alpha: 0.10)
+    }
+    private static let fillColor = NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return dark ? .white : .black
+    }
+    private static let fillLabelColor = NSColor(name: nil) { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return dark ? NSColor(white: 0, alpha: 0.5) : NSColor(white: 1, alpha: 0.55)
+    }
 
-        let combinedPath = CGMutablePath()
-        combinedPath.addPath(outerPath)
-        combinedPath.addPath(innerPath)
-        maskLayer.path = combinedPath
-        maskLayer.fillRule = .evenOdd
+    /// Resolves the dynamic colors into the layers. A CGColor is frozen at assignment and does
+    /// not follow appearance changes: this runs at setup and on every change of the window's
+    /// effective appearance (`appearanceObservation`) — including while the HUD is on screen,
+    /// where the labels' dynamic NSColors would otherwise switch without the fill.
+    private func applyColors() {
+        guard let window else { return }
+        window.effectiveAppearance.performAsCurrentDrawingAppearance {
+            trackView?.layer?.backgroundColor = Self.trackColor.cgColor
+            fillView?.layer?.backgroundColor = Self.fillColor.cgColor
+        }
+    }
 
-        gradientLayer.mask = maskLayer
-        borderView.layer?.addSublayer(gradientLayer)
+    // MARK: - Active glass
+
+    /// Gives the window the active ("main") appearance without making it key or main.
+    ///
+    /// The glass renders in its inactive state — dull, flat, barely see-through — in a window
+    /// that is not active: the reason the panel forces `makeKey()` (`MenuBarShell.showPanel`).
+    /// The HUD cannot do the same: a key HUD takes the keystrokes away from the frontmost app.
+    /// Nothing public says "look active" to `NSGlassEffectView` (it has no `state`, unlike
+    /// `NSVisualEffectView`), so this goes through AppKit's private `_setForceMainAppearance:`.
+    ///
+    /// Tried and ruled out by eye, against the system's own volume bubble: `.clear` glass, and
+    /// overriding `isKeyWindow`/`isMainWindow` — the glass ignores both. Overriding the private
+    /// `hasKeyAppearance` family works too, but takes six overrides where this takes one call.
+    ///
+    /// Called once, at setup: the flag is the window's own and survives `orderOut` (checked on
+    /// macOS 27 through the private `_forceMainAppearance` getter).
+    ///
+    /// Guarded on the method's existence AND its signature (`v20@0:8B16` — a single BOOL):
+    /// should a future macOS drop it or change its argument, the HUD falls back to the inactive
+    /// glass instead of calling it with the wrong ABI.
+    private static func forceActiveAppearance(of window: NSWindow) {
+        let selector = NSSelectorFromString("_setForceMainAppearance:")
+        guard let method = class_getInstanceMethod(type(of: window), selector),
+              method_getNumberOfArguments(method) == 3,
+              let argumentType = method_copyArgumentType(method, 2) else { return }
+        let takesBool = String(cString: argumentType) == "B"
+        free(argumentType)
+        guard takesBool else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(method_getImplementation(method), to: Setter.self)(window, selector, true)
     }
 
     // Volume limits in dB (can be updated)
@@ -321,13 +392,15 @@ final class VolumeHUD {
 
     private func updateVolume(_ volumeDb: Double, animated: Bool = true) {
         guard let fillView = fillView,
-              let volumeLabel = volumeLabel else { return }
+              let volumeLabel = volumeLabel,
+              let fillLabel = fillLabel else { return }
 
         // --- Text update (only when the rounded dB value changes) ---
         let volumeText = "\(Int(round(volumeDb))) dB"
         if volumeText != lastRenderedText {
             lastRenderedText = volumeText
             volumeLabel.attributedStringValue = NSAttributedString(string: volumeText, attributes: labelAttributes)
+            fillLabel.attributedStringValue = NSAttributedString(string: volumeText, attributes: fillLabelAttributes)
         }
 
         // --- Width/position computed from the dB limits ---
@@ -354,16 +427,53 @@ final class VolumeHUD {
         }
 
         let targetFrame = NSRect(x: fillX, y: 0, width: fillWidth, height: sliderHeight)
+        let maskFrame = fillMaskFrame(for: targetFrame, in: fillLabel)
+        guard let fillLayer = fillView.layer else { return }
 
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.2
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                fillView.animator().frame = targetFrame
+        // The fill and the fill label's mask must move as one, or the label's color edge drifts
+        // off the fill's edge. Both are therefore animated the same way: from where they are ON
+        // SCREEN right now (the presentation), to their new model frame. That matters while the
+        // shortcut is held: each ~33 Hz tick interrupts the previous 0.2 s animation, and an
+        // implicit action would restart from the previous TARGET instead.
+        let fillFrom = Self.onScreenGeometry(of: fillLayer)
+        let maskFrom = Self.onScreenGeometry(of: fillLabelMask)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillView.frame = targetFrame
+        fillLabelMask.frame = maskFrame
+        CATransaction.commit()
+
+        for (layer, from) in [(fillLayer, fillFrom), (fillLabelMask, maskFrom)] {
+            if animated {
+                Self.slide(layer, from: from)
+            } else {
+                layer.removeAnimation(forKey: "bounds")
+                layer.removeAnimation(forKey: "position")
             }
-        } else {
-            // Direct update during rapid hotkey changes to avoid animation overlap glitches
-            fillView.frame = targetFrame
+        }
+    }
+
+    private static let fillTimingFunction = CAMediaTimingFunction(name: .easeOut)
+
+    private static func onScreenGeometry(of layer: CALayer) -> (bounds: CGRect, position: CGPoint) {
+        let shown = layer.presentation() ?? layer
+        return (shown.bounds, shown.position)
+    }
+
+    /// Animates `layer` from `from` to its current model geometry (`toValue` left nil), in 0.2 s.
+    /// Re-adding under the same keys replaces an animation still in flight.
+    private static func slide(_ layer: CALayer, from: (bounds: CGRect, position: CGPoint)) {
+        let animations: [(String, NSValue)] = [
+            ("bounds", NSValue(rect: from.bounds)),
+            ("position", NSValue(point: from.position)),
+        ]
+        for (keyPath, fromValue) in animations {
+            let animation = CABasicAnimation(keyPath: keyPath)
+            animation.fromValue = fromValue
+            animation.duration = 0.2
+            animation.timingFunction = fillTimingFunction
+            layer.add(animation, forKey: keyPath)
         }
     }
 

@@ -74,6 +74,8 @@ An `NSStatusItem` that opens a borderless `NSPanel`, whose content view is an `N
 
 The price of a window is that click-outside-to-dismiss must be re-implemented by hand (a global `NSEvent` monitor), and the panel must be able to become key — otherwise the glass renders in its "inactive", visibly lighter state.
 
+The volume HUD (`VolumeHUD`) is the same glass, but it must **never** become key: it would take the keystrokes away from the frontmost app. It gets the active glass through AppKit's private `_setForceMainAppearance:` instead — the app's one private call, guarded by `responds(to:)` so a macOS that drops it only costs the inactive look. Ruled out by eye against the system's volume bubble: `.clear` glass, and overriding `isKeyWindow`/`isMainWindow` (the glass ignores both).
+
 ### Panel height animations are timer-driven, never `withAnimation`
 
 Anything that changes the panel's height — the multiroom accordion, the root ↔ radio-stations morph — is animated by a **120 Hz `Timer` in `MenuBarShell`** that writes a concrete fraction into `MiloStore` (`multiroomRevealFraction`, `routeMorphFraction`, both already eased so the view can interpolate them directly). The view turns that fraction into a real height, so at every step `NSHostingController` sees a size it can hand to the window.
