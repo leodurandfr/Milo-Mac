@@ -612,7 +612,8 @@ final class MiloStore {
                 try await apiService.playRadioStation(stationId)
             } catch {
                 NSLog("❌ Error playing radio: %@", error.localizedDescription)
-                endRadioStationLoading()
+                // Only this station's spinner: another one clicked since owns it now.
+                if radioStationLoadingId == stationId { endRadioStationLoading() }
             }
         }
     }
