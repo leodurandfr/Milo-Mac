@@ -200,3 +200,7 @@ There is no CI. After any change to the panel, state handling, or concurrency, a
 4. Open the Radio station list, play a station, come back.
 5. Option-click the menu-bar icon — the footer (Settings, Quit) appears.
 6. Right-Option + ↑/↓ — the volume HUD appears and tracks. **This is the one path that exercises the CGEvent tap**, and it needs Accessibility permission granted to the built binary.
+
+## Git
+
+**Commit messages are always in English** — subject and body, whatever language the conversation is in (`fix(panel): close a sub-level without going back through the root`). The French history already written stays as it is; it is not rewritten.
