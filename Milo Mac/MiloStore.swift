@@ -602,16 +602,14 @@ final class MiloStore {
         NSLog("📻 playRadioStation: %@", stationId)
 
         beginRadioStationLoading(stationId: stationId)
-        // Read the state on the main thread (where it is owned) rather than in the
-        // Task: the relevant value is the one the user saw at click time.
-        let needsSourceSwitch = state?.source != "radio"
 
+        // No source switch here: the station list only shows while Radio is the settled
+        // source (`canShowRadioStations`), and the backend refuses a play on a source that
+        // isn't started (400 "radio is not started"). If the source changed between the
+        // list showing and the click, that 400 is expected — the catch clears the spinner.
         Task {
             do {
                 try await apiService.playRadioStation(stationId)
-                if needsSourceSwitch {
-                    try await apiService.changeSource("radio")
-                }
             } catch {
                 NSLog("❌ Error playing radio: %@", error.localizedDescription)
                 endRadioStationLoading()
