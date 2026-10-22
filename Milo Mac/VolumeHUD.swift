@@ -48,6 +48,13 @@ final class VolumeHUD {
     private let slideOffset: CGFloat = 64
     // Extra space below resting position for spring overshoot (peak ~1.148 → 12px below rest)
     private let overshootMargin: CGFloat = 16
+    // Transparent space left and right of the pill. The glass paints its rim a hair past its
+    // own bounds: with the pill flush against the window's edges, the window clipped a pixel
+    // off each side. Wide enough for the shadow's blur too (`shadowRadius`), as the panel does
+    // with `PanelMetrics.shadowMargin`.
+    private let sideMargin: CGFloat = 32
+    private var totalWidth: CGFloat { windowWidth + 2 * sideMargin }
+    private var totalHeight: CGFloat { windowHeight + slideOffset + overshootMargin }
     private(set) var isVisible = false
     private var isHiding = false
     private var animationTimer: Timer?
@@ -80,10 +87,8 @@ final class VolumeHUD {
     private func setupWindow() {
         // Window is tall enough to contain resting position, slide range above,
         // and overshoot margin below (spring bounces past resting position).
-        let totalHeight = windowHeight + slideOffset + overshootMargin
-
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: windowWidth, height: totalHeight),
+            contentRect: NSRect(x: 0, y: 0, width: totalWidth, height: totalHeight),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -100,15 +105,7 @@ final class VolumeHUD {
         Self.forceActiveAppearance(of: window)
 
         if let screen = NSScreen.main {
-            let screenRect = screen.visibleFrame
-            // Window extends overshootMargin below HUD resting position and slideOffset above
-            let windowRect = NSRect(
-                x: screenRect.midX - windowWidth / 2,
-                y: screenRect.maxY - windowHeight - 20 - overshootMargin,
-                width: windowWidth,
-                height: totalHeight
-            )
-            window.setFrame(windowRect, display: false)
+            window.setFrame(windowFrame(on: screen), display: false)
         }
 
         window.alphaValue = 0
@@ -124,8 +121,11 @@ final class VolumeHUD {
                 // Block clicks while the HUD is hiding (fade-out animation)
                 guard !self.isHiding else { return false }
                 // Only respond to clicks in the visible HUD area
-                let y = event.locationInWindow.y
-                guard y >= self.overshootMargin, y <= self.overshootMargin + self.windowHeight else {
+                let location = event.locationInWindow
+                guard location.y >= self.overshootMargin,
+                      location.y <= self.overshootMargin + self.windowHeight,
+                      location.x >= self.sideMargin,
+                      location.x <= self.sideMargin + self.windowWidth else {
                     return false
                 }
                 self.hide()
@@ -137,16 +137,15 @@ final class VolumeHUD {
 
     private func setupViews() {
         guard let window = window else { return }
-        let totalHeight = windowHeight + slideOffset + overshootMargin
 
         // Transparent wrapper fills the window; containerView animates within it
-        let wrapperView = NSView(frame: NSRect(x: 0, y: 0, width: windowWidth, height: totalHeight))
+        let wrapperView = NSView(frame: NSRect(x: 0, y: 0, width: totalWidth, height: totalHeight))
         wrapperView.wantsLayer = true
         window.contentView = wrapperView
 
         // ContainerView rests at overshootMargin from bottom (leaving room for spring bounce below)
         // Container view (opaque wrapper for clipping + shadow)
-        containerView = NSView(frame: NSRect(x: 0, y: overshootMargin, width: windowWidth, height: windowHeight))
+        containerView = NSView(frame: NSRect(x: sideMargin, y: overshootMargin, width: windowWidth, height: windowHeight))
         guard let containerView = containerView else { return }
         containerView.wantsLayer = true
         containerView.layer?.cornerRadius = cornerRadius
@@ -253,6 +252,19 @@ final class VolumeHUD {
             MainActor.assumeIsolated { self?.applyColors() }
         }
         window.alphaValue = 0
+    }
+
+    /// The window's frame on `screen`: the pill centered horizontally, 20 pt below the menu bar.
+    /// The window extends `sideMargin` on each side of the pill, `overshootMargin` below its
+    /// resting position and `slideOffset` above.
+    private func windowFrame(on screen: NSScreen) -> NSRect {
+        let screenRect = screen.visibleFrame
+        return NSRect(
+            x: screenRect.midX - totalWidth / 2,
+            y: screenRect.maxY - windowHeight - 20 - overshootMargin,
+            width: totalWidth,
+            height: totalHeight
+        )
     }
 
     /// The fill's frame (track coordinates) expressed in the fill label's own coordinates —
@@ -362,15 +374,7 @@ final class VolumeHUD {
 
         // Reposition window for current screen
         if let screen = NSScreen.main {
-            let screenRect = screen.visibleFrame
-            let totalHeight = windowHeight + slideOffset + overshootMargin
-            let windowRect = NSRect(
-                x: screenRect.midX - windowWidth / 2,
-                y: screenRect.maxY - windowHeight - 20 - overshootMargin,
-                width: windowWidth,
-                height: totalHeight
-            )
-            window.setFrame(windowRect, display: false)
+            window.setFrame(windowFrame(on: screen), display: false)
         }
 
         // Start with container translated up (off-screen)
