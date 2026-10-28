@@ -4,9 +4,9 @@ Thanks for wanting to help.
 
 ## Before your first pull request
 
-All contributions require agreeing to the [Contributor License Agreement](CLA.md). It is
-a one-time step — a bot comments on your first pull request with a link, and signing
-takes a few seconds. It then covers every contribution you make afterwards.
+All contributions require agreeing to the [Contributor License Agreement](CLA.md).
+Opening a pull request means you accept it — there is nothing to sign and nothing to
+install. It covers every contribution you make afterwards.
 
 The project is under the [MIT License](LICENSE). The CLA adds what MIT leaves unsaid: it
 confirms you have the right to contribute your code, and grants a patent licence for it.

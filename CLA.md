@@ -81,8 +81,7 @@ would make the representations above inaccurate.
 
 ---
 
-## How to sign
+## How to accept
 
-You do not need to sign anything in advance. When you open your first pull request, a
-bot will comment with a link. Signing takes a few seconds and applies to all your future
-contributions to this project.
+There is nothing to sign and nothing to install. Opening a pull request means you
+accept these terms, for that contribution and every one you make afterwards.
