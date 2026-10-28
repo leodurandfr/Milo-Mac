@@ -1,68 +1,74 @@
-<picture>
-<img style="pointer-events:none"  alt="cover-milo_mac-github@2x" src="https://github.com/user-attachments/assets/b5907f49-818a-477f-8ba9-c96e4430c571" />
-</picture>
-
-
+<p align="center">
+  <img src="docs/images/cover.webp" alt="Milō Mac: the Milō panel open from the macOS menu bar, with the track playing, the volume, the sources and the Multiroom and Equalizer switches" width="100%">
+</p>
 
 # Milō Mac
 
-Control Milō from your Mac, as if it had always been there.
+Control Milō from your Mac's menu bar.
 
-Milō Mac is a menu-bar companion for [Milō](https://github.com/leodurandfr/Milo), the
-Raspberry Pi audio appliance. It finds your Milō on the local network and gives you its
-sources, its volume and its multiroom zones from a native macOS panel — no browser, no
-window to keep open. It can also stream your Mac's own audio to it.
+Milō Mac is the macOS companion for [Milō](https://github.com/leodurandfr/Milo), the
+Raspberry Pi music system. It finds your Milō on the network and puts its sources, the track
+playing, its volume and its rooms in a native panel in the menu bar, with no browser and no
+window to keep open. It can also send your Mac's own sound to Milō.
 
 ## Requirements
 
-- macOS 26 (Tahoe) or later. The panel is built on macOS 26 API and does not run on
-  earlier versions.
-- A Milō device reachable on the same network as your Mac.
+- macOS 26 (Tahoe) or later.
+- A Milō on the same network as your Mac.
 
 ## Install
 
-Download the latest `.dmg` from the [releases page](https://github.com/leodurandfr/Milo-Mac/releases),
-open it, and drag `Milō.app` into your **Applications** folder. The app is signed and
-notarized by Apple, so it opens without a warning.
+Download the latest `.dmg` from [Releases](https://github.com/leodurandfr/Milo-Mac/releases),
+open it and drag **Milō** into **Applications**. The app is signed and notarized by Apple, so
+it opens without a warning.
 
-Milō Mac finds your device by itself over Bonjour — there is nothing to configure.
+Milō Mac finds your Milō by itself over Bonjour: there is nothing to set up.
 
-## Using it
+## The panel
 
-- **Click** the menu-bar icon to open the panel: sources, the track playing, volume, and
-  multiroom if it is enabled on your Milō.
-- **Option + Click** the icon to reveal Settings and Quit.
-- **Right-Option + ↑ / ↓** changes the volume from anywhere, with an on-screen HUD. The
-  step is configurable in Settings, and macOS will ask for Accessibility permission the
-  first time.
-- Sources are read from your Milō: whatever you enable and reorder on the device is what
-  the panel shows.
+Click the Milō icon in the menu bar:
 
-The interface is available in English, French, German, Spanish, Italian, Portuguese,
-Hindi and Simplified Chinese.
+- **Now playing**: the track, its cover, and the buttons the current source accepts.
+- **Volume**, with a slider.
+- **Sources**: the ones enabled on your Milō, in the same order. Click one to switch to it.
+  Internet radio opens your favorite stations, and the music library opens a search of your
+  artists, albums and tracks.
+- **Multiroom** and **Equalizer**, each turned on or off in one click. With multiroom on, the
+  arrow beside it shows every room with its own volume.
 
-## Sending your Mac's audio to Milō
+**Option-click** the icon for Settings and Quit.
 
-The **Mac** source plays your Mac's audio through Milō. It needs
-[roc-vad](https://github.com/roc-streaming/roc-vad), a virtual audio driver, which
-Settings can install for you. The driver only becomes active after a restart.
+The interface is available in English, French, German, Spanish, Italian, Portuguese, Hindi and
+Simplified Chinese.
 
-This is entirely optional. Without it, everything else works as usual and the Mac source
-simply shows as unavailable.
+## Volume from the keyboard
+
+**Right Option + ↑ / ↓** changes Milō's volume from any app, with an on-screen indicator like
+the Mac's own. macOS asks for the Accessibility permission the first time.
+
+Settings holds the volume step, launch at login, and whether the indicator also shows for
+changes made elsewhere, on Milō's screen or from a phone.
+
+## Your Mac's sound on Milō
+
+The **macOS receiver** source plays your Mac's sound through Milō, with low latency. It needs
+[roc-vad](https://github.com/roc-streaming/roc-vad), a virtual audio driver that Settings
+installs for you. Restart the Mac once afterward, then choose **Milō** as the sound output.
+The link itself is tuned on Milō, in the macOS receiver settings, and Milō Mac applies it.
+
+This is optional. Without the driver everything else works, and the source shows
+*Driver required*.
 
 ## Building from source
 
-Open `Milo Mac.xcodeproj` in Xcode 26 or later and build the `Milo Mac` scheme. The
-deployment target is macOS 26.0, and the project builds warning-free at Swift 6 language
-mode.
+Open `Milo Mac.xcodeproj` in Xcode 26 or later and build the `Milo Mac` scheme. The deployment
+target is macOS 26.0, and the project builds without warnings in the Swift 6 language mode.
 
 ## Uninstalling
 
-Run [`uninstall.sh`](uninstall.sh) to remove the app along with its preferences, its
-login item and, if you installed it, the roc-vad driver.
+Run [`uninstall.sh`](uninstall.sh) to remove the app along with its preferences, its login
+item and, if you installed it, the roc-vad driver.
 
 ## License
 
-[GPL-3.0](LICENSE)
-
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+[GPL-3.0](LICENSE). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
