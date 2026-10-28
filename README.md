@@ -31,8 +31,8 @@ Click the Milō icon in the menu bar:
 - **Now playing**: the track, its cover, and the buttons the current source accepts.
 - **Volume**, with a slider.
 - **Sources**: the ones enabled on your Milō, in the same order. Click one to switch to it.
-  Internet radio opens your favorite stations, and the music library opens a search of your
-  artists, albums and tracks.
+  With Internet Radio as the current source, the arrow beside it opens your favorite stations;
+  with Music Library, its arrow opens a search of your artists, albums and tracks.
 - **Multiroom** and **Equalizer**, each turned on or off in one click. With multiroom on, the
   arrow beside it shows every room with its own volume.
 
@@ -66,8 +66,9 @@ target is macOS 26.0, and the project builds without warnings in the Swift 6 lan
 
 ## Uninstalling
 
-Run [`uninstall.sh`](uninstall.sh) to remove the app along with its preferences, its login
-item and, if you installed it, the roc-vad driver.
+Run [`uninstall.sh`](uninstall.sh) to remove the app, its preferences and, if you installed
+it, the roc-vad driver, then restart the Mac. If Milō still shows in System Settings > General >
+Login Items, remove it there: that entry is held by macOS, and only the app could withdraw it.
 
 ## License
 
