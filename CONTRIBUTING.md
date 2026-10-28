@@ -8,9 +8,9 @@ All contributions require agreeing to the [Contributor License Agreement](CLA.md
 a one-time step — a bot comments on your first pull request with a link, and signing
 takes a few seconds. It then covers every contribution you make afterwards.
 
-The CLA exists so Milō can be offered under more than one licence in the future (for
-example, a commercial licence to a hardware manufacturer) while the project itself stays
-GPL-3.0 for everyone. You keep full ownership of what you write.
+The project is under the [MIT License](LICENSE). The CLA adds what MIT leaves unsaid: it
+confirms you have the right to contribute your code, and grants a patent licence for it.
+You keep full ownership of what you write.
 
 ## Pull requests
 

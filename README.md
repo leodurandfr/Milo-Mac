@@ -71,4 +71,4 @@ item and, if you installed it, the roc-vad driver.
 
 ## License
 
-[GPL-3.0](LICENSE). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
+[MIT](LICENSE). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
