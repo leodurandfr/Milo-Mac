@@ -43,6 +43,10 @@ actor RocVADDevice {
     /// stands, and would rebuild the device a second time for nothing.
     private var handledGeneration = 0
 
+    /// A rebuild took the sound output away from the Milō device and has not given it back
+    /// yet — a failed rebuild leaves it set, so the retry that succeeds restores it.
+    private var outputOwedToMilo = false
+
     // MARK: - roc-vad subprocess
 
     /// Runs roc-vad and waits for it to finish, at most `callTimeout`. Synchronous and
@@ -164,8 +168,12 @@ actor RocVADDevice {
             }
         }
 
+        // Remembered before the delete and kept past a failure: once the old device is gone,
+        // the output has already fallen back to the speakers, and only this says it was Milō's.
         let currentOutput = SystemAudioOutput.defaultOutputUID()
-        let miloWasTheOutput = existing.contains { $0.uid == currentOutput }
+        if existing.contains(where: { $0.uid == currentOutput }) {
+            outputOwedToMilo = true
+        }
 
         // A device that could not be deleted would sit next to the new one.
         guard let deleted = delete(existing) else {
@@ -185,10 +193,17 @@ actor RocVADDevice {
         guard connect(deviceIndex: index, host: host) else { return false }
         NSLog("✅ Milō device #%d sends to %@ (%@)", index, host, settings.toDeviceArguments().joined(separator: " "))
 
-        if miloWasTheOutput, let uid = deviceInfo()?.first(where: { $0.index == index })?.uid {
+        if outputOwedToMilo, let uid = deviceInfo()?.first(where: { $0.index == index })?.uid {
             restoreOutput(uid: uid)
         }
+        outputOwedToMilo = false
         return true
+    }
+
+    /// The retries are over: the output stays where it is. Restored on some later rebuild, it
+    /// would override whatever the user has picked since.
+    func forgetOwedOutput() {
+        outputOwedToMilo = false
     }
 
     // MARK: - roc-vad primitives
@@ -286,6 +301,9 @@ final class RocVADManager {
     /// would rebuild the device once, and the fresh link a moment later a second time.
     @ObservationIgnored private var linkConfirmed = false
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var retries = 0
+    private static let maxRetries = 3
+    private static let retryDelay: Duration = .seconds(5)
     @ObservationIgnored private let device = RocVADDevice()
 
     // Progress panel (native NSAlert styling)
@@ -329,15 +347,35 @@ final class RocVADManager {
     /// Hands the driver layer the link as it now stands. Not awaited: the host and the link
     /// arrive separately, and the generation lets the actor drop a request overtaken by a
     /// newer one rather than rebuild the device twice.
-    private func reconcile() {
+    private func reconcile(isRetry: Bool = false) {
         guard driverReady, linkConfirmed, let host, let settings else { return }
+        if !isRetry { retries = 0 }
         generation += 1
         let generation = generation
         Task { [device] in
             let applied = await device.ensure(host: host, settings: settings, generation: generation)
             if !applied {
                 NSLog("⚠️ roc-vad: the Milō device could not be set as Milō asks")
+                retry(after: generation)
             }
+        }
+    }
+
+    /// A failed `ensure` is tried again a few times: nothing else would, until the next
+    /// connection or link change — and a rebuild that failed half-way left the Mac source
+    /// silent and the output on the speakers.
+    private func retry(after failedGeneration: Int) {
+        guard retries < Self.maxRetries else {
+            NSLog("❌ roc-vad: giving up on the Milō device after %d retries", retries)
+            Task { [device] in await device.forgetOwedOutput() }
+            return
+        }
+        retries += 1
+        Task {
+            try? await Task.sleep(for: Self.retryDelay)
+            // A newer request has taken over, with its own retries.
+            guard generation == failedGeneration else { return }
+            reconcile(isRetry: true)
         }
     }
 
