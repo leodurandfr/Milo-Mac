@@ -34,6 +34,11 @@ actor RocVADDevice {
     /// later call behind it — forever.
     private static let callTimeout: TimeInterval = 15
 
+    /// How long a timed-out call gets to exit on SIGTERM before SIGKILL, and then to be
+    /// reaped after SIGKILL. A process stuck in an uninterruptible driver call may never be
+    /// reaped: past that second wait it is abandoned rather than allowed to hold the queue.
+    private static let killGrace: TimeInterval = 2
+
     /// The newest `ensure` handled. One queued behind it describes a link that no longer
     /// stands, and would rebuild the device a second time for nothing.
     private var handledGeneration = 0
@@ -64,7 +69,13 @@ actor RocVADDevice {
 
         if finished.wait(timeout: .now() + callTimeout) == .timedOut {
             task.terminate()
-            finished.wait()
+            if finished.wait(timeout: .now() + killGrace) == .timedOut {
+                kill(task.processIdentifier, SIGKILL)
+                if finished.wait(timeout: .now() + killGrace) == .timedOut {
+                    NSLog("❌ roc-vad %@ survived SIGKILL — abandoned", arguments.first ?? "")
+                    return nil
+                }
+            }
             NSLog("❌ roc-vad %@ did not answer within %.0f s — killed", arguments.first ?? "", callTimeout)
             return nil
         }
@@ -117,8 +128,8 @@ actor RocVADDevice {
     /// device is kept as it is. `ensure` builds or corrects it once Milō has said where it
     /// is and how the link is set.
     func removeDuplicates() {
-        let existing = deviceInfo().filter { $0.name == deviceName }
-        guard existing.count > 1 else { return }
+        guard let existing = deviceInfo()?.filter({ $0.name == deviceName }),
+              existing.count > 1 else { return }
         NSLog("⚠️ Found %d Milō devices - removing them", existing.count)
         deleteAllMiloDevices()
     }
@@ -132,7 +143,12 @@ actor RocVADDevice {
         guard generation > handledGeneration else { return true }
         handledGeneration = generation
 
-        let existing = deviceInfo().filter { $0.name == deviceName }
+        // A list that failed says nothing about the device. Read as "none", it would delete a
+        // device that is the sound output without restoring it, or add a second one.
+        guard let existing = deviceInfo()?.filter({ $0.name == deviceName }) else {
+            NSLog("❌ roc-vad: could not list the devices — the Milō device is left as it is")
+            return false
+        }
         if existing.count == 1,
            let shown = Self.runRocVAD(["device", "show", "\(existing[0].index)"]), shown.status == 0,
            RocVADDeviceDescription(showOutput: shown.output)
@@ -144,7 +160,12 @@ actor RocVADDevice {
         let currentOutput = SystemAudioOutput.defaultOutputUID()
         let miloWasTheOutput = existing.contains { $0.uid == currentOutput }
 
-        if deleteAllMiloDevices() > 0 {
+        // A device that could not be deleted would sit next to the new one.
+        guard let deleted = deleteAllMiloDevices() else {
+            NSLog("❌ roc-vad: could not delete the old Milō device — no new one is created")
+            return false
+        }
+        if deleted > 0 {
             // A short delay to make sure the devices really are deleted.
             Thread.sleep(forTimeInterval: 0.5)
         }
@@ -157,7 +178,7 @@ actor RocVADDevice {
         guard connect(deviceIndex: index, host: host) else { return false }
         NSLog("✅ Milō device #%d sends to %@ (%@)", index, host, settings.toDeviceArguments().joined(separator: " "))
 
-        if miloWasTheOutput, let uid = deviceInfo().first(where: { $0.index == index })?.uid {
+        if miloWasTheOutput, let uid = deviceInfo()?.first(where: { $0.index == index })?.uid {
             restoreOutput(uid: uid)
         }
         return true
@@ -165,16 +186,19 @@ actor RocVADDevice {
 
     // MARK: - roc-vad primitives
 
-    /// Deletes every "Milō" device and returns how many were deleted.
+    /// Deletes every "Milō" device and returns how many were deleted. Nil when the list
+    /// failed or a device could not be deleted.
     @discardableResult
-    private func deleteAllMiloDevices() -> Int {
-        let existing = deviceInfo().filter { $0.name == deviceName }
+    private func deleteAllMiloDevices() -> Int? {
+        guard let existing = deviceInfo()?.filter({ $0.name == deviceName }) else { return nil }
+        var allDeleted = true
         for device in existing {
             NSLog("🗑️ Deleting device #%d", device.index)
             let deleted = Self.runRocVAD(["device", "del", "\(device.index)"])?.status == 0
             NSLog(deleted ? "✅ Device #%d deleted" : "⚠️ Failed to delete device #%d", device.index)
+            allDeleted = allDeleted && deleted
         }
-        return existing.count
+        return allDeleted ? existing.count : nil
     }
 
     private func createMiloDevice(_ settings: RocVADSettings) -> Int {
@@ -212,8 +236,10 @@ actor RocVADDevice {
         NSLog("⚠️ Could not make the new Milō device the sound output")
     }
 
-    private func deviceInfo() -> [RocVADDeviceInfo] {
-        guard let result = Self.runRocVAD(["device", "list"]) else { return [] }
+    /// Nil when roc-vad did not answer or failed — never an empty list, which would mean
+    /// "no device".
+    private func deviceInfo() -> [RocVADDeviceInfo]? {
+        guard let result = Self.runRocVAD(["device", "list"]), result.status == 0 else { return nil }
         return parseDeviceList(from: result.output)
     }
 }
@@ -248,6 +274,10 @@ final class RocVADManager {
 
     @ObservationIgnored private var host: String?
     @ObservationIgnored private var driverReady = false
+    /// This connection's `/bulk` has sent the link. Until then `settings` is the last
+    /// session's, which may have changed while the Mac was away: acting on it with a new host
+    /// would rebuild the device once, and the fresh link a moment later a second time.
+    @ObservationIgnored private var linkConfirmed = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let device = RocVADDevice()
 
@@ -279,14 +309,21 @@ final class RocVADManager {
     /// The sender half of Milō's link, from `/bulk` at connect or `settings/mac_roc_changed`.
     func applyFromMilo(_ newSettings: RocVADSettings) {
         settings = newSettings
+        linkConfirmed = true
         reconcile()
+    }
+
+    /// Milō is gone: the link it sent is kept for Settings, but waits for the next
+    /// connection's to be confirmed before the device acts on it again.
+    func miloDidDisconnect() {
+        linkConfirmed = false
     }
 
     /// Hands the driver layer the link as it now stands. Not awaited: the host and the link
     /// arrive separately, and the generation lets the actor drop a request overtaken by a
     /// newer one rather than rebuild the device twice.
     private func reconcile() {
-        guard driverReady, let host, let settings else { return }
+        guard driverReady, linkConfirmed, let host, let settings else { return }
         generation += 1
         let generation = generation
         Task { [device] in

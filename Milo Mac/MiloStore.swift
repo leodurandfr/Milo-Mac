@@ -759,15 +759,19 @@ final class MiloStore {
             stopRadioPlayback()
         } else if state.allows("resume_playback") {
             // Same spinner as a tap on the station in the list: the restart is that station.
+            var resumedId: String?
             if case .radio(let station, _) = state.details {
+                resumedId = station.id
                 beginRadioStationLoading(stationId: station.id)
             }
-            Task {
+            Task { [resumedId] in
                 do {
                     try await apiService.sendPlaybackCommand("resume_playback", to: "radio")
                 } catch {
                     NSLog("❌ Radio resume_playback failed: %@", error.localizedDescription)
-                    endRadioStationLoading()
+                    // Only the spinner this restart started: another station clicked since
+                    // owns it now.
+                    if let resumedId, radioStationLoadingId == resumedId { endRadioStationLoading() }
                 }
             }
         }
@@ -1564,6 +1568,11 @@ final class MiloStore {
             syncMultiroomState(for: newState)
             syncDisplayedNowPlaying(for: newState)
             return true
+        } catch let error as DecodingError {
+            // Milō answered, with a state this build cannot read: a contract mismatch, not a
+            // network failure — so it neither pauses the polling nor resets the session.
+            NSLog("❌ /api/audio/state not decodable: %@", String(describing: error))
+            return true
         } catch {
             return false
         }
@@ -1688,6 +1697,7 @@ extension MiloStore: MiloConnectionManagerDelegate {
         stopBackgroundRefresh()
 
         isConnected = false
+        rocVADManager?.miloDidDisconnect()
 
         clearState()
         volumeController.cleanup()
@@ -1735,13 +1745,12 @@ extension MiloStore: MiloConnectionManagerDelegate {
         multiroomVolume = volume
     }
 
-    func didReceiveMultiroomTransitionComplete(success: Bool) {
+    /// `routing/multiroom_error`. Success has no event of its own: it is the first state with
+    /// the expected `multiroom_enabled` and `switching == false`.
+    func didReceiveMultiroomFailed() {
         guard loadingStates["multiroom"] == true else { return }
-        if !success {
-            // Clear the expected state on failure so that no late source/state
-            // resolves it by accident.
-            expectedFunctionalityStates["multiroom"] = nil
-        }
+        // Clear the expected state so that no late source/state resolves it by accident.
+        expectedFunctionalityStates["multiroom"] = nil
         stopFunctionalityLoading(for: "multiroom")
     }
 

@@ -44,7 +44,7 @@ protocol MiloConnectionManagerDelegate: AnyObject, Sendable {
     func miloDidDisconnect()
     func didReceiveStateUpdate(_ state: MiloAudioState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
-    func didReceiveMultiroomTransitionComplete(success: Bool)
+    func didReceiveMultiroomFailed()
     func didReceiveMultiroomStructureChanged()
     func didReceiveMultiroomVolumeUpdate(_ volume: MultiroomVolume)
     func didReceiveVolumeLimitsUpdate(minDb: Double, maxDb: Double)
@@ -386,7 +386,11 @@ final class MiloConnectionManager: NSObject {
         }
 
         let hostToUse = resolvedIPv4 ?? host
-        rocVADManager?.updateMiloHost(hostToUse)
+        // roc-vad gets a resolved IP only: pointed at the bare hostname after a failed
+        // resolution, the device would be rebuilt to it and then back to the IP next time.
+        if let resolvedIPv4 {
+            rocVADManager?.updateMiloHost(resolvedIPv4)
+        }
         let urlString = "ws://\(hostToUse):\(wsPort)/ws"
 
         webSocketService.resetSession()
@@ -474,8 +478,8 @@ extension MiloConnectionManager: WebSocketServiceDelegate {
         delegate?.didReceiveVolumeUpdate(volume)
     }
 
-    func didReceiveMultiroomTransitionComplete(success: Bool) {
-        delegate?.didReceiveMultiroomTransitionComplete(success: success)
+    func didReceiveMultiroomFailed() {
+        delegate?.didReceiveMultiroomFailed()
     }
 
     func didReceiveMultiroomStructureChanged() {

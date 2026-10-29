@@ -14,7 +14,7 @@ protocol WebSocketServiceDelegate: AnyObject {
     func webSocketDidFailToConnect()
     func didReceiveStateUpdate(_ state: MiloAudioState)
     func didReceiveVolumeUpdate(_ volume: VolumeStatus)
-    func didReceiveMultiroomTransitionComplete(success: Bool)
+    func didReceiveMultiroomFailed()
     /// The multiroom *structure* has changed (a client connected/disconnected, a zone was
     /// created/modified/deleted). The store re-fetches `/api/multiroom/state` rather than
     /// reapplying the wire's union diff — more robust, and the list is not large enough for
@@ -271,7 +271,7 @@ final class WebSocketService: NSObject {
             }
 
         case .multiroomFailed:
-            delegate?.didReceiveMultiroomTransitionComplete(success: false)
+            delegate?.didReceiveMultiroomFailed()
 
         case .multiroomStructureChanged:
             delegate?.didReceiveMultiroomStructureChanged()
