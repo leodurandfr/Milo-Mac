@@ -386,11 +386,7 @@ final class MiloConnectionManager: NSObject {
         }
 
         let hostToUse = resolvedIPv4 ?? host
-        // roc-vad gets a resolved IP only: pointed at the bare hostname after a failed
-        // resolution, the device would be rebuilt to it and then back to the IP next time.
-        if let resolvedIPv4 {
-            rocVADManager?.updateMiloHost(resolvedIPv4)
-        }
+        rocVADManager?.updateMiloHost(hostToUse)
         let urlString = "ws://\(hostToUse):\(wsPort)/ws"
 
         webSocketService.resetSession()

@@ -70,7 +70,8 @@ actor RocVADDevice {
         if finished.wait(timeout: .now() + callTimeout) == .timedOut {
             task.terminate()
             if finished.wait(timeout: .now() + killGrace) == .timedOut {
-                kill(task.processIdentifier, SIGKILL)
+                // Not once it is reaped: its PID could already be another process's.
+                if task.isRunning { kill(task.processIdentifier, SIGKILL) }
                 if finished.wait(timeout: .now() + killGrace) == .timedOut {
                     NSLog("❌ roc-vad %@ survived SIGKILL — abandoned", arguments.first ?? "")
                     return nil
@@ -131,7 +132,7 @@ actor RocVADDevice {
         guard let existing = deviceInfo()?.filter({ $0.name == deviceName }),
               existing.count > 1 else { return }
         NSLog("⚠️ Found %d Milō devices - removing them", existing.count)
-        deleteAllMiloDevices()
+        delete(existing)
     }
 
     /// Makes the Milō device send to `host` with `settings`, rebuilding it only when it does
@@ -149,19 +150,25 @@ actor RocVADDevice {
             NSLog("❌ roc-vad: could not list the devices — the Milō device is left as it is")
             return false
         }
-        if existing.count == 1,
-           let shown = Self.runRocVAD(["device", "show", "\(existing[0].index)"]), shown.status == 0,
-           RocVADDeviceDescription(showOutput: shown.output)
-               .matches(host: host, sourcePort: sourcePort, settings: settings) {
-            NSLog("✅ roc-vad: the Milō device already sends to %@ as Milō set it", host)
-            return true
+        if existing.count == 1 {
+            // Same rule as the list: a `show` that failed says nothing about the device.
+            guard let shown = Self.runRocVAD(["device", "show", "\(existing[0].index)"]),
+                  shown.status == 0 else {
+                NSLog("❌ roc-vad: could not read the Milō device — it is left as it is")
+                return false
+            }
+            if RocVADDeviceDescription(showOutput: shown.output)
+                .matches(host: host, sourcePort: sourcePort, settings: settings) {
+                NSLog("✅ roc-vad: the Milō device already sends to %@ as Milō set it", host)
+                return true
+            }
         }
 
         let currentOutput = SystemAudioOutput.defaultOutputUID()
         let miloWasTheOutput = existing.contains { $0.uid == currentOutput }
 
         // A device that could not be deleted would sit next to the new one.
-        guard let deleted = deleteAllMiloDevices() else {
+        guard let deleted = delete(existing) else {
             NSLog("❌ roc-vad: could not delete the old Milō device — no new one is created")
             return false
         }
@@ -186,11 +193,11 @@ actor RocVADDevice {
 
     // MARK: - roc-vad primitives
 
-    /// Deletes every "Milō" device and returns how many were deleted. Nil when the list
-    /// failed or a device could not be deleted.
+    /// Deletes the devices just listed — not listed again: on a slow driver that is one more
+    /// call to wait for, and one more chance to fail. Returns how many were deleted, nil when
+    /// one could not be.
     @discardableResult
-    private func deleteAllMiloDevices() -> Int? {
-        guard let existing = deviceInfo()?.filter({ $0.name == deviceName }) else { return nil }
+    private func delete(_ existing: [RocVADDeviceInfo]) -> Int? {
         var allDeleted = true
         for device in existing {
             NSLog("🗑️ Deleting device #%d", device.index)
