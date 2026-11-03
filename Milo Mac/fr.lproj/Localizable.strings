@@ -21,6 +21,9 @@
 "source.tidal" = "TIDAL";
 "source.music_library" = "Bibliothèque";
 
+// MARK: - CD
+"cd.untitledTrack" = "Morceau %d";
+
 // MARK: - Radio
 "radio.noFavorites" = "Aucune station favorite";
 

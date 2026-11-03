@@ -37,6 +37,14 @@ struct NowPlayingInfo: Equatable {
     let badgeArtworkURL: URL?
     /// `session.phase == playing` — loading, paused, connected and a mere resume point are not.
     let isPlaying: Bool
+
+    /// The title of a CD track nothing names (a burned disc, a disc read offline): its number,
+    /// in the Mac's language, worded as Milō's own screen words it (`audioSources.cdSource.trackN`
+    /// in the frontend's locales). `bundle` is the localization to read, the app's by default.
+    static func untitledTrack(_ number: Int, bundle: Bundle = .main) -> String {
+        let format = NSLocalizedString("cd.untitledTrack", bundle: bundle, comment: "")
+        return String(format: format, locale: .current, number)
+    }
 }
 
 /// The UI's source of truth: the SwiftUI views observe these properties and re-render
@@ -654,7 +662,8 @@ final class MiloStore {
     /// paused source keeps its row (hiding it would make the pause button disappear right after
     /// it was pressed), and so does a stopped one that "play" would restart — a radio station
     /// after a stop, a library queue within its 600 s. A session with no title (AirPlay
-    /// realtime, Bluetooth without a player, the Mac source) shows no row.
+    /// realtime, Bluetooth without a player, the Mac source) shows no row; an untitled CD track
+    /// shows its number (`NowPlayingInfo.untitledTrack`).
     var nowPlaying: NowPlayingInfo? {
         guard let state, isConnected else { return nil }
         return nowPlayingInfo(for: state)
@@ -669,7 +678,7 @@ final class MiloStore {
     /// own, the displayed cover art already IS the station's logo — doubling it up in a badge
     /// would be redundant.
     private func nowPlayingInfo(for state: MiloAudioState) -> NowPlayingInfo? {
-        guard let shown = state.shown else { return nil }
+        guard let shown = state.shown(untitledTrack: { NowPlayingInfo.untitledTrack($0) }) else { return nil }
 
         var trackId: String?
         var badgeArtworkURL: URL?

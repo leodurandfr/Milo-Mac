@@ -21,6 +21,9 @@
 "source.tidal" = "TIDAL";
 "source.music_library" = "लाइब्रेरी";
 
+// MARK: - CD
+"cd.untitledTrack" = "ट्रैक %d";
+
 // MARK: - Radio
 "radio.noFavorites" = "कोई पसंदीदा स्टेशन नहीं";
 

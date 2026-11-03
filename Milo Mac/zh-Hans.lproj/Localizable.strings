@@ -21,6 +21,9 @@
 "source.tidal" = "TIDAL";
 "source.music_library" = "音乐库";
 
+// MARK: - CD
+"cd.untitledTrack" = "曲目 %d";
+
 // MARK: - Radio
 "radio.noFavorites" = "没有喜爱的电台";
 
