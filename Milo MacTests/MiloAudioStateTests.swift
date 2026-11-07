@@ -279,6 +279,37 @@ struct MiloAudioStateDisplayTests {
         """)
         #expect(decoded.shown(untitledTrack: untitled)?.title == "Hyperballad")
     }
+
+    /// A Bluetooth sender Milō cannot call playing or paused, naming its track with `missing`
+    /// left out: the case Milō's own screen draws as the "Connected to X" card (D14).
+    private func connected(without missing: String?) -> String {
+        let named = ["title": "\"Says\"", "artist": "\"Nils Frahm\"",
+                     "artwork": "\"https://example.com/says.jpg\""]
+        func field(_ key: String) -> String { key == missing ? "null" : named[key] ?? "null" }
+        return """
+        {"source":"bluetooth","controls":["disconnect"],"resume":null,
+         "session":{"id":"b1","phase":"connected","title":\(field("title")),"artist":\(field("artist")),
+           "album":null,"artwork":\(field("artwork")),"senders":["iPhone de Léo"],
+           "duration_ms":null,"position":null},
+         "details":{"kind":"bluetooth","artwork_pending":false}}
+        """
+    }
+
+    @Test("A connected session missing a title, an artist or a cover names nothing",
+          arguments: ["title", "artist", "artwork"])
+    func aHalfNamedConnectedSessionNamesNothing(missing: String) throws {
+        let decoded = try state(connected(without: missing))
+        #expect(decoded.session?.phase == .connected)
+        #expect(decoded.shown(untitledTrack: untitled) == nil)
+    }
+
+    @Test("A connected session naming a title, an artist and a cover is shown")
+    func aFullyNamedConnectedSessionIsShown() throws {
+        let decoded = try state(connected(without: nil))
+        #expect(decoded.shown(untitledTrack: untitled)?.title == "Says")
+        #expect(decoded.shown(untitledTrack: untitled)?.artist == "Nils Frahm")
+        #expect(decoded.shown(untitledTrack: untitled)?.isSession == true)
+    }
 }
 
 struct PositionAnchorTests {

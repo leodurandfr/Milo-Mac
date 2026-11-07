@@ -200,6 +200,14 @@ struct MiloAudioState: Decodable, Sendable, Equatable {
     /// carries a `title`), written once so the lock screen and the menu bar cannot
     /// disagree about whether there is something to show.
     ///
+    /// A `connected` session — a sender Milō cannot call playing or paused — names its track
+    /// only when it also names an artist and a cover (`namesItsTrack`); otherwise it shows
+    /// nothing here, and the lock screen draws the source's card. That is Milō's own screen's
+    /// rule (D14, `richSourceFor` in the frontend) and its push's (`payloads.shown_track`),
+    /// held equal by Milō's `connected_naming_cases.json`. Milō's screen also sends an AirPlay
+    /// sender's cover of 300 px or less to the card; that gate is the kiosk's alone, and is
+    /// not applied here.
+    ///
     /// A CD track nothing names (a burned disc, a disc read offline) is named by its number,
     /// under the label each app passes as `untitledTrack`: the wording is the app's, the rule
     /// is this one.
@@ -216,7 +224,8 @@ struct MiloAudioState: Decodable, Sendable, Equatable {
     func shown(untitledTrack: (Int) -> String) -> Shown? {
         var untitled: String?
         if case .cd(let number?) = details { untitled = untitledTrack(number) }
-        if let session, let title = Self.nonEmpty(session.title) ?? untitled {
+        if let session, session.phase != .connected || Self.namesItsTrack(session),
+           let title = Self.nonEmpty(session.title) ?? untitled {
             return Shown(title: title, artist: Self.nonEmpty(session.artist),
                          album: Self.nonEmpty(session.album), artwork: Self.nonEmpty(session.artwork),
                          durationMs: session.durationMs, isSession: true)
@@ -227,6 +236,13 @@ struct MiloAudioState: Decodable, Sendable, Equatable {
                          durationMs: resume.durationMs, isSession: false)
         }
         return nil
+    }
+
+    /// Whether a session names its track whole: a title, an artist and a cover. What a
+    /// `connected` session needs before `shown` presents it as a track.
+    static func namesItsTrack(_ session: Session) -> Bool {
+        nonEmpty(session.title) != nil && nonEmpty(session.artist) != nil
+            && nonEmpty(session.artwork) != nil
     }
 
     /// Milō never publishes an empty string, but reading one as absent costs nothing and

@@ -662,8 +662,10 @@ final class MiloStore {
     /// paused source keeps its row (hiding it would make the pause button disappear right after
     /// it was pressed), and so does a stopped one that "play" would restart — a radio station
     /// after a stop, a library queue within its 600 s. A session with no title (AirPlay
-    /// realtime, Bluetooth without a player, the Mac source) shows no row; an untitled CD track
-    /// shows its number (`NowPlayingInfo.untitledTrack`).
+    /// realtime, Bluetooth without a player, the Mac source) shows no row, and neither does a
+    /// connected one that names a title without an artist or a cover — Milō's own screen draws
+    /// "Connected to X" there (its D14); an untitled CD track shows its number
+    /// (`NowPlayingInfo.untitledTrack`).
     var nowPlaying: NowPlayingInfo? {
         guard let state, isConnected else { return nil }
         return nowPlayingInfo(for: state)
