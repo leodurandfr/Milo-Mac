@@ -613,8 +613,13 @@ struct SourceRow: View {
         return (starting && isActive) || store.loadingStates[source.id] == true
     }
 
+    /// The Radio row (and the music library's) carries TWO commands: activating the source (the
+    /// whole row) and opening its sub-level (a zone around the chevron, see `MenuRowContainer`).
+    private var hasChevron: Bool { !isLoading && showsChevron }
+
     var body: some View {
-        MenuRowContainer(isHovering: $isHovering, action: activate) {
+        MenuRowContainer(isHovering: $isHovering, action: activate,
+                         accessoryAction: hasChevron ? { openSubLevel() } : nil) {
             // The transition spinner sits INSIDE the badge.
             RowIcon(icon: source.icon, isActive: isActive, isLoading: isLoading)
 
@@ -632,29 +637,11 @@ struct SourceRow: View {
             }
 
             Spacer(minLength: 4)
-
-            if !isLoading, showsChevron {
-                // The Radio row carries TWO commands: activating the source (the row's
-                // body) and opening the stations (the chevron). Unlike Multiroom, activating
-                // Radio when it already is does nothing (see the guard in
-                // `MiloStore.selectSource`) — so the chevron has to remain the ONLY target for
-                // opening the stations; giving it all the empty space to the right of the label would
-                // navigate accidentally on the slightest click on the row.
-                //
-                // Nesting a button inside a button works — the innermost wins within
-                // its own area — but here its area stays that of the chevron (plus a little comfort
-                // margin), not the whole rest of the row.
-                Button { onChevron?() } label: {
-                    ChevronCircle()
-                        .padding(.horizontal, 6)
-                        // Without this, the button moulds itself onto the chevron and its area is only its
-                        // ink's height. We stretch it over the row's height, which the source's
-                        // badge sets (26 pt).
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
+        } accessory: {
+            // The trailing 6 pt keeps the chevron's ink where it sat when the button was only
+            // the chevron padded by 6 pt on each side.
+            ChevronCircle()
+                .padding(.trailing, 6)
         }
         // The content dims during the press to say that something is being prepared. The fade
         // is markedly shorter than the gesture: the row acknowledges it right away, then
@@ -676,13 +663,22 @@ struct SourceRow: View {
             }
     }
 
+    /// The release that follows a press-and-hold also triggers a button's click — the row's,
+    /// or the chevron's, which covers the right-hand side of the row: it is swallowed so as not
+    /// to reactivate (or open) the source that has just been closed.
+    private func swallowsHoldRelease() -> Bool {
+        guard let firedAt = holdFiredAt else { return false }
+        holdFiredAt = nil
+        return Date().timeIntervalSince(firedAt) < Self.holdDelay + 0.1
+    }
+
+    private func openSubLevel() {
+        if swallowsHoldRelease() { return }
+        onChevron?()
+    }
+
     private func activate() {
-        // The release that follows a press-and-hold also triggers the button's click:
-        // we swallow it so as not to reactivate the source we have just closed.
-        if let firedAt = holdFiredAt {
-            holdFiredAt = nil
-            if Date().timeIntervalSince(firedAt) < Self.holdDelay + 0.1 { return }
-        }
+        if swallowsHoldRelease() { return }
 
         if needsSetup {
             SettingsWindowPresenter.show(store: store)
@@ -720,7 +716,10 @@ struct FeatureRow: View {
     private var isOn: Bool { store.displayedToggleState(feature.id) }
 
     var body: some View {
-        MenuRowContainer(isHovering: $isHovering, action: toggle) {
+        // The whole row toggles; a zone around the chevron, over the row's full height, expands
+        // (see `MenuRowContainer`).
+        MenuRowContainer(isHovering: $isHovering, action: toggle,
+                         accessoryAction: showsChevron ? { onChevron?() } : nil) {
             // The toggle's spinner lives INSIDE the badge (like the sources'), not on the right.
             RowIcon(icon: feature.icon, isActive: isOn, isLoading: isLoading)
 
@@ -728,22 +727,9 @@ struct FeatureRow: View {
                 .font(.system(size: 13))
                 .lineLimit(1)
 
-            if showsChevron {
-                // The same construction as the Radio chevron (SourceRow): the expand button
-                // takes all the empty space to the right of the label, not just the chevron's ink —
-                // a wide target for a command used as much as the row.
-                Button { onChevron?() } label: {
-                    HStack(spacing: 0) {
-                        Spacer(minLength: 4)
-                        ExpandChevron(isExpanded: isExpanded)
-                    }
-                    .frame(maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            } else {
-                Spacer(minLength: 4)
-            }
+            Spacer(minLength: 4)
+        } accessory: {
+            ExpandChevron(isExpanded: isExpanded)
         }
     }
 
@@ -1669,21 +1655,73 @@ struct DisconnectedRow: View {
 ///
 /// The panel being a window we draw ourselves, no highlight comes from the
 /// system: every row paints its own, on its own hover.
-private struct MenuRowContainer<Content: View>: View {
+private struct MenuRowContainer<Content: View, Accessory: View>: View {
     @Binding var isHovering: Bool
     let action: () -> Void
-    @ViewBuilder let content: Content
+    /// The row's SECOND command, if it carries one (Radio's stations, Multiroom's zones): a zone
+    /// around the chevron, over the row's full height, up to its trailing edge — see `body`.
+    let accessoryAction: (() -> Void)?
+    let content: Content
+    let accessory: Accessory
+
+    init(isHovering: Binding<Bool>,
+         action: @escaping () -> Void,
+         accessoryAction: (() -> Void)?,
+         @ViewBuilder content: () -> Content,
+         @ViewBuilder accessory: () -> Accessory) {
+        _isHovering = isHovering
+        self.action = action
+        self.accessoryAction = accessoryAction
+        self.content = content()
+        self.accessory = accessory()
+    }
+
+    /// The trailing inset of the row's content, inside the highlight.
+    private static var trailingInset: CGFloat { 8 }
+
+    /// The width of the accessory's click zone, trailing inset included: a square of the row's
+    /// pitch (the badge plus its vertical padding, 32 pt), around the chevron.
+    private static var accessoryHitWidth: CGFloat {
+        MenuRowMetrics.iconSize + 2 * MenuRowMetrics.rowVerticalPadding
+    }
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: MenuRowMetrics.iconTextGap) {
-                content
+            HStack(spacing: 0) {
+                HStack(spacing: MenuRowMetrics.iconTextGap) {
+                    content
+                }
+                // The highlight is inset by `highlightInset`; the content nevertheless has to
+                // start at `contentInset` from the menu's edge, hence the difference.
+                .padding(.leading, MenuRowMetrics.contentInset - MenuRowMetrics.highlightInset)
+                .padding(.trailing, accessoryAction == nil ? Self.trailingInset : 0)
+                .padding(.vertical, MenuRowMetrics.rowVerticalPadding)
+
+                if let accessoryAction {
+                    // A fixed-width zone around the chevron, OUTSIDE the content's padding on
+                    // purpose: it reaches the row's top, bottom and trailing edges. Inside the
+                    // padding (as it once was), the 3 pt strips above and below it and the 8 pt
+                    // margin on its right still belonged to the row's own button — a click there,
+                    // aimed at Multiroom's chevron, switched multiroom off. The trailing inset
+                    // moves INTO the button instead, so the chevron's ink stays where it was.
+                    //
+                    // Only that zone: the empty space between the label and it is the content's
+                    // `Spacer`, so it stays the row's own command (activate / toggle).
+                    //
+                    // Nesting a button inside a button works: the innermost wins within its own
+                    // area.
+                    Button(action: accessoryAction) {
+                        accessory
+                            .padding(.trailing, Self.trailingInset)
+                            .frame(width: Self.accessoryHitWidth, alignment: .trailing)
+                            // Without this, the button moulds itself onto the chevron and its area
+                            // is only its ink's height: we stretch it over the row's height.
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            // The highlight is inset by `highlightInset`; the content nevertheless has to
-            // start at `contentInset` from the menu's edge, hence the difference.
-            .padding(.leading, MenuRowMetrics.contentInset - MenuRowMetrics.highlightInset)
-            .padding(.trailing, 8)
-            .padding(.vertical, MenuRowMetrics.rowVerticalPadding)
             .frame(width: MenuRowMetrics.width - 2 * MenuRowMetrics.highlightInset,
                    alignment: .leading)
             .background(
@@ -1697,6 +1735,16 @@ private struct MenuRowContainer<Content: View>: View {
         .buttonStyle(.plain)
         .padding(.horizontal, MenuRowMetrics.highlightInset)
         .onHover { isHovering = $0 }
+    }
+}
+
+extension MenuRowContainer where Accessory == EmptyView {
+    /// A row with a single command: the whole row is its button.
+    init(isHovering: Binding<Bool>,
+         action: @escaping () -> Void,
+         @ViewBuilder content: () -> Content) {
+        self.init(isHovering: isHovering, action: action, accessoryAction: nil,
+                  content: content, accessory: { EmptyView() })
     }
 }
 
